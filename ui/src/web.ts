@@ -1,8 +1,10 @@
 import { FitAddon } from "@xterm/addon-fit"
 import { Terminal } from "@xterm/xterm"
+import { parseWebClipboardPayload, WEB_CLIPBOARD_OSC } from "./clipboard-protocol"
 import { createImageAddon } from "./image-support"
 import { browserSelectionShortcut, browserShortcutSequence } from "./keyboard"
 import { measureTerminalCellAspect } from "./terminal-geometry"
+import { TerminalWriteBuffer, type TerminalWriteChunk } from "./terminal-write-buffer"
 import { todoTitle, visibleWorkloadCount } from "./web-data"
 import { hashForView, interfaceModeForView, oauthReturnView, viewFromHash, type WebViewName } from "./web-mode"
 
@@ -712,9 +714,11 @@ const touchButtons = Array.from(document.querySelectorAll<HTMLButtonElement>("#t
 const keyboardButton = document.querySelector<HTMLButtonElement>("#keyboard-button")!
 const stateElement = document.querySelector<HTMLElement>("#connection-state")!
 const sizeElement = document.querySelector<HTMLElement>("#terminal-size")!
+const terminalCopyButton = document.querySelector<HTMLButtonElement>("#terminal-copy-button")!
 
 let terminal: Terminal | null = null
 let fitAddon: FitAddon | null = null
+let terminalWrites: TerminalWriteBuffer | null = null
 let socket: WebSocket | null = null
 let reconnectTimer: number | null = null
 let reconnectAttempt = 0
@@ -725,6 +729,36 @@ let fittedRows = 0
 const primaryCoarsePointer = window.matchMedia("(pointer: coarse)")
 let touchInteractionActive = primaryCoarsePointer.matches
 let touchKeyboardEnabled = false
+let pointerSelectingTerminal = false
+let publishedClipboardValue: string | null = null
+
+function writeTerminalOutput(chunk: TerminalWriteChunk): void {
+  terminalWrites?.write(chunk)
+}
+
+function updateTerminalOutputHold(): void {
+  terminalWrites?.setHeld(pointerSelectingTerminal || Boolean(terminal?.hasSelection()))
+}
+
+function resetTerminalOutputHold(): void {
+  pointerSelectingTerminal = false
+  terminalWrites?.clear()
+  terminalWrites?.setHeld(false)
+  terminal?.clearSelection()
+}
+
+function setPublishedClipboard(value: string | null): void {
+  publishedClipboardValue = value
+  terminalCopyButton.hidden = value === null
+  terminalCopyButton.classList.remove("copied")
+  terminalCopyButton.textContent = "Copy invite command"
+}
+
+function finishTerminalPointerSelection(): void {
+  if (!pointerSelectingTerminal) return
+  pointerSelectingTerminal = false
+  updateTerminalOutputHold()
+}
 
 function setConnection(state: "connecting" | "connected" | "error", label: string): void {
   stateElement.classList.remove("connected", "error")
@@ -784,8 +818,10 @@ function connectTerminal(): void {
   const previous = socket
   socket = null
   previous?.close()
+  resetTerminalOutputHold()
+  setPublishedClipboard(null)
   terminal.clear()
-  terminal.write("\x1b[38;2;117;104;232mStarting local-shell-mcp OpenTUI…\x1b[0m\r\n")
+  writeTerminalOutput("\x1b[38;2;117;104;232mStarting local-shell-mcp OpenTUI…\x1b[0m\r\n")
   setConnection("connecting", "Connecting")
   sendResize()
   const scheme = location.protocol === "https:" ? "wss:" : "ws:"
@@ -806,9 +842,9 @@ function connectTerminal(): void {
   }
   nextSocket.onmessage = async (event) => {
     if (socket !== nextSocket || !terminal) return
-    if (event.data instanceof ArrayBuffer) terminal.write(new Uint8Array(event.data))
-    else if (event.data instanceof Blob) terminal.write(new Uint8Array(await event.data.arrayBuffer()))
-    else terminal.write(String(event.data))
+    if (event.data instanceof ArrayBuffer) writeTerminalOutput(new Uint8Array(event.data))
+    else if (event.data instanceof Blob) writeTerminalOutput(new Uint8Array(await event.data.arrayBuffer()))
+    else writeTerminalOutput(String(event.data))
   }
   nextSocket.onerror = () => {
     if (socket === nextSocket) setConnection("error", "Connection error")
@@ -831,13 +867,13 @@ function connectTerminal(): void {
     if (event.code === 4410) {
       manualDisconnect = true
       setConnection("error", "Disconnected")
-      terminal?.write("\r\n\x1b[38;2;255;204;102mThe TUI exited. Use Reconnect to start a new session.\x1b[0m\r\n")
+      writeTerminalOutput("\r\n\x1b[38;2;255;204;102mThe TUI exited. Use Reconnect to start a new session.\x1b[0m\r\n")
       return
     }
     if ([1011, 4400, 4408, 4429].includes(event.code)) {
       manualDisconnect = true
       setConnection("error", "Disconnected")
-      terminal?.write(`\r\n\x1b[38;2;255;123;139m${event.reason || "The OpenTUI session could not continue."}\x1b[0m\r\n`)
+      writeTerminalOutput(`\r\n\x1b[38;2;255;123;139m${event.reason || "The OpenTUI session could not continue."}\x1b[0m\r\n`)
       return
     }
     if (!manualDisconnect) scheduleReconnect()
@@ -914,6 +950,19 @@ function initializeTerminal(): void {
   terminal.loadAddon(createImageAddon())
   terminal.loadAddon(fitAddon)
   terminal.open(terminalElement)
+  terminalWrites = new TerminalWriteBuffer((chunk) => terminal?.write(chunk), {
+    onOverflow: () => {
+      pointerSelectingTerminal = false
+      terminal?.clearSelection()
+    },
+  })
+  terminal.parser.registerOscHandler(WEB_CLIPBOARD_OSC, (data) => {
+    const payload = parseWebClipboardPayload(data)
+    if (payload === null) return false
+    setPublishedClipboard(payload.type === "set" ? payload.value : null)
+    return true
+  })
+  terminal.onSelectionChange(updateTerminalOutputHold)
   terminal.onData((data) => {
     if (socket?.readyState === WebSocket.OPEN) socket.send(encoder.encode(data))
   })
@@ -934,14 +983,23 @@ function initializeTerminal(): void {
       else terminal?.textarea?.blur()
     })
   })
-  terminalElement.addEventListener("pointerdown", updatePointerMode, { capture: true })
+  terminalElement.addEventListener("pointerdown", (event) => {
+    updatePointerMode(event)
+    if (event.pointerType === "mouse" && event.button === 0) {
+      pointerSelectingTerminal = true
+      updateTerminalOutputHold()
+    }
+  }, { capture: true })
   touchButtons.forEach((button) => {
     button.addEventListener("pointerdown", updatePointerMode, { capture: true })
   })
   terminalElement.addEventListener("pointerup", () => {
+    finishTerminalPointerSelection()
     if (!usesTouchKeyboard() || touchKeyboardEnabled) return
     window.requestAnimationFrame(() => terminal?.textarea?.blur())
   })
+  window.addEventListener("pointerup", finishTerminalPointerSelection, { capture: true })
+  window.addEventListener("pointercancel", finishTerminalPointerSelection, { capture: true })
   setTouchKeyboard(false)
   terminal.textarea?.addEventListener("focus", () => {
     if (!usesTouchKeyboard() || touchKeyboardEnabled) return
@@ -952,22 +1010,40 @@ function initializeTerminal(): void {
   connectTerminal()
 }
 
-async function copyTerminalSelection(): Promise<void> {
-  const selection = terminal?.getSelection()
-  if (!selection) return
+async function writeClipboardText(value: string): Promise<boolean> {
+  const textarea = document.createElement("textarea")
+  textarea.value = value
+  textarea.style.position = "fixed"
+  textarea.style.opacity = "0"
+  document.body.appendChild(textarea)
   try {
-    await navigator.clipboard.writeText(selection)
+    try {
+      textarea.select()
+      if (document.execCommand("copy")) return true
+    } catch {
+      // Try the asynchronous Clipboard API below.
+    }
+    await navigator.clipboard.writeText(value)
+    return true
   } catch {
-    const textarea = document.createElement("textarea")
-    textarea.value = selection
-    textarea.style.position = "fixed"
-    textarea.style.opacity = "0"
-    document.body.appendChild(textarea)
-    textarea.select()
-    document.execCommand("copy")
+    return false
+  } finally {
     textarea.remove()
     terminal?.focus()
   }
+}
+
+async function copyTerminalSelection(): Promise<void> {
+  const selection = terminal?.getSelection()
+  if (!selection) return
+  if (await writeClipboardText(selection)) terminal?.clearSelection()
+}
+
+async function copyPublishedClipboard(): Promise<void> {
+  if (publishedClipboardValue === null) return
+  const copied = await writeClipboardText(publishedClipboardValue)
+  terminalCopyButton.textContent = copied ? "Copied" : "Copy failed"
+  terminalCopyButton.classList.toggle("copied", copied)
 }
 
 window.addEventListener("keydown", (event) => {
@@ -978,6 +1054,16 @@ window.addEventListener("keydown", (event) => {
     event.stopImmediatePropagation()
     if (selectionShortcut === "select-all") terminal.selectAll()
     else void copyTerminalSelection()
+    return
+  }
+  if (
+    publishedClipboardValue !== null &&
+    event.key.toLowerCase() === "c" &&
+    !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey
+  ) {
+    event.preventDefault()
+    event.stopImmediatePropagation()
+    void copyPublishedClipboard()
     return
   }
   const sequence = browserShortcutSequence(event)
@@ -991,6 +1077,7 @@ reconnectButton.addEventListener("click", () => {
   reconnectAttempt = 0
   connectTerminal()
 })
+terminalCopyButton.addEventListener("click", () => void copyPublishedClipboard())
 fullscreenButton.addEventListener("click", () => {
   if (document.fullscreenElement) void document.exitFullscreen()
   else void consoleView.requestFullscreen()

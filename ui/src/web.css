@@ -322,7 +322,10 @@ button.nav-item.active { color: white; background: #232d42; box-shadow: inset 3p
 }
 .touchbar { display: none; grid-template-columns: repeat(9,minmax(0,1fr)); gap: 4px; padding: 5px; border-top: 1px solid #263047; }
 .touchbar button { height: 34px; color: #d7deeb; background: #192235; border: 1px solid #2c3850; border-radius: 7px; }
-.terminal-footer { display: flex; justify-content: space-between; padding: 8px 12px; color: #758197; border-top: 1px solid #263047; font: 9px ui-monospace,SFMono-Regular,Menlo,monospace; }
+.terminal-footer { display: grid; grid-template-columns: 1fr auto auto; gap: 10px; align-items: center; padding: 8px 12px; color: #758197; border-top: 1px solid #263047; font: 9px ui-monospace,SFMono-Regular,Menlo,monospace; }
+.terminal-copy-button { padding: 4px 8px; color: #d9f6ef; background: #17483f; border: 1px solid #2b7668; border-radius: 6px; cursor: pointer; font: inherit; }
+.terminal-copy-button:hover { color: white; background: #1d5a4e; }
+.terminal-copy-button.copied { color: #d9f6ef; background: #256858; }
 :fullscreen .shell,
 .shell:fullscreen {
   width: 100vw;

@@ -131,7 +131,11 @@
             <button type="button" data-key="enter">Enter</button><button type="button" data-key="help">F1</button>
             <button id="keyboard-button" type="button" data-key="keyboard" aria-label="Show keyboard" aria-pressed="false">KB</button>
           </nav>
-          <footer class="terminal-footer"><span>OpenTUI over authenticated PTY</span><span id="terminal-size">—</span></footer>
+          <footer class="terminal-footer">
+            <span>OpenTUI over authenticated PTY</span>
+            <button class="terminal-copy-button" id="terminal-copy-button" type="button" hidden>Copy invite command</button>
+            <span id="terminal-size">—</span>
+          </footer>
         </section>
       </main>
     </div>
