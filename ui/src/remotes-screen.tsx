@@ -2,6 +2,7 @@ import type { ScrollBoxRenderable } from "@opentui/core"
 import { useKeyboard } from "@opentui/react"
 import { useCallback, useEffect, useRef, useState } from "react"
 import { api, formatError } from "./api"
+import { webClipboardSequence } from "./clipboard-protocol"
 import { EmptyState, KeyHint, Loading, Modal, Panel, formatAge, useVisibleRows } from "./components"
 import { handleSelectionScroll } from "./mouse"
 import { cyclePane, scrollPaneForKey } from "./pane-navigation"
@@ -11,6 +12,7 @@ import { screenTheme, theme } from "./theme"
 import type { InvitePayload, Machine } from "./types"
 
 const colors = screenTheme.Remotes
+const browserClipboardEnabled = process.env.LOCAL_SHELL_MCP_UI_MODE === "web"
 
 type RemotePane = "list" | "details"
 const REMOTE_PANES = ["list", "details"] as const satisfies readonly RemotePane[]
@@ -22,9 +24,17 @@ type RemoteDialog =
   | { type: "rename"; machine: Machine }
   | { type: "revoke"; machine: Machine }
 
-export function RemoteInviteResultDialog({ invite, width }: { invite: InvitePayload; width: number }) {
+export function RemoteInviteResultDialog({
+  invite,
+  width,
+  onCopy,
+}: {
+  invite: InvitePayload
+  width: number
+  onCopy?: () => void
+}) {
   return (
-    <Modal title="Remote join command" width={Math.max(38, Math.min(88, width - 6))} height={15}>
+    <Modal title="Remote join command" width={Math.max(38, Math.min(88, width - 6))} height={onCopy ? 16 : 15}>
       <text style={{ height: 1, flexShrink: 0 }} fg={theme.green} attributes={1} content="Invite ready" />
       <text style={{ height: 1, flexShrink: 0 }} fg={theme.muted} content="Run this command on the remote node:" />
       <box
@@ -40,6 +50,17 @@ export function RemoteInviteResultDialog({ invite, width }: { invite: InvitePayl
       >
         <text style={{ flexShrink: 0 }} fg={colors.accent} content={invite.command} />
       </box>
+      {onCopy && (
+        <text
+          onMouseUp={(event) => {
+            if (event.button === 0) onCopy()
+          }}
+          style={{ height: 1, flexShrink: 0 }}
+          fg={theme.cyan}
+          attributes={1}
+          content="[ c / click ] Copy command"
+        />
+      )}
       <text
         style={{ height: 1, flexShrink: 0 }}
         fg={theme.faint}
@@ -171,6 +192,11 @@ export function RemotesScreen({
   const createRemoteInvite = () => enabled && setDialog({ type: "invite" })
   const renameCurrent = () => current && enabled && setDialog({ type: "rename", machine: current })
   const revokeCurrent = () => current && enabled && setDialog({ type: "revoke", machine: current })
+  const copyInviteCommand = (invite: InvitePayload) => {
+    if (!browserClipboardEnabled) return
+    process.stdout.write(webClipboardSequence(invite.command))
+    setStatus("Invite command copied to clipboard")
+  }
   const footerLocked = !keyboardEnabled || dialog.type !== "none"
 
   useKeyboard((key) => {
@@ -180,6 +206,7 @@ export function RemotesScreen({
       return
     }
     if (dialog.type === "invite-result") {
+      if (key.name === "c" && browserClipboardEnabled) copyInviteCommand(dialog.invite)
       if (key.name === "escape" || key.name === "return") setDialog({ type: "none" })
       return
     }
@@ -357,7 +384,11 @@ export function RemotesScreen({
         </Modal>
       )}
       {dialog.type === "invite-result" && (
-        <RemoteInviteResultDialog invite={dialog.invite} width={width} />
+        <RemoteInviteResultDialog
+          invite={dialog.invite}
+          width={width}
+          onCopy={browserClipboardEnabled ? () => copyInviteCommand(dialog.invite) : undefined}
+        />
       )}
       {dialog.type === "rename" && (
         <Modal title="Rename remote" height={9}>
