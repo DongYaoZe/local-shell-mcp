@@ -714,6 +714,7 @@ const touchButtons = Array.from(document.querySelectorAll<HTMLButtonElement>("#t
 const keyboardButton = document.querySelector<HTMLButtonElement>("#keyboard-button")!
 const stateElement = document.querySelector<HTMLElement>("#connection-state")!
 const sizeElement = document.querySelector<HTMLElement>("#terminal-size")!
+const terminalCopyButton = document.querySelector<HTMLButtonElement>("#terminal-copy-button")!
 
 let terminal: Terminal | null = null
 let fitAddon: FitAddon | null = null
@@ -729,6 +730,7 @@ const primaryCoarsePointer = window.matchMedia("(pointer: coarse)")
 let touchInteractionActive = primaryCoarsePointer.matches
 let touchKeyboardEnabled = false
 let pointerSelectingTerminal = false
+let publishedClipboardValue: string | null = null
 
 function writeTerminalOutput(chunk: TerminalWriteChunk): void {
   terminalWrites?.write(chunk)
@@ -740,9 +742,16 @@ function updateTerminalOutputHold(): void {
 
 function resetTerminalOutputHold(): void {
   pointerSelectingTerminal = false
-  terminal?.clearSelection()
   terminalWrites?.clear()
   terminalWrites?.setHeld(false)
+  terminal?.clearSelection()
+}
+
+function setPublishedClipboard(value: string | null): void {
+  publishedClipboardValue = value
+  terminalCopyButton.hidden = value === null
+  terminalCopyButton.classList.remove("copied")
+  terminalCopyButton.textContent = "Copy invite command"
 }
 
 function finishTerminalPointerSelection(): void {
@@ -810,6 +819,7 @@ function connectTerminal(): void {
   socket = null
   previous?.close()
   resetTerminalOutputHold()
+  setPublishedClipboard(null)
   terminal.clear()
   writeTerminalOutput("\x1b[38;2;117;104;232mStarting local-shell-mcp OpenTUI…\x1b[0m\r\n")
   setConnection("connecting", "Connecting")
@@ -940,11 +950,16 @@ function initializeTerminal(): void {
   terminal.loadAddon(createImageAddon())
   terminal.loadAddon(fitAddon)
   terminal.open(terminalElement)
-  terminalWrites = new TerminalWriteBuffer((chunk) => terminal?.write(chunk))
-  terminal.parser.registerOscHandler(WEB_CLIPBOARD_OSC, async (data) => {
-    const value = parseWebClipboardPayload(data)
-    if (value === null) return false
-    await writeClipboardText(value)
+  terminalWrites = new TerminalWriteBuffer((chunk) => terminal?.write(chunk), {
+    onOverflow: () => {
+      pointerSelectingTerminal = false
+      terminal?.clearSelection()
+    },
+  })
+  terminal.parser.registerOscHandler(WEB_CLIPBOARD_OSC, (data) => {
+    const payload = parseWebClipboardPayload(data)
+    if (payload === null) return false
+    setPublishedClipboard(payload.type === "set" ? payload.value : null)
     return true
   })
   terminal.onSelectionChange(updateTerminalOutputHold)
@@ -996,25 +1011,25 @@ function initializeTerminal(): void {
 }
 
 async function writeClipboardText(value: string): Promise<boolean> {
+  const textarea = document.createElement("textarea")
+  textarea.value = value
+  textarea.style.position = "fixed"
+  textarea.style.opacity = "0"
+  document.body.appendChild(textarea)
   try {
+    try {
+      textarea.select()
+      if (document.execCommand("copy")) return true
+    } catch {
+      // Try the asynchronous Clipboard API below.
+    }
     await navigator.clipboard.writeText(value)
     return true
   } catch {
-    const textarea = document.createElement("textarea")
-    textarea.value = value
-    textarea.style.position = "fixed"
-    textarea.style.opacity = "0"
-    document.body.appendChild(textarea)
-    try {
-      textarea.select()
-      const copied = document.execCommand("copy")
-      if (copied) terminal?.focus()
-      return copied
-    } catch {
-      return false
-    } finally {
-      textarea.remove()
-    }
+    return false
+  } finally {
+    textarea.remove()
+    terminal?.focus()
   }
 }
 
@@ -1022,6 +1037,13 @@ async function copyTerminalSelection(): Promise<void> {
   const selection = terminal?.getSelection()
   if (!selection) return
   if (await writeClipboardText(selection)) terminal?.clearSelection()
+}
+
+async function copyPublishedClipboard(): Promise<void> {
+  if (publishedClipboardValue === null) return
+  const copied = await writeClipboardText(publishedClipboardValue)
+  terminalCopyButton.textContent = copied ? "Copied" : "Copy failed"
+  terminalCopyButton.classList.toggle("copied", copied)
 }
 
 window.addEventListener("keydown", (event) => {
@@ -1032,6 +1054,16 @@ window.addEventListener("keydown", (event) => {
     event.stopImmediatePropagation()
     if (selectionShortcut === "select-all") terminal.selectAll()
     else void copyTerminalSelection()
+    return
+  }
+  if (
+    publishedClipboardValue !== null &&
+    event.key.toLowerCase() === "c" &&
+    !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey
+  ) {
+    event.preventDefault()
+    event.stopImmediatePropagation()
+    void copyPublishedClipboard()
     return
   }
   const sequence = browserShortcutSequence(event)
@@ -1045,6 +1077,7 @@ reconnectButton.addEventListener("click", () => {
   reconnectAttempt = 0
   connectTerminal()
 })
+terminalCopyButton.addEventListener("click", () => void copyPublishedClipboard())
 fullscreenButton.addEventListener("click", () => {
   if (document.fullscreenElement) void document.exitFullscreen()
   else void consoleView.requestFullscreen()

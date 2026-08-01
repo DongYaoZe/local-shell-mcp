@@ -28,4 +28,23 @@ describe("TerminalWriteBuffer", () => {
 
     expect(writes).toEqual([])
   })
+
+  test("releases a selection hold before buffered output can grow without bound", () => {
+    const writes: TerminalWriteChunk[] = []
+    let overflows = 0
+    const buffer = new TerminalWriteBuffer((chunk) => writes.push(chunk), {
+      maxPendingBytes: 8,
+      onOverflow: () => { overflows += 1 },
+    })
+
+    buffer.setHeld(true)
+    buffer.write("1234")
+    expect(writes).toEqual([])
+    buffer.write("5")
+
+    expect(overflows).toBe(1)
+    expect(writes).toEqual(["1234", "5"])
+    buffer.write("live")
+    expect(writes).toEqual(["1234", "5", "live"])
+  })
 })

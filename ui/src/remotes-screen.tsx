@@ -2,7 +2,7 @@ import type { ScrollBoxRenderable } from "@opentui/core"
 import { useKeyboard } from "@opentui/react"
 import { useCallback, useEffect, useRef, useState } from "react"
 import { api, formatError } from "./api"
-import { webClipboardSequence } from "./clipboard-protocol"
+import { webClipboardClearSequence, webClipboardSequence } from "./clipboard-protocol"
 import { EmptyState, KeyHint, Loading, Modal, Panel, formatAge, useVisibleRows } from "./components"
 import { handleSelectionScroll } from "./mouse"
 import { cyclePane, scrollPaneForKey } from "./pane-navigation"
@@ -27,14 +27,14 @@ type RemoteDialog =
 export function RemoteInviteResultDialog({
   invite,
   width,
-  onCopy,
+  copyAvailable = false,
 }: {
   invite: InvitePayload
   width: number
-  onCopy?: () => void
+  copyAvailable?: boolean
 }) {
   return (
-    <Modal title="Remote join command" width={Math.max(38, Math.min(88, width - 6))} height={onCopy ? 16 : 15}>
+    <Modal title="Remote join command" width={Math.max(38, Math.min(88, width - 6))} height={copyAvailable ? 16 : 15}>
       <text style={{ height: 1, flexShrink: 0 }} fg={theme.green} attributes={1} content="Invite ready" />
       <text style={{ height: 1, flexShrink: 0 }} fg={theme.muted} content="Run this command on the remote node:" />
       <box
@@ -50,15 +50,12 @@ export function RemoteInviteResultDialog({
       >
         <text style={{ flexShrink: 0 }} fg={colors.accent} content={invite.command} />
       </box>
-      {onCopy && (
+      {copyAvailable && (
         <text
-          onMouseUp={(event) => {
-            if (event.button === 0) onCopy()
-          }}
           style={{ height: 1, flexShrink: 0 }}
           fg={theme.cyan}
           attributes={1}
-          content="[ c / click ] Copy command"
+          content="[ c ] Copy command · browser button also available"
         />
       )}
       <text
@@ -147,6 +144,14 @@ export function RemotesScreen({
     return () => onInteractionLockChange(false)
   }, [dialog.type, onInteractionLockChange])
 
+  useEffect(() => {
+    if (!browserClipboardEnabled || dialog.type !== "invite-result") return
+    process.stdout.write(webClipboardSequence(dialog.invite.command))
+    return () => {
+      process.stdout.write(webClipboardClearSequence())
+    }
+  }, [dialog])
+
   const createInvite = async (value: string) => {
     const [name, ...workdirParts] = value.trim().split(/\s+/)
     try {
@@ -192,11 +197,6 @@ export function RemotesScreen({
   const createRemoteInvite = () => enabled && setDialog({ type: "invite" })
   const renameCurrent = () => current && enabled && setDialog({ type: "rename", machine: current })
   const revokeCurrent = () => current && enabled && setDialog({ type: "revoke", machine: current })
-  const copyInviteCommand = (invite: InvitePayload) => {
-    if (!browserClipboardEnabled) return
-    process.stdout.write(webClipboardSequence(invite.command))
-    setStatus("Invite command copied to clipboard")
-  }
   const footerLocked = !keyboardEnabled || dialog.type !== "none"
 
   useKeyboard((key) => {
@@ -206,7 +206,6 @@ export function RemotesScreen({
       return
     }
     if (dialog.type === "invite-result") {
-      if (key.name === "c" && browserClipboardEnabled) copyInviteCommand(dialog.invite)
       if (key.name === "escape" || key.name === "return") setDialog({ type: "none" })
       return
     }
@@ -387,7 +386,7 @@ export function RemotesScreen({
         <RemoteInviteResultDialog
           invite={dialog.invite}
           width={width}
-          onCopy={browserClipboardEnabled ? () => copyInviteCommand(dialog.invite) : undefined}
+          copyAvailable={browserClipboardEnabled}
         />
       )}
       {dialog.type === "rename" && (
