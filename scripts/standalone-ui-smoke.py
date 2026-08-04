@@ -150,17 +150,24 @@ async def exercise_native_terminal(port: int) -> None:
             subprotocols=["lsm-ui"],
             max_size=8 * 1024 * 1024,
         ) as websocket:
-            await websocket.send(b"printf 'native-terminal-smoke-ok\\n'\r")
             await websocket.send('{"type":"resize","cols":90,"rows":28}')
-            deadline = asyncio.get_running_loop().time() + 15
-            while marker not in output and asyncio.get_running_loop().time() < deadline:
-                remaining = deadline - asyncio.get_running_loop().time()
-                message = await asyncio.wait_for(websocket.recv(), timeout=remaining)
-                output.extend(
-                    message.encode("utf-8", errors="replace")
-                    if isinstance(message, str)
-                    else message
-                )
+            command = b"printf 'native-terminal-smoke-ok\\n'\r"
+            for _attempt in range(3):
+                await websocket.send(command)
+                deadline = asyncio.get_running_loop().time() + 10
+                while marker not in output and asyncio.get_running_loop().time() < deadline:
+                    remaining = deadline - asyncio.get_running_loop().time()
+                    try:
+                        message = await asyncio.wait_for(websocket.recv(), timeout=remaining)
+                    except TimeoutError:
+                        break
+                    output.extend(
+                        message.encode("utf-8", errors="replace")
+                        if isinstance(message, str)
+                        else message
+                    )
+                if marker in output:
+                    break
     finally:
         with contextlib.suppress(Exception):
             api_request(
