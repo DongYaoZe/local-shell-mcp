@@ -18,6 +18,23 @@ import {
   type NativePageContext,
 } from "./common"
 
+export function fileBreadcrumbRows(path: string): Array<{ label: string; path: string }> {
+  const windows = path.includes("\\") && !path.includes("/")
+  const separator = windows ? "\\" : "/"
+  const unc = windows ? path.match(/^\\\\[^\\]+\\[^\\]+/)?.[0] : undefined
+  const drive = unc || (windows ? path.match(/^[A-Za-z]:/)?.[0] : path.startsWith("/") ? "/" : "")
+  const parts = path.slice(drive ? drive.length : 0).replace(/^[\\/]+/, "").split(/[\\/]/).filter(Boolean)
+  const rows: Array<{ label: string; path: string }> = []
+  if (drive) rows.push({ label: drive, path: drive === "/" || unc ? drive : `${drive}\\` })
+  let current = drive === "/" ? "/" : drive ? (unc ? drive : `${drive}\\`) : "."
+  for (const part of parts) {
+    current = current === "." ? part : current === "/" ? `/${part}` : `${current.replace(/[\\/]$/, "")}${separator}${part}`
+    rows.push({ label: part, path: current })
+  }
+  if (!rows.length) rows.push({ label: ".", path: "." })
+  return rows
+}
+
 export class FilesController extends BaseController {
   private machine = "local"
   private path = "."
@@ -62,7 +79,7 @@ export class FilesController extends BaseController {
         <div class="toolbar-actions" data-role="actions"></div>
       </div>
       <div class="files-layout">
-        <aside class="native-panel machine-rail"><header><h3>Machines</h3><span>${this.machines().length}</span></header><div class="machine-list" data-role="machines"></div></aside>
+        <aside class="native-panel machine-rail"><header><h3>Machines</h3><span data-role="machine-count">${this.machines().length}</span></header><div class="machine-list" data-role="machines"></div></aside>
         <section class="native-panel file-parent-panel"><header><div><h3>Parent</h3><p data-role="parent-summary">Loading…</p></div></header><div class="file-parent-list" data-role="parent-list"><div class="native-loading">Loading parent directory…</div></div></section>
         <section class="native-panel file-list-panel"><header><div><h3>Directory</h3><p data-role="directory-summary">Loading…</p></div><div class="panel-tools"><label class="native-toggle"><input data-role="hidden" type="checkbox"/>Hidden</label></div></header><div class="file-table-wrap" data-role="file-list"><div class="native-loading">Loading directory…</div></div></section>
         <section class="native-panel file-preview-panel"><header><div><h3>Preview</h3><p data-role="preview-summary">Choose an entry</p></div></header><div class="file-preview" data-role="preview"><div class="native-empty">No selection</div></div></section>
@@ -78,6 +95,8 @@ export class FilesController extends BaseController {
     const machines = this.machines()
     const list = this.root.querySelector<HTMLElement>("[data-role=machines]")
     const select = this.root.querySelector<HTMLSelectElement>("[data-role=machine]")
+    const count = this.root.querySelector<HTMLElement>("[data-role=machine-count]")
+    if (count) count.textContent = String(machines.length)
     if (list) list.innerHTML = machines.map((machine) => `<button type="button" class="machine-row ${machine.name === this.machine ? "active" : ""}" data-machine="${escapeHtml(machine.name)}"><span class="status-dot ${machine.status === "online" ? "online" : "offline"}"></span><span><strong>${escapeHtml(machine.name)}</strong><small>${escapeHtml(machine.workdir || machine.status)}</small></span></button>`).join("")
     if (select) select.innerHTML = machines.map((machine) => `<option value="${escapeHtml(machine.name)}"${machine.name === this.machine ? " selected" : ""}>${escapeHtml(machine.name)}</option>`).join("")
   }
@@ -87,18 +106,7 @@ export class FilesController extends BaseController {
     const input = this.root.querySelector<HTMLInputElement>("[data-role=path]")
     if (input && input.value !== this.path) input.value = this.path
     if (!target) return
-    const windows = this.path.includes("\\") && !this.path.includes("/")
-    const separator = windows ? "\\" : "/"
-    const drive = windows ? this.path.match(/^[A-Za-z]:/)?.[0] : this.path.startsWith("/") ? "/" : ""
-    const parts = this.path.replace(/^[A-Za-z]:[\\/]?|^\//, "").split(/[\\/]/).filter(Boolean)
-    const rows: Array<{ label: string; path: string }> = []
-    if (drive) rows.push({ label: drive, path: drive === "/" ? "/" : `${drive}\\` })
-    let current = drive === "/" ? "/" : drive ? `${drive}\\` : "."
-    for (const part of parts) {
-      current = current === "." ? part : current === "/" ? `/${part}` : `${current.replace(/[\\/]$/, "")}${separator}${part}`
-      rows.push({ label: part, path: current })
-    }
-    if (!rows.length) rows.push({ label: ".", path: "." })
+    const rows = fileBreadcrumbRows(this.path)
     target.innerHTML = rows.map((row, index) => `${index ? '<span class="crumb-separator">›</span>' : ""}<button type="button" data-path="${escapeHtml(row.path)}">${escapeHtml(row.label)}</button>`).join("")
   }
 
@@ -140,6 +148,15 @@ export class FilesController extends BaseController {
       return
     }
     this.busy = true
+    const machines = this.machines()
+    if (!machines.some((machine) => machine.name === this.machine)) {
+      this.machine = machines.some((machine) => machine.name === "local") ? "local" : machines[0]?.name || "local"
+      this.path = "."
+      this.payload = null
+      this.preview = null
+      this.selectedPath = null
+    }
+    this.renderMachines()
     this.renderActions()
     const controller = this.controller()
     const requestedMachine = this.machine

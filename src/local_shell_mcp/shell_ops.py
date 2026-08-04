@@ -13,7 +13,7 @@ import time
 import uuid
 import weakref
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import conpty_ops
@@ -82,6 +82,7 @@ class NativeShellSession:
     output: TailBuffer
     readers: list
     lock: object
+    input_buffer: bytearray = field(default_factory=bytearray)
 
 
 def check_command_policy(command: str) -> None:
@@ -691,12 +692,39 @@ async def _native_send_shell(session_id: str, input_text: str, enter: bool = Tru
                 pass
         await write_input("\x03", False)
 
-    parts = input_text.split("\x03")
-    async with session.lock:
-        for index, part in enumerate(parts):
-            await write_input(part, enter and index == len(parts) - 1)
-            if index < len(parts) - 1:
+    async def send_unix_pipe_input(value: str, append_newline: bool) -> None:
+        normalized = value.replace("\r\n", "\n").replace("\r", "\n")
+        if append_newline:
+            normalized += "\n"
+        for character in normalized:
+            if character == "\x03":
+                session.input_buffer.clear()
+                session.output.append(b"^C\n")
                 await interrupt()
+            elif character in {"\x08", "\x7f"}:
+                if session.input_buffer:
+                    session.input_buffer.pop()
+                    session.output.append(b"\b \b")
+            elif character == "\n":
+                pending = bytes(session.input_buffer)
+                session.input_buffer.clear()
+                session.output.append(b"\n")
+                session.process.stdin.write(pending + b"\n")
+                await session.process.stdin.drain()
+            else:
+                encoded = character.encode()
+                session.input_buffer.extend(encoded)
+                session.output.append(encoded)
+
+    async with session.lock:
+        if sys.platform != "win32":
+            await send_unix_pipe_input(input_text, enter)
+        else:
+            parts = input_text.split("\x03")
+            for index, part in enumerate(parts):
+                await write_input(part, enter and index == len(parts) - 1)
+                if index < len(parts) - 1:
+                    await interrupt()
     audit(
         "shell_send",
         session=session_id,

@@ -548,6 +548,150 @@ async def test_native_pipe_shell_translates_terminal_enter_and_interrupt(monkeyp
     assert signals == [(84, shell_ops.signal.SIGINT)]
 
 
+@pytest.mark.asyncio
+async def test_native_pipe_shell_ctrl_c_clears_idle_input(monkeypatch):
+    from local_shell_mcp import shell_ops
+
+    class Stdin:
+        def __init__(self):
+            self.writes = []
+
+        def write(self, data):
+            self.writes.append(data)
+
+        async def drain(self):
+            return None
+
+    stdin = Stdin()
+    session = shell_ops.NativeShellSession(
+        session_id="native-idle",
+        process=SimpleNamespace(stdin=stdin, returncode=None, pid=42),
+        cwd=Path("."),
+        command="shell",
+        created=0,
+        output=shell_ops.TailBuffer(1024, bytearray()),
+        readers=[],
+        lock=asyncio.Lock(),
+    )
+    monkeypatch.setitem(shell_ops._NATIVE_SHELL_SESSIONS, session.session_id, session)
+    monkeypatch.setattr(shell_ops.sys, "platform", "linux")
+    monkeypatch.setattr(shell_ops, "_native_descendant_pids", lambda pid: [])
+
+    await shell_ops._native_send_shell(session.session_id, "echo should-not-run", enter=False)
+    await shell_ops._native_send_shell(session.session_id, "\x03", enter=False)
+    await shell_ops._native_send_shell(session.session_id, "echo safe\r", enter=False)
+
+    assert stdin.writes == [b"echo safe\n"]
+    assert session.input_buffer == bytearray()
+    assert b"^C\n" in session.output.data
+
+
+@pytest.mark.asyncio
+async def test_native_pipe_shell_buffers_line_editing(monkeypatch):
+    from local_shell_mcp import shell_ops
+
+    class Stdin:
+        def __init__(self):
+            self.writes = []
+
+        def write(self, data):
+            self.writes.append(data)
+
+        async def drain(self):
+            return None
+
+    stdin = Stdin()
+    session = shell_ops.NativeShellSession(
+        session_id="native-editing",
+        process=SimpleNamespace(stdin=stdin, returncode=None, pid=42),
+        cwd=Path("."),
+        command="shell",
+        created=0,
+        output=shell_ops.TailBuffer(1024, bytearray()),
+        readers=[],
+        lock=asyncio.Lock(),
+    )
+    monkeypatch.setitem(shell_ops._NATIVE_SHELL_SESSIONS, session.session_id, session)
+    monkeypatch.setattr(shell_ops.sys, "platform", "linux")
+    monkeypatch.setattr(shell_ops, "_native_descendant_pids", lambda pid: [])
+
+    await shell_ops._native_send_shell(session.session_id, "echo ax\x08b\r\n", enter=False)
+    await shell_ops._native_send_shell(session.session_id, "\x7fnext", enter=True)
+
+    assert stdin.writes == [b"echo ab\n", b"next\n"]
+    assert session.input_buffer == bytearray()
+    assert b"echo ax\b \bb\nnext\n" in session.output.data
+
+
+@pytest.mark.asyncio
+async def test_native_windows_shell_ctrl_c_fallback_and_ctrl_break(monkeypatch):
+    from local_shell_mcp import shell_ops
+
+    class Stdin:
+        def __init__(self):
+            self.writes = []
+
+        def write(self, data):
+            self.writes.append(data)
+
+        async def drain(self):
+            return None
+
+    class Process:
+        def __init__(self, stdin):
+            self.stdin = stdin
+            self.returncode = None
+            self.pid = 42
+            self.signals = []
+
+        def send_signal(self, value):
+            self.signals.append(value)
+            if len(self.signals) == 1:
+                raise OSError("ctrl-break unavailable")
+
+    stdin = Stdin()
+    process = Process(stdin)
+    session = shell_ops.NativeShellSession(
+        session_id="native-windows",
+        process=process,
+        cwd=Path("."),
+        command="shell",
+        created=0,
+        output=shell_ops.TailBuffer(1024, bytearray()),
+        readers=[],
+        lock=asyncio.Lock(),
+    )
+    monkeypatch.setitem(shell_ops._NATIVE_SHELL_SESSIONS, session.session_id, session)
+    monkeypatch.setattr(shell_ops.sys, "platform", "win32")
+    monkeypatch.setattr(shell_ops.signal, "CTRL_BREAK_EVENT", 123, raising=False)
+
+    await shell_ops._native_send_shell(session.session_id, "one\r\ntwo\x03three", enter=True)
+    await shell_ops._native_send_shell(session.session_id, "\x03", enter=False)
+
+    assert stdin.writes == [b"one\r\ntwo", b"\x03", b"three\r\n"]
+    assert process.signals == [123, 123]
+
+
+@pytest.mark.asyncio
+async def test_native_shell_rejects_missing_stdin(monkeypatch):
+    from local_shell_mcp import shell_ops
+
+    session = shell_ops.NativeShellSession(
+        session_id="native-no-stdin",
+        process=SimpleNamespace(stdin=None, returncode=None, pid=42),
+        cwd=Path("."),
+        command="shell",
+        created=0,
+        output=shell_ops.TailBuffer(1024, bytearray()),
+        readers=[],
+        lock=asyncio.Lock(),
+    )
+    monkeypatch.setitem(shell_ops._NATIVE_SHELL_SESSIONS, session.session_id, session)
+
+    with pytest.raises(RuntimeError, match="has no stdin"):
+        await shell_ops._native_send_shell(session.session_id, "echo")
+
+
 def test_native_descendant_pids_are_deepest_first(monkeypatch):
     from local_shell_mcp import shell_ops
 

@@ -19,6 +19,7 @@ export class TodosController extends BaseController {
   private filter: "all" | "open" | "completed" = "all"
   private selected = 0
   private saving = false
+  private saveQueue: Array<{ mutator: (todos: TodoItem[]) => TodoItem[]; message: string; resolve: () => void }> = []
 
   mount(root: HTMLElement): void {
     this.root = root
@@ -69,30 +70,41 @@ export class TodosController extends BaseController {
   }
 
   private async save(mutator: (todos: TodoItem[]) => TodoItem[], message: string): Promise<void> {
-    if (this.saving) return
+    await new Promise<void>((resolve) => {
+      this.saveQueue.push({ mutator, message, resolve })
+      if (!this.saving) void this.drainSaveQueue()
+    })
+  }
+
+  private async drainSaveQueue(): Promise<void> {
     this.saving = true
     this.render()
-    try {
-      let base = this.payload
-      let next = mutator(base.todos)
+    while (this.saveQueue.length) {
+      const { mutator, message, resolve } = this.saveQueue.shift()!
       try {
-        this.payload = await this.context.api.send<TodoPayload>("/todos", "PUT", { todos: next, expected_revision: base.revision })
+        let base = this.payload
+        let next = mutator(base.todos)
+        try {
+          this.payload = await this.context.api.send<TodoPayload>("/todos", "PUT", { todos: next, expected_revision: base.revision })
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : String(error)
+          if (!detail.includes("changed from revision")) throw error
+          base = await this.context.api.get<TodoPayload>("/todos")
+          next = mutator(base.todos)
+          this.payload = await this.context.api.send<TodoPayload>("/todos", "PUT", { todos: next, expected_revision: base.revision })
+        }
+        this.context.notify(message, "success")
+        await this.context.refreshChrome()
       } catch (error) {
-        const detail = error instanceof Error ? error.message : String(error)
-        if (!detail.includes("changed from revision")) throw error
-        base = await this.context.api.get<TodoPayload>("/todos")
-        next = mutator(base.todos)
-        this.payload = await this.context.api.send<TodoPayload>("/todos", "PUT", { todos: next, expected_revision: base.revision })
+        this.context.notify(`Todos: ${error instanceof Error ? error.message : String(error)}`, "error")
+      } finally {
+        resolve()
       }
-      this.context.notify(message, "success")
-      await this.context.refreshChrome()
-    } catch (error) {
-      this.context.notify(`Todos: ${error instanceof Error ? error.message : String(error)}`, "error")
-    } finally {
-      this.saving = false
       this.selected = Math.min(this.selected, Math.max(0, this.visible().length - 1))
       this.render()
     }
+    this.saving = false
+    this.render()
   }
 
   private async add(): Promise<void> {
@@ -115,15 +127,21 @@ export class TodosController extends BaseController {
   private cycleStatus(): void {
     const current = this.current()
     if (!current) return
-    const status = TODO_STATUS[(TODO_STATUS.indexOf(current.status as typeof TODO_STATUS[number]) + 1) % TODO_STATUS.length]
-    void this.save((todos) => todos.map((todo) => todo.id === current.id ? { ...todo, status } : todo), `Status changed to ${status}`)
+    void this.save((todos) => todos.map((todo) => {
+      if (todo.id !== current.id) return todo
+      const status = TODO_STATUS[(TODO_STATUS.indexOf(todo.status as typeof TODO_STATUS[number]) + 1) % TODO_STATUS.length]
+      return { ...todo, status }
+    }), "Todo status advanced")
   }
 
   private cyclePriority(): void {
     const current = this.current()
     if (!current) return
-    const priority = TODO_PRIORITY[(TODO_PRIORITY.indexOf(current.priority as typeof TODO_PRIORITY[number]) + 1) % TODO_PRIORITY.length]
-    void this.save((todos) => todos.map((todo) => todo.id === current.id ? { ...todo, priority } : todo), `Priority changed to ${priority}`)
+    void this.save((todos) => todos.map((todo) => {
+      if (todo.id !== current.id) return todo
+      const priority = TODO_PRIORITY[(TODO_PRIORITY.indexOf(todo.priority as typeof TODO_PRIORITY[number]) + 1) % TODO_PRIORITY.length]
+      return { ...todo, priority }
+    }), "Todo priority advanced")
   }
 
   private async delete(): Promise<void> {

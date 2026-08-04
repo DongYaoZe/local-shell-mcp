@@ -1,4 +1,4 @@
-export const WEB_VIEWS = ["overview", "files", "terminals", "remotes", "audit", "todos"] as const
+export const WEB_VIEWS = ["overview", "files", "terminals", "remotes", "audit", "todos", "workloads", "activity"] as const
 export type WebViewName = (typeof WEB_VIEWS)[number] | "console"
 export type InterfaceMode = "web" | "tui"
 
@@ -7,8 +7,6 @@ const ALIASES: Record<string, WebViewName> = {
   web: "overview",
   dashboard: "overview",
   machines: "remotes",
-  workloads: "terminals",
-  activity: "audit",
   tui: "console",
   opentui: "console",
 }

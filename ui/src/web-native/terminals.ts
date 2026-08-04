@@ -1,5 +1,6 @@
 import { FitAddon } from "@xterm/addon-fit"
 import { Terminal } from "@xterm/xterm"
+import { TerminalWriteBuffer, type TerminalWriteChunk } from "../terminal-write-buffer"
 import type { TerminalPayload, TerminalSession } from "../types"
 import {
   BaseController,
@@ -20,6 +21,7 @@ export class TerminalsController extends BaseController {
   private sessions: TerminalSession[] = []
   private selectedSessionId: string | null = null
   private terminal: Terminal | null = null
+  private terminalWrites: TerminalWriteBuffer | null = null
   private fitAddon: FitAddon | null = null
   private socket: WebSocket | null = null
   private resizeObserver: ResizeObserver | null = null
@@ -84,8 +86,20 @@ export class TerminalsController extends BaseController {
     this.fitAddon = new FitAddon()
     this.terminal.loadAddon(this.fitAddon)
     this.terminal.open(host)
+    this.terminalWrites = new TerminalWriteBuffer((chunk) => this.terminal?.write(chunk), {
+      onOverflow: () => {
+        this.terminal?.scrollToBottom()
+        this.context.notify("Terminal output resumed after the history buffer filled.", "info")
+      },
+    })
     this.terminal.onData((data) => this.sendRaw(data))
+    this.terminal.onScroll((viewportY) => {
+      const terminal = this.terminal
+      if (!terminal) return
+      this.terminalWrites?.setHeld(viewportY < terminal.buffer.active.baseY)
+    })
     this.terminal.attachCustomKeyEventHandler((event) => {
+      if (event.type === "keydown" && event.key === "PageUp") this.terminalWrites?.setHeld(true)
       if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === "c") {
         if (event.type === "keydown") void this.copySelection()
         return false
@@ -111,6 +125,17 @@ export class TerminalsController extends BaseController {
       return
     }
     this.loading = true
+    const machines = this.context.machines()
+    if (!machines.some((machine) => machine.name === this.machine)) {
+      this.disconnect(true)
+      this.machine = machines.some((machine) => machine.name === "local") ? "local" : machines[0]?.name || "local"
+      this.sessions = []
+      this.selectedSessionId = null
+      this.terminalWrites?.clear()
+      this.terminalWrites?.setHeld(false)
+      this.terminal?.clear()
+    }
+    this.renderMachineSelect()
     const requestedMachine = this.machine
     try {
       const payload = await this.context.api.get<TerminalPayload>(`/terminals${queryString({ machine: requestedMachine })}`)
@@ -187,6 +212,8 @@ export class TerminalsController extends BaseController {
     this.disconnect(false)
     this.manualClose = false
     this.setConnection("connecting", "Connecting")
+    this.terminalWrites?.clear()
+    this.terminalWrites?.setHeld(false)
     this.terminal.clear()
     this.terminal.write(`\x1b[38;2;139;124;246mAttaching to ${this.machine}:${sessionId}…\x1b[0m\r\n`)
     this.fit()
@@ -208,9 +235,12 @@ export class TerminalsController extends BaseController {
     }
     socket.onmessage = async (event) => {
       if (this.socket !== socket || !this.terminal) return
-      if (event.data instanceof ArrayBuffer) this.terminal.write(new Uint8Array(event.data))
-      else if (event.data instanceof Blob) this.terminal.write(new Uint8Array(await event.data.arrayBuffer()))
-      else this.terminal.write(String(event.data))
+      const data = event.data instanceof ArrayBuffer
+        ? new Uint8Array(event.data)
+        : event.data instanceof Blob
+          ? new Uint8Array(await event.data.arrayBuffer())
+          : String(event.data)
+      if (this.socket === socket) this.writeTerminalData(data)
     }
     socket.onerror = () => {
       if (this.socket === socket) this.setConnection("error", "Connection error")
@@ -230,6 +260,10 @@ export class TerminalsController extends BaseController {
       }
       this.scheduleReconnect()
     }
+  }
+
+  private writeTerminalData(data: TerminalWriteChunk): void {
+    this.terminalWrites?.write(data)
   }
 
   private scheduleReconnect(): void {
@@ -301,7 +335,11 @@ export class TerminalsController extends BaseController {
       this.selectedSessionId = this.sessions[0]?.session_id || null
       this.renderSessions()
       if (this.selectedSessionId) this.connect()
-      else this.terminal?.clear()
+      else {
+        this.terminalWrites?.clear()
+        this.terminalWrites?.setHeld(false)
+        this.terminal?.clear()
+      }
       this.context.notify(`Killed ${sessionId}`, "success")
       await this.context.refreshChrome()
     } catch (error) {
@@ -387,6 +425,8 @@ export class TerminalsController extends BaseController {
     this.machine = machine
     this.sessions = []
     this.selectedSessionId = null
+    this.terminalWrites?.clear()
+    this.terminalWrites?.setHeld(false)
     this.terminal?.clear()
     this.renderSessions()
     void this.refresh()
@@ -413,7 +453,11 @@ export class TerminalsController extends BaseController {
     else if (action === "reconnect") this.connect()
     else if (action === "copy") void this.copySelection()
     else if (action === "paste") void this.pasteClipboard()
-    else if (action === "clear") this.terminal?.clear()
+    else if (action === "clear") {
+      this.terminalWrites?.clear()
+      this.terminalWrites?.setHeld(false)
+      this.terminal?.clear()
+    }
     else if (action === "search") this.openSearch()
     else if (action === "search-prev") this.find(-1)
     else if (action === "search-next") this.find(1)
