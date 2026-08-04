@@ -628,10 +628,39 @@ async def _native_send_shell(session_id: str, input_text: str, enter: bool = Tru
     if session.process.stdin is None:
         raise RuntimeError(f"Persistent shell session has no stdin: {session_id}")
     newline = "\r\n" if sys.platform == "win32" else "\n"
-    data = input_text + (newline if enter else "")
-    async with session.lock:
-        session.process.stdin.write(data.encode())
+
+    async def write_input(value: str, append_newline: bool) -> None:
+        if not value and not append_newline:
+            return
+        if not append_newline:
+            value = value.replace("\r\n", "\n").replace("\r", "\n")
+            if newline != "\n":
+                value = value.replace("\n", newline)
+        session.process.stdin.write((value + (newline if append_newline else "")).encode())
         await session.process.stdin.drain()
+
+    async def interrupt() -> None:
+        if sys.platform != "win32":
+            try:
+                os.killpg(os.getpgid(session.process.pid), signal.SIGINT)
+            except OSError:
+                session.process.send_signal(signal.SIGINT)
+            return
+        ctrl_break = getattr(signal, "CTRL_BREAK_EVENT", None)
+        if ctrl_break is not None:
+            try:
+                session.process.send_signal(ctrl_break)
+                return
+            except (OSError, ValueError):
+                pass
+        await write_input("\x03", False)
+
+    parts = input_text.split("\x03")
+    async with session.lock:
+        for index, part in enumerate(parts):
+            await write_input(part, enter and index == len(parts) - 1)
+            if index < len(parts) - 1:
+                await interrupt()
     audit(
         "shell_send",
         session=session_id,

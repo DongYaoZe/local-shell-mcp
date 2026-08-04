@@ -1,6 +1,8 @@
 import asyncio
 import json
 import time
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from conftest import python_shell_command
@@ -455,7 +457,11 @@ async def test_unix_persistent_shell_falls_back_when_tmux_is_missing(tmp_path, m
     session = await shell_ops.start_shell(cwd=".", name="native-fallback")
     try:
         assert session["backend"] == "native"
-        await shell_ops.send_shell(session["session_id"], "printf 'fallback-ready\\n'")
+        await shell_ops.send_shell(
+            session["session_id"],
+            "printf 'fallback-ready\\n'\r",
+            enter=False,
+        )
         deadline = time.monotonic() + 2
         output = ""
         while time.monotonic() < deadline:
@@ -468,3 +474,52 @@ async def test_unix_persistent_shell_falls_back_when_tmux_is_missing(tmp_path, m
         assert any(row["session_id"] == session["session_id"] for row in listed["sessions"])
     finally:
         await shell_ops.kill_shell(session["session_id"])
+
+
+@pytest.mark.asyncio
+async def test_native_pipe_shell_translates_terminal_enter_and_interrupt(monkeypatch):
+    from local_shell_mcp import shell_ops
+
+    class Stdin:
+        def __init__(self):
+            self.writes = []
+
+        def write(self, data):
+            self.writes.append(data)
+
+        async def drain(self):
+            return None
+
+    stdin = Stdin()
+    signals = []
+    process = SimpleNamespace(
+        stdin=stdin,
+        returncode=None,
+        pid=42,
+        send_signal=lambda value: signals.append(("process", value)),
+    )
+    session = shell_ops.NativeShellSession(
+        session_id="native-terminal",
+        process=process,
+        cwd=Path("."),
+        command="shell",
+        created=0,
+        output=shell_ops.TailBuffer(1024, bytearray()),
+        readers=[],
+        lock=asyncio.Lock(),
+    )
+    monkeypatch.setitem(shell_ops._NATIVE_SHELL_SESSIONS, session.session_id, session)
+    monkeypatch.setattr(shell_ops.sys, "platform", "linux")
+    monkeypatch.setattr(shell_ops.os, "getpgid", lambda pid: pid, raising=False)
+    monkeypatch.setattr(
+        shell_ops.os,
+        "killpg",
+        lambda pid, value: signals.append((pid, value)),
+        raising=False,
+    )
+
+    await shell_ops._native_send_shell(session.session_id, "printf ok\r", enter=False)
+    await shell_ops._native_send_shell(session.session_id, "\x03", enter=False)
+
+    assert stdin.writes == [b"printf ok\n"]
+    assert signals == [(42, shell_ops.signal.SIGINT)]

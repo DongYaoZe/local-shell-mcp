@@ -27,6 +27,7 @@ export class TerminalsController extends BaseController {
   private reconnectAttempt = 0
   private manualClose = false
   private loading = false
+  private refreshQueued = false
   private history: string[] = []
   private historyIndex = 0
   private lastSearch = ""
@@ -105,11 +106,15 @@ export class TerminalsController extends BaseController {
   }
 
   async refresh(): Promise<void> {
-    if (this.loading) return
+    if (this.loading) {
+      this.refreshQueued = true
+      return
+    }
     this.loading = true
+    const requestedMachine = this.machine
     try {
-      const payload = await this.context.api.get<TerminalPayload>(`/terminals${queryString({ machine: this.machine })}`)
-      if (this.destroyed || payload.machine !== this.machine) return
+      const payload = await this.context.api.get<TerminalPayload>(`/terminals${queryString({ machine: requestedMachine })}`)
+      if (this.destroyed || requestedMachine !== this.machine || payload.machine !== requestedMachine) return
       this.sessions = payload.sessions
       const previous = this.selectedSessionId
       if (!previous || !this.sessions.some((session) => session.session_id === previous)) this.selectedSessionId = this.sessions[0]?.session_id || null
@@ -117,9 +122,14 @@ export class TerminalsController extends BaseController {
       if (this.selectedSessionId && this.selectedSessionId !== previous) this.connect()
       if (!this.selectedSessionId) this.disconnect(true)
     } catch (error) {
+      if (this.destroyed || requestedMachine !== this.machine) return
       this.context.notify(`Terminals: ${error instanceof Error ? error.message : String(error)}`, "error")
     } finally {
       this.loading = false
+      if (this.refreshQueued && !this.destroyed) {
+        this.refreshQueued = false
+        void this.refresh()
+      }
     }
   }
 

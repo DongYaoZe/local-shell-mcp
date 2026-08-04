@@ -1566,9 +1566,9 @@ class _PollingShellProcess:
 
     Remote workers and native/ConPTY persistent shells cannot be attached as a local
     PTY client. For those backends, send screen snapshots only when the captured pane
-    changes and forward input as raw shell input. The browser receives an ANSI clear
-    before each snapshot, which keeps full-screen programs usable without duplicating
-    captured history.
+    changes and forward input through the persistent-shell API. The browser receives an
+    ANSI screen and scrollback clear before each replacement snapshot, so polling does
+    not duplicate captured history in xterm.js.
     """
 
     def __init__(self, machine: str, session_id: str, cols: int, rows: int):
@@ -1605,7 +1605,7 @@ class _PollingShellProcess:
             output = str((result or {}).get("output") or "") if isinstance(result, dict) else str(result or "")
             if output != self._last_output:
                 self._last_output = output
-                return ("\x1b[?25l\x1b[H\x1b[2J" + output + "\x1b[?25h").encode(
+                return ("\x1b[?25l\x1b[3J\x1b[H\x1b[2J" + output + "\x1b[?25h").encode(
                     "utf-8", errors="replace"
                 )
             await asyncio.sleep(0.12)

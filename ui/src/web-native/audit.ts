@@ -27,6 +27,7 @@ export class AuditController extends BaseController {
   private selected = 0
   private detail: AuditEntry | null = null
   private loading = false
+  private refreshQueued = false
   private detailRequest = 0
   private filterTimer: number | null = null
   private filters = { node: "", operation: "", time: "24h", sort: "desc", search: "", event: "", session: "" }
@@ -53,13 +54,20 @@ export class AuditController extends BaseController {
   }
 
   async refresh(): Promise<void> {
-    if (this.loading) return
+    if (this.loading) {
+      this.refreshQueued = true
+      return
+    }
     this.loading = true
     const currentId = this.entries[this.selected]?.id
+    const requestedFilters = { ...this.filters }
+    const filtersChanged = () => Object.entries(requestedFilters).some(
+      ([key, value]) => this.filters[key as keyof typeof this.filters] !== value,
+    )
     try {
-      const range = AUDIT_TIME_RANGES.find((item) => item.label === this.filters.time) || AUDIT_TIME_RANGES[2]!
-      const payload = await this.context.api.get<AuditPayload>(`/audit${queryString({ limit: 800, node: this.filters.node, operation: this.filters.operation, search: this.filters.search, event: this.filters.event, session: this.filters.session, start_ts: range.seconds ? Date.now() / 1000 - range.seconds : undefined, sort: this.filters.sort })}`)
-      if (this.destroyed) return
+      const range = AUDIT_TIME_RANGES.find((item) => item.label === requestedFilters.time) || AUDIT_TIME_RANGES[2]!
+      const payload = await this.context.api.get<AuditPayload>(`/audit${queryString({ limit: 800, node: requestedFilters.node, operation: requestedFilters.operation, search: requestedFilters.search, event: requestedFilters.event, session: requestedFilters.session, start_ts: range.seconds ? Date.now() / 1000 - range.seconds : undefined, sort: requestedFilters.sort })}`)
+      if (this.destroyed || filtersChanged()) return
       this.entries = payload.entries
       this.selected = currentId ? Math.max(0, this.entries.findIndex((entry) => entry.id === currentId)) : Math.min(this.selected, Math.max(0, this.entries.length - 1))
       if (this.selected < 0) this.selected = 0
@@ -67,9 +75,14 @@ export class AuditController extends BaseController {
       this.renderList(payload.total_matched)
       void this.loadDetail()
     } catch (error) {
+      if (this.destroyed || filtersChanged()) return
       this.context.notify(`Audit: ${error instanceof Error ? error.message : String(error)}`, "error")
     } finally {
       this.loading = false
+      if (this.refreshQueued && !this.destroyed) {
+        this.refreshQueued = false
+        void this.refresh()
+      }
     }
   }
 

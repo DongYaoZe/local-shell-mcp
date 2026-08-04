@@ -747,7 +747,13 @@ async function refreshAll(manual = false): Promise<void> {
     bootstrapData = bootstrap
     dashboardData = dashboard
     syncChrome(dashboard)
+    const mountedController = nativeController && nativeControllerView === activeView
+      ? nativeController
+      : null
     renderActiveView()
+    if (mountedController && mountedController === nativeController) {
+      await mountedController.refresh()
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     if (message === "Authentication required") {

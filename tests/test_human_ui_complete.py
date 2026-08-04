@@ -864,6 +864,7 @@ def test_spawn_shell_process_selects_tmux_attachment_or_polling_bridge(tmp_path,
     monkeypatch.setattr(ui, "resolve_tmux", lambda: SimpleNamespace(path="/usr/bin/tmux"))
     monkeypatch.setattr(ui, "tmux_socket_name", lambda: "lsm-test")
     monkeypatch.setattr(ui, "_UnixPtyProcess", FakePty)
+    monkeypatch.setattr(ui, "os", SimpleNamespace(**{**vars(os), "name": "posix"}))
 
     local = asyncio.run(ui._spawn_shell_process("local", "demo", 100, 32))
     assert isinstance(local, FakePty)
@@ -912,12 +913,34 @@ async def test_polling_shell_process_streams_snapshots_and_forwards_input(tmp_pa
     await process.resize(120, 40)
     await process.close()
 
-    assert first.startswith(b"\x1b[?25l\x1b[H\x1b[2J")
+    assert first.startswith(b"\x1b[?25l\x1b[3J\x1b[H\x1b[2J")
     assert b"first screen" in first
     assert b"second screen" in second
     assert ("worker", "shell_send", {"session_id": "demo", "input_text": "echo ok\r", "enter": False}) in calls
     assert ("worker", "shell_resize", {"session_id": "demo", "cols": 120, "rows": 40}) in calls
     assert await process.read() == b""
+
+
+@pytest.mark.asyncio
+async def test_polling_shell_process_stops_after_repeated_read_failures(tmp_path, monkeypatch):
+    _configure(tmp_path, monkeypatch)
+    attempts = 0
+
+    async def failing_dispatch(machine, local_call, remote_tool, remote_args):
+        nonlocal attempts
+        attempts += 1
+        raise RuntimeError("worker unavailable")
+
+    monkeypatch.setattr(ui, "_machine_dispatch", failing_dispatch)
+    process = ui._PollingShellProcess("worker", "demo", 80, 24)
+
+    message = await process.read()
+    await process.write(b"ignored after close")
+
+    assert attempts == 3
+    assert b"Persistent terminal stream stopped" in message
+    assert b"worker unavailable" in message
+    assert await process.exit_code() == 1
 
 
 @pytest.mark.asyncio
@@ -1002,6 +1025,56 @@ async def test_native_shell_websocket_forwards_stream_input_and_resize(tmp_path,
     assert process.resizes == [(100, 35)]
     assert process.closed is True
     assert id(socket) not in ui._ACTIVE_UI_TERMINALS
+
+
+@pytest.mark.asyncio
+async def test_native_shell_websocket_rejects_unauthorized_full_and_invalid_requests(
+    tmp_path, monkeypatch
+):
+    _configure(tmp_path, monkeypatch)
+
+    class Socket:
+        headers = {}
+
+        def __init__(self, query=None):
+            self.query_params = query or {}
+            self.accepted = False
+            self.sent = []
+            self.closed = []
+
+        async def accept(self, subprotocol=None):
+            self.accepted = True
+
+        async def close(self, code=1000, reason=""):
+            self.closed.append((code, reason))
+
+        async def send_bytes(self, data):
+            self.sent.append(data)
+
+    unauthorized = Socket()
+    monkeypatch.setattr(ui, "_authorize_websocket", lambda websocket: False)
+    await ui.ui_shell_websocket(unauthorized)
+    assert unauthorized.closed == [(4401, "OAuth authentication required")]
+
+    monkeypatch.setattr(ui, "_authorize_websocket", lambda websocket: True)
+    monkeypatch.setattr(
+        ui,
+        "get_settings",
+        lambda: SimpleNamespace(ui_terminal_max_sessions=1),
+    )
+    ui._ACTIVE_UI_TERMINALS.clear()
+    ui._ACTIVE_UI_TERMINALS.add(-1)
+    full = Socket()
+    await ui.ui_shell_websocket(full)
+    assert full.closed == [(4429, "Too many active WebUI terminal sessions")]
+
+    ui._ACTIVE_UI_TERMINALS.clear()
+    invalid = Socket()
+    await ui.ui_shell_websocket(invalid)
+    assert invalid.accepted is True
+    assert any(b"session_id is required" in data for data in invalid.sent)
+    assert invalid.closed[-1][0] == 1011
+    assert id(invalid) not in ui._ACTIVE_UI_TERMINALS
 
 
 def test_ui_routes_disabled(tmp_path, monkeypatch):

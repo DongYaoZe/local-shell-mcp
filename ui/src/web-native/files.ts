@@ -26,6 +26,7 @@ export class FilesController extends BaseController {
   private selectedPath: string | null = null
   private showHidden = false
   private busy = false
+  private refreshQueued = false
   private clipboard: { mode: "copy" | "move"; machine: string; path: string } | null = null
   private pendingSelectionPath: string | null = null
   private previewRequest = 0
@@ -119,13 +120,23 @@ export class FilesController extends BaseController {
   }
 
   async refresh(): Promise<void> {
-    if (this.busy) return
+    if (this.busy) {
+      this.refreshQueued = true
+      return
+    }
     this.busy = true
     this.renderActions()
     const controller = this.controller()
+    const requestedMachine = this.machine
+    const requestedPath = this.path
     try {
-      const payload = await this.context.api.get<FilesPayload>(`/files${queryString({ machine: this.machine, path: this.path })}`)
-      if (controller.signal.aborted || this.destroyed) return
+      const payload = await this.context.api.get<FilesPayload>(`/files${queryString({ machine: requestedMachine, path: requestedPath })}`)
+      if (
+        controller.signal.aborted ||
+        this.destroyed ||
+        requestedMachine !== this.machine ||
+        requestedPath !== this.path
+      ) return
       this.payload = payload
       const entries = this.entries()
       if (this.pendingSelectionPath && entries.some((entry) => entry.path === this.pendingSelectionPath)) {
@@ -139,6 +150,7 @@ export class FilesController extends BaseController {
       this.renderBreadcrumbs()
       void this.loadPreview()
     } catch (error) {
+      if (requestedMachine !== this.machine || requestedPath !== this.path) return
       this.context.notify(`Files: ${error instanceof Error ? error.message : String(error)}`, "error")
       const list = this.root.querySelector<HTMLElement>("[data-role=file-list]")
       if (list) list.innerHTML = `<div class="native-error">${escapeHtml(error instanceof Error ? error.message : String(error))}</div>`
@@ -146,6 +158,10 @@ export class FilesController extends BaseController {
       controller.abort()
       this.busy = false
       this.renderActions()
+      if (this.refreshQueued && !this.destroyed) {
+        this.refreshQueued = false
+        void this.refresh()
+      }
     }
   }
 

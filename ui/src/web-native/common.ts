@@ -138,10 +138,22 @@ export function highlightedHtml(text: string, filename = ""): string {
       .replace(/(`[^`\n]+`)/g, '<span class="syntax-string">$1</span>')
   }
   if (/\.(ts|tsx|js|jsx|py|rs|go|c|cpp|java|sh|bash|zsh)$/.test(lower)) {
-    return escaped
-      .replace(/(#[^\n]*|\/\/[^\n]*)/g, '<span class="syntax-comment">$1</span>')
-      .replace(/(&quot;.*?&quot;|&#039;.*?&#039;|`.*?`)/g, '<span class="syntax-string">$1</span>')
-      .replace(/\b(async|await|break|case|catch|class|const|continue|def|else|export|extends|false|finally|for|from|function|if|import|in|interface|let|match|new|null|return|struct|throw|true|try|type|use|var|while|yield)\b/g, '<span class="syntax-keyword">$1</span>')
+    const tokens = /("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|#[^\n]*|\/\/[^\n]*|\b(?:async|await|break|case|catch|class|const|continue|def|else|export|extends|false|finally|for|from|function|if|import|in|interface|let|match|new|null|return|struct|throw|true|try|type|use|var|while|yield)\b)/g
+    let output = ""
+    let offset = 0
+    for (const match of text.matchAll(tokens)) {
+      const index = match.index ?? 0
+      const token = match[0]
+      output += escapeHtml(text.slice(offset, index))
+      const className = token.startsWith("#") || token.startsWith("//")
+        ? "syntax-comment"
+        : token.startsWith('"') || token.startsWith("'") || token.startsWith("`")
+          ? "syntax-string"
+          : "syntax-keyword"
+      output += `<span class="${className}">${escapeHtml(token)}</span>`
+      offset = index + token.length
+    }
+    return output + escapeHtml(text.slice(offset))
   }
   return escaped
 }
@@ -203,6 +215,7 @@ type DialogOptions = {
 
 export async function openFormDialog(options: DialogOptions): Promise<Record<string, string> | null> {
   return new Promise((resolve) => {
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
     const overlay = document.createElement("div")
     overlay.className = "native-dialog-overlay"
     const fields = options.fields.map((field) => {
@@ -211,15 +224,19 @@ export async function openFormDialog(options: DialogOptions): Promise<Record<str
         : `<input name="${escapeHtml(field.name)}" type="${field.type === "number" ? "number" : "text"}" value="${escapeHtml(field.value || "")}" placeholder="${escapeHtml(field.placeholder || "")}"${field.required ? " required" : ""}/>`
       return `<label class="native-field"><span>${escapeHtml(field.label)}</span>${control}${field.help ? `<small>${escapeHtml(field.help)}</small>` : ""}</label>`
     }).join("")
-    overlay.innerHTML = `<form class="native-dialog${options.wide ? " wide" : ""}">
+    overlay.innerHTML = `<form class="native-dialog${options.wide ? " wide" : ""}" role="dialog" aria-modal="true" tabindex="-1">
       <header><div><h2>${escapeHtml(options.title)}</h2>${options.detail ? `<p>${escapeHtml(options.detail)}</p>` : ""}</div><button type="button" data-dialog-cancel aria-label="Close">×</button></header>
       <div class="native-dialog-body">${fields}</div>
       <footer><button class="native-button" type="button" data-dialog-cancel>Cancel</button><button class="native-button ${options.danger ? "danger" : "primary"}" type="submit">${escapeHtml(options.submitLabel || "Save")}</button></footer>
     </form>`
     document.body.appendChild(overlay)
     const form = overlay.querySelector<HTMLFormElement>("form")!
+    let closed = false
     const close = (result: Record<string, string> | null) => {
+      if (closed) return
+      closed = true
       overlay.remove()
+      if (previousFocus?.isConnected) previousFocus.focus()
       resolve(result)
     }
     overlay.querySelectorAll<HTMLElement>("[data-dialog-cancel]").forEach((element) => element.addEventListener("click", () => close(null)))
@@ -227,14 +244,41 @@ export async function openFormDialog(options: DialogOptions): Promise<Record<str
       if (event.target === overlay) close(null)
     })
     overlay.addEventListener("keydown", (event) => {
-      if (event.key === "Escape") close(null)
+      event.stopPropagation()
+      if (event.key === "Escape") {
+        event.preventDefault()
+        close(null)
+        return
+      }
+      if (event.key !== "Tab") return
+      const focusable = Array.from(overlay.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'))
+        .filter((element) => !element.hidden && element.getAttribute("aria-hidden") !== "true")
+      if (!focusable.length) {
+        event.preventDefault()
+        form.focus()
+        return
+      }
+      const first = focusable[0]!
+      const last = focusable.at(-1)!
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault()
+        first.focus()
+      }
     })
     form.addEventListener("submit", (event) => {
       event.preventDefault()
       const data = new FormData(form)
       close(Object.fromEntries([...data.entries()].map(([key, value]) => [key, String(value)])))
     })
-    window.requestAnimationFrame(() => form.querySelector<HTMLElement>("input,textarea")?.focus())
+    window.requestAnimationFrame(() => {
+      const firstField = form.querySelector<HTMLElement>("input,textarea,select")
+      const submit = form.querySelector<HTMLButtonElement>('button[type="submit"]')
+      const focusTarget = firstField || submit || form
+      focusTarget.focus()
+    })
   })
 }
 
