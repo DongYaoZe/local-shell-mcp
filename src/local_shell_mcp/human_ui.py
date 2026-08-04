@@ -42,7 +42,9 @@ from .jobs import list_jobs
 from .oauth import ALL_OAUTH_SCOPES
 from .remote import remote_manager
 from .settings import get_settings
+from .shell_environment import subprocess_env
 from .shell_ops import kill_shell, list_shells, read_shell, resize_shell, send_shell, start_shell
+from .tmux_helper import resolve_tmux, tmux_socket_name
 from .todo_ops import TodoConflictError, todo_read, todo_write
 from .tui_runtime import materialize_embedded_tui
 from .ui_security import UI_LOCAL_TOKEN_ENV, get_or_create_ui_local_token
@@ -56,6 +58,7 @@ UI_MAX_COLUMNS = 1_600
 UI_MIN_ROWS = 8
 UI_MAX_ROWS = 500
 UI_TUI_EXIT_CODE = 4410
+UI_SHELL_EXIT_CODE = 4411
 _ACTIVE_UI_TERMINALS: set[int] = set()
 _LOGGER = logging.getLogger(__name__)
 
@@ -1558,6 +1561,120 @@ def _spawn_tui_process(
     return _UnixPtyProcess(command, env, cols, rows)
 
 
+class _PollingShellProcess:
+    """Adapt the shell read/send API to the byte-stream interface used by WebSockets.
+
+    Remote workers and native/ConPTY persistent shells cannot be attached as a local
+    PTY client. For those backends, send screen snapshots only when the captured pane
+    changes and forward input as raw shell input. The browser receives an ANSI clear
+    before each snapshot, which keeps full-screen programs usable without duplicating
+    captured history.
+    """
+
+    def __init__(self, machine: str, session_id: str, cols: int, rows: int):
+        self.machine = machine
+        self.session_id = session_id
+        self.cols = cols
+        self.rows = rows
+        self._closed = False
+        self._exit_code: int | None = None
+        self._last_output: str | None = None
+        self._consecutive_errors = 0
+
+    async def _dispatch(self, local_call: Callable[[], Any | Awaitable[Any]], tool: str, args: dict[str, Any]) -> Any:
+        return await _machine_dispatch(self.machine, local_call, tool, args)
+
+    async def read(self) -> bytes:
+        while not self._closed:
+            try:
+                result = await self._dispatch(
+                    lambda: read_shell(self.session_id, max(300, self.rows * 8)),
+                    "shell_read",
+                    {"session_id": self.session_id, "lines": max(300, self.rows * 8)},
+                )
+                self._consecutive_errors = 0
+            except Exception as exc:
+                self._consecutive_errors += 1
+                if self._consecutive_errors >= 3:
+                    self._exit_code = 1
+                    self._closed = True
+                    return f"\r\nPersistent terminal stream stopped: {type(exc).__name__}: {exc}\r\n".encode()
+                await asyncio.sleep(0.25)
+                continue
+
+            output = str((result or {}).get("output") or "") if isinstance(result, dict) else str(result or "")
+            if output != self._last_output:
+                self._last_output = output
+                return ("\x1b[?25l\x1b[H\x1b[2J" + output + "\x1b[?25h").encode(
+                    "utf-8", errors="replace"
+                )
+            await asyncio.sleep(0.12)
+        return b""
+
+    async def write(self, data: bytes) -> None:
+        if self._closed or not data:
+            return
+        text = data.decode("utf-8", errors="replace")
+        await self._dispatch(
+            lambda: send_shell(self.session_id, text, False),
+            "shell_send",
+            {"session_id": self.session_id, "input_text": text, "enter": False},
+        )
+
+    async def resize(self, cols: int, rows: int) -> None:
+        self.cols = cols
+        self.rows = rows
+        await self._dispatch(
+            lambda: resize_shell(self.session_id, cols, rows),
+            "shell_resize",
+            {"session_id": self.session_id, "cols": cols, "rows": rows},
+        )
+
+    async def exit_code(self) -> int | None:
+        return self._exit_code if self._closed else None
+
+    async def close(self) -> None:
+        self._closed = True
+
+
+async def _spawn_shell_process(machine: str, session_id: str, cols: int, rows: int):  # noqa: ANN201
+    sessions = await _machine_dispatch(machine, list_shells, "shell_list", {})
+    rows_payload = list((sessions or {}).get("sessions") or []) if isinstance(sessions, dict) else []
+    session = next(
+        (row for row in rows_payload if str(row.get("session_id") or "") == session_id),
+        None,
+    )
+    if session is None:
+        raise ValueError(f"Persistent terminal session not found: {session_id}")
+
+    backend = str(session.get("backend") or "")
+    if machine == "local" and os.name != "nt" and backend.startswith("tmux-"):
+        selection = resolve_tmux()
+        if selection.path:
+            env = subprocess_env()
+            env.update(
+                {
+                    "TERM": "xterm-256color",
+                    "COLORTERM": "truecolor",
+                    "TERM_PROGRAM": "local-shell-mcp-webui",
+                }
+            )
+            return _UnixPtyProcess(
+                [
+                    selection.path,
+                    "-L",
+                    tmux_socket_name(),
+                    "attach-session",
+                    "-t",
+                    f"={session_id}",
+                ],
+                env,
+                cols,
+                rows,
+            )
+    return _PollingShellProcess(machine, session_id, cols, rows)
+
+
 def _validate_tui_api_base(value: str) -> str:
     normalized = str(value).rstrip("/")
     parsed = urlsplit(normalized)
@@ -1755,6 +1872,146 @@ async def ui_terminal_websocket(websocket: WebSocket) -> None:
             await websocket.close()
 
 
+async def ui_shell_websocket(websocket: WebSocket) -> None:
+    if not _authorize_websocket(websocket):
+        await websocket.close(code=4401, reason="OAuth authentication required")
+        return
+
+    settings = get_settings()
+    marker = id(websocket)
+    if len(_ACTIVE_UI_TERMINALS) >= max(1, settings.ui_terminal_max_sessions):
+        await websocket.close(code=4429, reason="Too many active WebUI terminal sessions")
+        return
+    _ACTIVE_UI_TERMINALS.add(marker)
+
+    offered = [item.strip() for item in websocket.headers.get("sec-websocket-protocol", "").split(",")]
+    subprotocol = UI_SUBPROTOCOL if UI_SUBPROTOCOL in offered else None
+    try:
+        await websocket.accept(subprotocol=subprotocol)
+    except Exception:
+        _ACTIVE_UI_TERMINALS.discard(marker)
+        raise
+
+    machine = str(websocket.query_params.get("machine") or "local")
+    session_id = str(websocket.query_params.get("session_id") or "")
+    try:
+        if not session_id:
+            raise ValueError("session_id is required")
+        cols = _bounded_int(
+            websocket.query_params.get("cols"),
+            default=120,
+            minimum=UI_MIN_COLUMNS,
+            maximum=UI_MAX_COLUMNS,
+            label="cols",
+        )
+        rows = _bounded_int(
+            websocket.query_params.get("rows"),
+            default=36,
+            minimum=UI_MIN_ROWS,
+            maximum=UI_MAX_ROWS,
+            label="rows",
+        )
+        process = await _spawn_shell_process(machine, session_id, cols, rows)
+    except Exception as exc:
+        _ACTIVE_UI_TERMINALS.discard(marker)
+        _LOGGER.exception("Unable to attach the Native WebUI terminal")
+        detail = f"{type(exc).__name__}: {exc}"
+        await websocket.send_bytes(f"\r\nUnable to attach terminal: {detail}\r\n".encode())
+        await websocket.close(code=1011, reason=detail[:120])
+        return
+
+    loop = asyncio.get_running_loop()
+    last_activity = loop.time()
+
+    async def sender() -> None:
+        nonlocal last_activity
+        while True:
+            data = await process.read()
+            if not data:
+                if await process.exit_code() is not None:
+                    await websocket.close(
+                        code=UI_SHELL_EXIT_CODE,
+                        reason="Persistent terminal attachment exited",
+                    )
+                return
+            last_activity = loop.time()
+            await websocket.send_bytes(data)
+
+    async def receiver() -> None:
+        nonlocal cols, rows, last_activity
+        idle_timeout = max(0, settings.ui_terminal_idle_timeout_s)
+        while True:
+            if idle_timeout:
+                remaining = _idle_timeout_remaining(last_activity, idle_timeout, loop.time())
+                if remaining <= 0:
+                    await websocket.close(code=4408, reason="WebUI terminal session idle timeout")
+                    return
+                try:
+                    message = await asyncio.wait_for(websocket.receive(), timeout=remaining)
+                except TimeoutError:
+                    if _idle_timeout_remaining(last_activity, idle_timeout, loop.time()) > 0:
+                        continue
+                    await websocket.close(code=4408, reason="WebUI terminal session idle timeout")
+                    return
+            else:
+                message = await websocket.receive()
+            last_activity = loop.time()
+            if message["type"] == "websocket.disconnect":
+                return
+            if message.get("bytes") is not None:
+                await process.write(message["bytes"])
+                continue
+            text = message.get("text")
+            if not text:
+                continue
+            try:
+                control = json.loads(text)
+            except json.JSONDecodeError:
+                await process.write(text.encode())
+                continue
+            if not isinstance(control, dict):
+                continue
+            if control.get("type") == "resize":
+                try:
+                    cols = _bounded_int(
+                        control.get("cols"),
+                        default=cols,
+                        minimum=UI_MIN_COLUMNS,
+                        maximum=UI_MAX_COLUMNS,
+                        label="cols",
+                    )
+                    rows = _bounded_int(
+                        control.get("rows"),
+                        default=rows,
+                        minimum=UI_MIN_ROWS,
+                        maximum=UI_MAX_ROWS,
+                        label="rows",
+                    )
+                except ValueError as exc:
+                    await websocket.close(code=4400, reason=str(exc)[:120])
+                    return
+                resized = process.resize(cols, rows)
+                if asyncio.iscoroutine(resized):
+                    await resized
+
+    tasks = [asyncio.create_task(sender()), asyncio.create_task(receiver())]
+    try:
+        done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        for task in pending:
+            task.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)
+        for task in done:
+            with contextlib.suppress(WebSocketDisconnect, RuntimeError):
+                task.result()
+    except WebSocketDisconnect:
+        pass
+    finally:
+        _ACTIVE_UI_TERMINALS.discard(marker)
+        await process.close()
+        with contextlib.suppress(Exception):
+            await websocket.close()
+
+
 async def ui_root_redirect(request: Request) -> RedirectResponse:  # noqa: ARG001
     ui_path = get_settings().ui_path.strip("/")
     return RedirectResponse(f"./{ui_path}/", status_code=307)
@@ -1773,6 +2030,7 @@ def ui_routes() -> list[Any]:
         Route(ui_path + "/wallpaper", ui_wallpaper, methods=["GET"]),
         Route(ui_path + "/assets/{path:path}", ui_asset, methods=["GET"]),
         WebSocketRoute(ui_path + "/ws", ui_terminal_websocket),
+        WebSocketRoute(ui_path + "/ws/shell", ui_shell_websocket),
         Route(UI_API_PREFIX + "/bootstrap", api_bootstrap, methods=["GET"]),
         Route(UI_API_PREFIX + "/dashboard", api_dashboard, methods=["GET"]),
         Route(UI_API_PREFIX + "/machines", api_machines, methods=["GET"]),
