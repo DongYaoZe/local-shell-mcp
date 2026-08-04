@@ -4,13 +4,19 @@ import { hashForView, interfaceModeForView, oauthReturnView, viewFromHash } from
 describe("WebUI mode routing", () => {
   test("parses native WebUI and OpenTUI routes", () => {
     expect(viewFromHash("#/overview")).toBe("overview")
-    expect(viewFromHash("#machines")).toBe("machines")
+    expect(viewFromHash("#/files")).toBe("files")
+    expect(viewFromHash("#/terminals")).toBe("terminals")
+    expect(viewFromHash("#/remotes")).toBe("remotes")
+    expect(viewFromHash("#/audit")).toBe("audit")
     expect(viewFromHash("#/console/")).toBe("console")
   })
 
   test("supports explicit interface aliases", () => {
     expect(viewFromHash("#/web")).toBe("overview")
     expect(viewFromHash("#/dashboard")).toBe("overview")
+    expect(viewFromHash("#/machines")).toBe("remotes")
+    expect(viewFromHash("#/workloads")).toBe("terminals")
+    expect(viewFromHash("#/activity")).toBe("audit")
     expect(viewFromHash("#/tui")).toBe("console")
     expect(viewFromHash("#/opentui")).toBe("console")
   })
@@ -23,7 +29,7 @@ describe("WebUI mode routing", () => {
 
   test("maps views to the corresponding interface", () => {
     expect(interfaceModeForView("overview")).toBe("web")
-    expect(interfaceModeForView("activity")).toBe("web")
+    expect(interfaceModeForView("audit")).toBe("web")
     expect(interfaceModeForView("console")).toBe("tui")
   })
 

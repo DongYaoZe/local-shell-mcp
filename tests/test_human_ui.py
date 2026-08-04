@@ -69,6 +69,9 @@ def test_webui_visual_regressions_are_packaged():
 
     assert "<strong>TUI</strong><small>Terminal interface</small>" in html
     assert "<strong>OpenTUI</strong><small>Terminal interface</small>" not in html
+    for view in ("files", "terminals", "remotes", "audit", "todos"):
+        assert f'data-view="{view}"' in html
+    assert "Open TUI" in html
     assert "scrollbar-width:none!important" in css
     assert "-ms-overflow-style:none" in css
     scrollbar_rule = css.split("#terminal .xterm-viewport::-webkit-scrollbar{", 1)[1].split("}", 1)[0]
@@ -76,6 +79,14 @@ def test_webui_visual_regressions_are_packaged():
     dark_mode = "@media (prefers-color-scheme:dark)"
     assert dark_mode in css
     assert css.rindex(dark_mode) > css.rindex(".todo-row{display:grid")
+    assert ".files-layout{" in css
+    assert ".file-parent-panel" in css
+    assert ".terminal-touchbar{" in css
+    assert ".audit-layout{" in css
+    assert "Call result" in script
+    assert "Call input" in script
+    assert "/ws/shell" in script
+    assert "Persistent terminal" in script
     assert "row-menu" not in script
 
 
