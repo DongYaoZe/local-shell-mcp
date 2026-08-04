@@ -212,14 +212,27 @@ $Server = __SERVER__
 $ManifestUrl = "$Server__PUBLIC_MANIFEST_URL__"
 if (-not $Workdir) { $Workdir = (Get-Location).Path }
 
-$PythonCommand = Get-Command python.exe -ErrorAction SilentlyContinue
+$PythonExe = $null
 $PythonPrefix = @()
-if ($null -eq $PythonCommand) {
-  $PythonCommand = Get-Command py.exe -ErrorAction SilentlyContinue
-  $PythonPrefix = @("-3")
+$PythonCandidates = @(
+  [pscustomobject]@{ Name = "python.exe"; Prefix = @() }
+  [pscustomobject]@{ Name = "py.exe"; Prefix = @("-3") }
+)
+foreach ($Candidate in $PythonCandidates) {
+  $PythonCommand = Get-Command $Candidate.Name -ErrorAction SilentlyContinue
+  if ($null -eq $PythonCommand) { continue }
+  $ProbeArgs = @($Candidate.Prefix) + @(
+    "-c",
+    "import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)"
+  )
+  & $PythonCommand.Source @ProbeArgs
+  if ($LASTEXITCODE -eq 0) {
+    $PythonExe = $PythonCommand.Source
+    $PythonPrefix = @($Candidate.Prefix)
+    break
+  }
 }
-if ($null -eq $PythonCommand) { throw "Python 3 is required" }
-$PythonExe = $PythonCommand.Source
+if ($null -eq $PythonExe) { throw "Python 3.11 or newer is required" }
 
 $TempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("local-shell-mcp-worker-" + [guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path $TempDir | Out-Null
@@ -344,7 +357,7 @@ try {
   Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $TempDir
 }
 '''
-    script = script.replace("__SERVER__", repr(server))
+    script = script.replace("__SERVER__", remote._powershell_quote(server))  # noqa: SLF001
     script = script.replace("__PUBLIC_MANIFEST_URL__", REMOTE_WORKER_PUBLIC_MANIFEST_URL)
     return PlainTextResponse(script, media_type="text/plain")
 

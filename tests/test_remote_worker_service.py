@@ -177,14 +177,24 @@ def test_windows_task_status_parses_state_and_handles_missing_task(monkeypatch):
             ["powershell"], 0, stdout="unexpected output", stderr=""
         ),
     )
-    assert service._windows_task_status() == {  # noqa: SLF001
-        "state": 0,
-        "state_name": "unexpected output",
-    }
+    with pytest.raises(RuntimeError, match="invalid status data"):
+        service._windows_task_status()  # noqa: SLF001
+
+    monkeypatch.setattr(
+        service,
+        "_run_powershell",
+        lambda script, check=False: subprocess.CompletedProcess(
+            ["powershell"], 1, stdout="", stderr="access denied"
+        ),
+    )
+    with pytest.raises(RuntimeError, match="access denied"):
+        service._windows_task_status()  # noqa: SLF001
 
 
 def test_windows_service_refresh_and_process_fallback(tmp_path, monkeypatch):
     _configure(tmp_path, monkeypatch)
+    custom_launcher = tmp_path / "custom-bin" / "local-shell-mcp.cmd"
+    service._write_windows_task_launcher(custom_launcher)  # noqa: SLF001
     monkeypatch.setattr(service, "service_kind", lambda: "scheduled-task")
     monkeypatch.setattr(
         service,
@@ -194,6 +204,8 @@ def test_windows_service_refresh_and_process_fallback(tmp_path, monkeypatch):
     refreshed = service.refresh_installed_service_definition()
     assert refreshed == service._windows_task_launcher_path()  # noqa: SLF001
     assert refreshed.exists()
+    assert f'call "{custom_launcher.resolve()}" worker run' in refreshed.read_text(encoding="utf-8")
+    assert service._installed_windows_launcher_path() == custom_launcher.resolve()  # noqa: SLF001
 
     monkeypatch.setattr(service, "_windows_task_status", lambda: None)
     monkeypatch.setattr(service, "_read_pid", lambda: 42)

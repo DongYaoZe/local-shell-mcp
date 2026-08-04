@@ -367,6 +367,18 @@ exit /b %ERRORLEVEL%
     return path
 
 
+def _installed_windows_launcher_path() -> Path | None:
+    try:
+        content = _windows_task_launcher_path().read_text(encoding="utf-8")
+    except OSError:
+        return None
+    match = re.search(r'^call "([^"\r\n]+)" worker run >> ', content, re.MULTILINE)
+    if not match:
+        return None
+    path = Path(match.group(1).replace("%%", "%"))
+    return path if path.is_absolute() else None
+
+
 def _register_windows_task(service_file: Path) -> None:
     action_arguments = f'/d /c ""{service_file.resolve()}""'
     script = "\n".join(
@@ -403,11 +415,14 @@ def _register_windows_task(service_file: Path) -> None:
 def _windows_task_status() -> dict[str, Any] | None:
     script = "\n".join(
         [
+            "$ErrorActionPreference = 'Stop'",
             (
-                f"$task = Get-ScheduledTask -TaskName {_powershell_literal(_WINDOWS_TASK_NAME)} "
-                "-ErrorAction SilentlyContinue"
+                "$tasks = @(Get-ScheduledTask -TaskPath '\\' -ErrorAction Stop | "
+                f"Where-Object {{ $_.TaskName -eq {_powershell_literal(_WINDOWS_TASK_NAME)} }})"
             ),
-            "if ($null -eq $task) { exit 3 }",
+            "if ($tasks.Count -eq 0) { exit 3 }",
+            "if ($tasks.Count -ne 1) { throw 'multiple matching scheduled tasks found' }",
+            "$task = $tasks[0]",
             (
                 "[Console]::Out.Write(([pscustomobject]@{state=[int]$task.State; "
                 "state_name=$task.State.ToString()} | ConvertTo-Json -Compress))"
@@ -415,16 +430,19 @@ def _windows_task_status() -> dict[str, Any] | None:
         ]
     )
     result = _run_powershell(script, check=False)
-    if result.returncode:
+    if result.returncode == 3:
         return None
+    if result.returncode:
+        detail = result.stderr.strip() or result.stdout.strip() or f"exit code {result.returncode}"
+        raise RuntimeError(f"failed to query Windows remote worker task: {detail}")
     try:
         payload = json.loads(result.stdout)
         return {
             "state": int(payload["state"]),
             "state_name": str(payload["state_name"]),
         }
-    except (json.JSONDecodeError, KeyError, TypeError, ValueError):
-        return {"state": 0, "state_name": result.stdout.strip() or result.stderr.strip()}
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+        raise RuntimeError("Windows remote worker task returned invalid status data") from exc
 
 
 def _start_windows_task() -> None:
@@ -455,7 +473,8 @@ def refresh_installed_service_definition() -> Path | None:
         launcher = _installed_launchd_launcher_path() or worker_launcher_path()
         return _write_launchd_plist(launcher)
     if kind == "scheduled-task" and _windows_task_status() is not None:
-        return _write_windows_task_launcher()
+        launcher = _installed_windows_launcher_path() or worker_launcher_path()
+        return _write_windows_task_launcher(launcher)
     return None
 
 
