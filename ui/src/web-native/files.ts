@@ -9,8 +9,6 @@ import {
   formatBytes,
   formatDate,
   highlightedHtml,
-  iconButton,
-  isTypingTarget,
   joinPath,
   openFormDialog,
   queryString,
@@ -55,7 +53,7 @@ export class FilesController extends BaseController {
     this.listen(root, "click", (event) => this.onClick(event))
     this.listen(root, "dblclick", (event) => this.onDoubleClick(event))
     this.listen(root, "change", (event) => this.onChange(event))
-    this.listen(document, "keydown", (event) => this.onKeyDown(event as KeyboardEvent))
+    this.listen(root, "keydown", (event) => this.onListKeyDown(event as KeyboardEvent))
     void this.refresh()
   }
 
@@ -75,7 +73,7 @@ export class FilesController extends BaseController {
     this.root.innerHTML = `<section class="native-page files-page">
       <div class="native-toolbar files-toolbar">
         <div class="toolbar-group compact-only"><label>Machine<select data-role="machine"></select></label></div>
-        <div class="path-bar"><button class="native-icon-button" type="button" data-action="parent" title="Parent directory">↑</button><div class="breadcrumbs" data-role="breadcrumbs"></div><input data-role="path" aria-label="Path" value="${escapeHtml(this.path)}"/></div>
+        <div class="path-bar"><button class="native-button" type="button" data-action="parent" title="Parent directory"><span aria-hidden="true">↑</span>Up</button><div class="breadcrumbs" data-role="breadcrumbs"></div><input data-role="path" aria-label="Path" value="${escapeHtml(this.path)}"/></div>
         <div class="toolbar-actions" data-role="actions"></div>
       </div>
       <div class="files-layout">
@@ -84,7 +82,6 @@ export class FilesController extends BaseController {
         <section class="native-panel file-list-panel"><header><div><h3>Directory</h3><p data-role="directory-summary">Loading…</p></div><div class="panel-tools"><label class="native-toggle"><input data-role="hidden" type="checkbox"/>Hidden</label></div></header><div class="file-table-wrap" data-role="file-list"><div class="native-loading">Loading directory…</div></div></section>
         <section class="native-panel file-preview-panel"><header><div><h3>Preview</h3><p data-role="preview-summary">Choose an entry</p></div></header><div class="file-preview" data-role="preview"><div class="native-empty">No selection</div></div></section>
       </div>
-      <footer class="shortcut-strip"><span><kbd>↑/↓</kbd> select</span><span><kbd>Enter</kbd> open/edit</span><span><kbd>Backspace</kbd> parent</span><span><kbd>F2</kbd> rename</span><span><kbd>Del</kbd> delete</span><span><kbd>Ctrl C/X/V</kbd> copy/move/paste</span></footer>
     </section>`
     this.renderMachines()
     this.renderBreadcrumbs()
@@ -114,12 +111,14 @@ export class FilesController extends BaseController {
     const current = this.current()
     const ready = this.payload !== null
     const target = this.root.querySelector<HTMLElement>("[data-role=actions]")
+    const parent = this.root.querySelector<HTMLButtonElement>("[data-action=parent]")
+    if (parent) parent.disabled = !this.payload?.parent || this.payload.parent === this.path
     if (!target) return
     target.innerHTML = [
-      iconButton("Refresh", "refresh", "↻", this.busy),
+      button("Refresh", "refresh", { icon: "↻", disabled: this.busy }),
       button("New file", "new-file", { icon: "+", disabled: !ready }),
       button("New folder", "new-dir", { icon: "▰", disabled: !ready }),
-      button("Edit", "edit", { disabled: !current || current.type === "dir" }),
+      button(current?.type === "dir" ? "Open folder" : "Edit file", "open", { disabled: !current }),
       button("Rename", "rename", { disabled: !current }),
       button("Copy", "copy", { disabled: !current }),
       button("Move", "cut", { disabled: !current }),
@@ -235,7 +234,10 @@ export class FilesController extends BaseController {
       this.renderPreview()
       return
     }
-    list.innerHTML = `<table class="native-table file-table"><thead><tr><th>Name</th><th>Size</th><th>Modified</th></tr></thead><tbody>${entries.map((entry) => `<tr class="${entry.path === this.selectedPath ? "selected" : ""}" data-entry="${escapeHtml(entry.path)}"><td><span class="file-kind ${entry.type === "dir" ? "directory" : ""}">${fileIcon(entry)}</span><span class="file-name ${entry.hidden ? "hidden" : ""}">${escapeHtml(entry.name)}</span></td><td>${entry.type === "dir" ? "dir" : formatBytes(entry.size)}</td><td>${formatDate(entry.modified)}</td></tr>`).join("")}</tbody></table>`
+    list.innerHTML = `<table class="native-table file-table" role="grid" aria-label="Directory entries"><thead><tr><th>Name</th><th>Size</th><th>Modified</th></tr></thead><tbody>${entries.map((entry) => {
+      const selected = entry.path === this.selectedPath
+      return `<tr class="${selected ? "selected" : ""}" data-entry="${escapeHtml(entry.path)}" tabindex="${selected ? "0" : "-1"}" aria-selected="${selected}" aria-label="${escapeHtml(`${entry.type === "dir" ? "Folder" : "File"} ${entry.name}`)}"><td><span class="file-kind ${entry.type === "dir" ? "directory" : ""}">${fileIcon(entry)}</span><span class="file-name ${entry.hidden ? "hidden" : ""}">${escapeHtml(entry.name)}</span></td><td>${entry.type === "dir" ? "dir" : formatBytes(entry.size)}</td><td>${formatDate(entry.modified)}</td></tr>`
+    }).join("")}</tbody></table>`
     this.renderActions()
   }
 
@@ -294,11 +296,21 @@ export class FilesController extends BaseController {
     target.innerHTML = `<pre class="code-preview ${preview.kind === "binary" ? "binary" : ""}"><code>${preview.kind === "binary" ? escapeHtml(content || "Empty file") : highlightedHtml(content || "Empty file", entry.name)}</code></pre>${preview.truncated ? '<div class="preview-warning">Preview truncated</div>' : ""}`
   }
 
-  private select(path: string): void {
-    if (this.selectedPath === path) return
+  private focusEntry(path: string): void {
+    const row = Array.from(this.root.querySelectorAll<HTMLElement>("[data-entry]"))
+      .find((element) => element.dataset.entry === path)
+    row?.focus()
+  }
+
+  private select(path: string, focus = false): void {
+    if (this.selectedPath === path) {
+      if (focus) this.focusEntry(path)
+      return
+    }
     this.selectedPath = path
     this.preview = null
     this.renderDirectory()
+    if (focus) this.focusEntry(path)
     void this.loadPreview()
   }
 
@@ -431,7 +443,7 @@ export class FilesController extends BaseController {
     }
     const entryPath = target.closest<HTMLElement>("[data-entry]")?.dataset.entry
     if (entryPath) {
-      this.select(entryPath)
+      this.select(entryPath, true)
       return
     }
     const previewPath = target.closest<HTMLElement>("[data-preview-entry]")?.dataset.previewEntry
@@ -454,7 +466,7 @@ export class FilesController extends BaseController {
     else if (action === "parent") this.parent()
     else if (action === "new-file") void this.create("file")
     else if (action === "new-dir") void this.create("dir")
-    else if (action === "edit") void this.editCurrent()
+    else if (action === "open") this.activate(this.current())
     else if (action === "rename") void this.renameCurrent()
     else if (action === "copy") {
       const current = this.current()
@@ -491,42 +503,32 @@ export class FilesController extends BaseController {
     }
   }
 
-  private onKeyDown(event: KeyboardEvent): void {
-    if (!this.root.isConnected || isTypingTarget(event.target)) return
+  private onListKeyDown(event: KeyboardEvent): void {
+    const row = (event.target as HTMLElement).closest<HTMLElement>("[data-entry]")
+    const path = row?.dataset.entry
+    if (!path) return
     const entries = this.entries()
-    const index = Math.max(0, entries.findIndex((entry) => entry.path === this.current()?.path))
-    if (event.key === "ArrowDown" || event.key.toLowerCase() === "j") {
+    const index = entries.findIndex((entry) => entry.path === path)
+    if (index < 0) return
+    let nextIndex: number | null = null
+    if (event.key === "ArrowDown") nextIndex = Math.min(entries.length - 1, index + 1)
+    else if (event.key === "ArrowUp") nextIndex = Math.max(0, index - 1)
+    else if (event.key === "Home") nextIndex = 0
+    else if (event.key === "End") nextIndex = entries.length - 1
+    else if (event.key === "Enter") {
       event.preventDefault()
-      this.select(entries[Math.min(entries.length - 1, index + 1)]?.path || "")
-    } else if (event.key === "ArrowUp" || event.key.toLowerCase() === "k") {
+      this.activate(entries[index])
+      return
+    } else if (event.key === " ") {
       event.preventDefault()
-      this.select(entries[Math.max(0, index - 1)]?.path || "")
-    } else if (event.key === "Enter") {
-      event.preventDefault()
-      this.activate(this.current())
-    } else if (event.key === "Backspace") {
-      event.preventDefault()
-      this.parent()
-    } else if (event.key === "F2") {
-      event.preventDefault()
-      void this.renameCurrent()
-    } else if (event.key === "Delete") {
-      event.preventDefault()
-      void this.deleteCurrent()
-    } else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "c") {
-      event.preventDefault()
-      const current = this.current()
-      if (current) this.clipboard = { mode: "copy", machine: this.machine, path: current.path }
-      this.renderActions()
-    } else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "x") {
-      event.preventDefault()
-      const current = this.current()
-      if (current) this.clipboard = { mode: "move", machine: this.machine, path: current.path }
-      this.renderActions()
-    } else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "v") {
-      event.preventDefault()
-      void this.paste()
+      this.select(path, true)
+      return
     }
+    if (nextIndex === null) return
+    event.preventDefault()
+    const next = entries[nextIndex]
+    if (next) this.select(next.path, true)
   }
+
 }
 

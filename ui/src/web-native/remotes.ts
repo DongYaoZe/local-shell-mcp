@@ -7,8 +7,6 @@ import {
   escapeHtml,
   formatAge,
   highlightedHtml,
-  iconButton,
-  isTypingTarget,
   openFormDialog,
   statusClass,
   type NativePageContext,
@@ -22,9 +20,9 @@ export class RemotesController extends BaseController {
 
   mount(root: HTMLElement): void {
     this.root = root
-    this.root.innerHTML = `<section class="native-page remotes-page"><div class="remote-summary" data-role="remote-summary"></div><div class="native-toolbar"><div><strong>Remote workers</strong><span class="toolbar-detail">Persistent worker identities and one-time invitations</span></div><div class="toolbar-actions">${button("New invite", "invite", { icon: "+", primary: true })}${button("Rename", "rename", { disabled: true })}${button("Revoke", "revoke", { danger: true, disabled: true })}${iconButton("Refresh", "refresh", "↻")}</div></div><div class="remotes-layout"><section class="native-panel remote-list-panel"><header><div><h3>Remote nodes</h3><p data-role="remote-count">Loading…</p></div></header><div data-role="remote-list"><div class="native-loading">Loading remote nodes…</div></div></section><section class="native-panel remote-detail-panel"><header><div><h3>Node details</h3><p>Version, workdir, capabilities, and system information</p></div></header><div class="remote-detail" data-role="remote-detail"><div class="native-empty">No node selected</div></div></section></div><footer class="shortcut-strip"><span><kbd>↑/↓</kbd> select</span><span><kbd>n</kbd> invite</span><span><kbd>e</kbd> rename</span><span><kbd>Del</kbd> revoke</span><span><kbd>r</kbd> refresh</span></footer></section>`
+    this.root.innerHTML = `<section class="native-page remotes-page"><div class="remote-summary" data-role="remote-summary"></div><div class="native-toolbar"><div><strong>Remote workers</strong><span class="toolbar-detail">Persistent worker identities and one-time invitations</span></div><div class="toolbar-actions">${button("New invite", "invite", { icon: "+", primary: true })}${button("Rename", "rename", { disabled: true })}${button("Revoke", "revoke", { danger: true, disabled: true })}${button("Refresh", "refresh", { icon: "↻" })}</div></div><div class="remotes-layout"><section class="native-panel remote-list-panel"><header><div><h3>Remote nodes</h3><p data-role="remote-count">Loading…</p></div></header><div data-role="remote-list"><div class="native-loading">Loading remote nodes…</div></div></section><section class="native-panel remote-detail-panel"><header><div><h3>Node details</h3><p>Version, workdir, capabilities, and system information</p></div></header><div class="remote-detail" data-role="remote-detail"><div class="native-empty">No node selected</div></div></section></div></section>`
     this.listen(root, "click", (event) => this.onClick(event))
-    this.listen(document, "keydown", (event) => this.onKeyDown(event as KeyboardEvent))
+    this.listen(root, "keydown", (event) => this.onListKeyDown(event as KeyboardEvent))
     this.every(() => void this.refresh(), 4_000)
     void this.refresh()
   }
@@ -53,6 +51,9 @@ export class RemotesController extends BaseController {
   }
 
   private render(): void {
+    const focusedName = document.activeElement instanceof HTMLElement && this.root.contains(document.activeElement)
+      ? document.activeElement.closest<HTMLElement>("[data-remote-name]")?.dataset.remoteName
+      : undefined
     const online = this.machines.filter((machine) => machine.status === "online").length
     const offline = this.machines.length - online
     const summary = this.root.querySelector<HTMLElement>("[data-role=remote-summary]")
@@ -63,7 +64,14 @@ export class RemotesController extends BaseController {
     if (count) count.textContent = this.enabled ? `${online} online · ${offline} offline` : "Remote worker support is disabled"
     const list = this.root.querySelector<HTMLElement>("[data-role=remote-list]")
     if (list) {
-      list.innerHTML = this.machines.length ? `<table class="native-table remote-table"><thead><tr><th>State</th><th>Name</th><th>Version</th><th>Workdir</th><th>Last seen</th></tr></thead><tbody>${this.machines.map((machine, index) => `<tr class="${index === this.selected ? "selected" : ""}" data-remote-index="${index}"><td><span class="status-chip ${statusClass(machine.status)}">${escapeHtml(machine.status)}</span></td><td><strong>${escapeHtml(machine.name)}</strong></td><td>${escapeHtml(String(machine.info?.version || machine.info?.lsm_version || "unknown"))}</td><td><code>${escapeHtml(machine.workdir || "—")}</code></td><td>${formatAge(machine.last_seen, machine.last_seen_age_s)}</td></tr>`).join("")}</tbody></table>` : `<div class="native-empty"><strong>${this.enabled ? "No remote nodes" : "Remotes disabled"}</strong><span>${this.enabled ? "Create a one-time invitation to attach a worker." : "Enable remote workers in server configuration."}</span></div>`
+      list.innerHTML = this.machines.length ? `<table class="native-table remote-table" role="grid" aria-label="Remote workers"><thead><tr><th>State</th><th>Name</th><th>Version</th><th>Workdir</th><th>Last seen</th></tr></thead><tbody>${this.machines.map((machine, index) => {
+        const selected = index === this.selected
+        return `<tr class="${selected ? "selected" : ""}" data-remote-index="${index}" data-remote-name="${escapeHtml(machine.name)}" tabindex="${selected ? "0" : "-1"}" aria-selected="${selected}" aria-label="Remote worker ${escapeHtml(machine.name)}, ${escapeHtml(machine.status)}"><td><span class="status-chip ${statusClass(machine.status)}">${escapeHtml(machine.status)}</span></td><td><strong>${escapeHtml(machine.name)}</strong></td><td>${escapeHtml(String(machine.info?.version || machine.info?.lsm_version || "unknown"))}</td><td><code>${escapeHtml(machine.workdir || "—")}</code></td><td>${formatAge(machine.last_seen, machine.last_seen_age_s)}</td></tr>`
+      }).join("")}</tbody></table>` : `<div class="native-empty"><strong>${this.enabled ? "No remote nodes" : "Remotes disabled"}</strong><span>${this.enabled ? "Create a one-time invitation to attach a worker." : "Enable remote workers in server configuration."}</span></div>`
+      if (focusedName) {
+        const focusedIndex = this.machines.findIndex((machine) => machine.name === focusedName)
+        if (focusedIndex >= 0) this.focusRemote(focusedIndex)
+      }
     }
     const current = this.current()
     const detail = this.root.querySelector<HTMLElement>("[data-role=remote-detail]")
@@ -148,16 +156,36 @@ export class RemotesController extends BaseController {
     else if (action === "refresh") void this.refresh()
   }
 
-  private onKeyDown(event: KeyboardEvent): void {
-    if (!this.root.isConnected || isTypingTarget(event.target)) return
-    if (event.key === "ArrowDown" || event.key.toLowerCase() === "j") {
-      event.preventDefault(); this.selected = Math.min(this.machines.length - 1, this.selected + 1); this.render()
-    } else if (event.key === "ArrowUp" || event.key.toLowerCase() === "k") {
-      event.preventDefault(); this.selected = Math.max(0, this.selected - 1); this.render()
-    } else if (event.key.toLowerCase() === "n") void this.invite()
-    else if (event.key.toLowerCase() === "e") void this.rename()
-    else if (event.key === "Delete") void this.revoke()
-    else if (event.key.toLowerCase() === "r") void this.refresh()
+  private focusRemote(index: number): void {
+    this.root.querySelector<HTMLElement>(`[data-remote-index="${index}"]`)?.focus()
+  }
+
+  private selectRemote(index: number, focus = false): void {
+    const next = Math.max(0, Math.min(this.machines.length - 1, index))
+    if (!this.machines[next]) return
+    this.selected = next
+    this.render()
+    if (focus) this.focusRemote(next)
+  }
+
+  private onListKeyDown(event: KeyboardEvent): void {
+    const row = (event.target as HTMLElement).closest<HTMLElement>("[data-remote-index]")
+    const rawIndex = row?.dataset.remoteIndex
+    if (rawIndex === undefined) return
+    const index = Number(rawIndex)
+    let nextIndex: number | null = null
+    if (event.key === "ArrowDown") nextIndex = Math.min(this.machines.length - 1, index + 1)
+    else if (event.key === "ArrowUp") nextIndex = Math.max(0, index - 1)
+    else if (event.key === "Home") nextIndex = 0
+    else if (event.key === "End") nextIndex = this.machines.length - 1
+    else if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault()
+      this.selectRemote(index, true)
+      return
+    }
+    if (nextIndex === null) return
+    event.preventDefault()
+    this.selectRemote(nextIndex, true)
   }
 }
 
