@@ -4,8 +4,6 @@ import {
   button,
   confirmDialog,
   escapeHtml,
-  iconButton,
-  isTypingTarget,
   openFormDialog,
   statusClass,
   type NativePageContext,
@@ -23,9 +21,8 @@ export class TodosController extends BaseController {
 
   mount(root: HTMLElement): void {
     this.root = root
-    this.root.innerHTML = `<section class="native-page todos-page"><div class="todo-summary" data-role="todo-summary"></div><div class="native-toolbar"><div><strong>Todos</strong><span class="toolbar-detail">Persistent operational work shared with MCP</span></div><div class="toolbar-actions">${button("Add", "add", { icon: "+", primary: true })}${button("Edit", "edit", { disabled: true })}${button("Status", "status", { disabled: true })}${button("Priority", "priority", { disabled: true })}${button("Delete", "delete", { danger: true, disabled: true })}${iconButton("Refresh", "refresh", "↻")}</div></div><section class="native-panel todo-list-panel"><header><div><h3 data-role="todo-title">All todos</h3><p data-role="todo-count">Loading…</p></div><div class="todo-filters"><button type="button" data-todo-filter="all">All</button><button type="button" data-todo-filter="open">Open</button><button type="button" data-todo-filter="completed">Done</button></div></header><div class="todo-list-native" data-role="todo-list"><div class="native-loading">Loading todos…</div></div></section><footer class="shortcut-strip"><span><kbd>Enter</kbd> status</span><span><kbd>p</kbd> priority</span><span><kbd>n</kbd> add</span><span><kbd>e</kbd> edit</span><span><kbd>Del</kbd> delete</span><span><kbd>f</kbd> filter</span></footer></section>`
+    this.root.innerHTML = `<section class="native-page todos-page"><div class="todo-summary" data-role="todo-summary"></div><div class="native-toolbar"><div><strong>Todos</strong><span class="toolbar-detail">Persistent operational work shared with MCP</span></div><div class="toolbar-actions">${button("Add", "add", { icon: "+", primary: true })}${button("Edit", "edit", { disabled: true })}${button("Next status", "status", { disabled: true })}${button("Next priority", "priority", { disabled: true })}${button("Delete", "delete", { danger: true, disabled: true })}${button("Refresh", "refresh", { icon: "↻" })}</div></div><section class="native-panel todo-list-panel"><header><div><h3 data-role="todo-title">All todos</h3><p data-role="todo-count">Loading…</p></div><div class="todo-filters"><button type="button" data-todo-filter="all">All</button><button type="button" data-todo-filter="open">Open</button><button type="button" data-todo-filter="completed">Done</button></div></header><div class="todo-list-native" data-role="todo-list"><div class="native-loading">Loading todos…</div></div></section></section>`
     this.listen(root, "click", (event) => this.onClick(event))
-    this.listen(document, "keydown", (event) => this.onKeyDown(event as KeyboardEvent))
     void this.refresh()
   }
 
@@ -176,23 +173,6 @@ export class TodosController extends BaseController {
     else if (action === "priority") this.cyclePriority()
     else if (action === "delete") void this.delete()
     else if (action === "refresh") void this.refresh()
-  }
-
-  private onKeyDown(event: KeyboardEvent): void {
-    if (!this.root.isConnected || isTypingTarget(event.target)) return
-    const visible = this.visible()
-    if (event.key === "ArrowDown" || event.key.toLowerCase() === "j") {
-      event.preventDefault(); this.selected = Math.min(visible.length - 1, this.selected + 1); this.render()
-    } else if (event.key === "ArrowUp" || event.key.toLowerCase() === "k") {
-      event.preventDefault(); this.selected = Math.max(0, this.selected - 1); this.render()
-    } else if (event.key === "Enter" || event.key === " ") {
-      event.preventDefault(); this.cycleStatus()
-    } else if (event.key.toLowerCase() === "p") this.cyclePriority()
-    else if (event.key.toLowerCase() === "n") void this.add()
-    else if (event.key.toLowerCase() === "e") void this.edit()
-    else if (event.key === "Delete") void this.delete()
-    else if (event.key.toLowerCase() === "f") this.setFilter(this.filter === "all" ? "open" : this.filter === "open" ? "completed" : "all")
-    else if (event.key.toLowerCase() === "r") void this.refresh()
   }
 }
 

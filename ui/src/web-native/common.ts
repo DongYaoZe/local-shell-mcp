@@ -114,14 +114,6 @@ export function button(label: string, action: string, options: { icon?: string; 
   return `<button class="${classes.join(" ")}" type="button" data-action="${escapeHtml(action)}"${options.disabled ? " disabled" : ""}${options.title ? ` title="${escapeHtml(options.title)}"` : ""}>${options.icon ? `<span aria-hidden="true">${options.icon}</span>` : ""}${escapeHtml(label)}</button>`
 }
 
-export function iconButton(label: string, action: string, icon: string, disabled = false): string {
-  return `<button class="native-icon-button" type="button" data-action="${escapeHtml(action)}" aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}"${disabled ? " disabled" : ""}>${icon}</button>`
-}
-
-export function isTypingTarget(target: EventTarget | null): boolean {
-  return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement || (target instanceof HTMLElement && target.isContentEditable)
-}
-
 export function highlightedHtml(text: string, filename = ""): string {
   const escaped = escapeHtml(text)
   const lower = filename.toLowerCase()

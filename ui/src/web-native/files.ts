@@ -9,8 +9,6 @@ import {
   formatBytes,
   formatDate,
   highlightedHtml,
-  iconButton,
-  isTypingTarget,
   joinPath,
   openFormDialog,
   queryString,
@@ -55,7 +53,6 @@ export class FilesController extends BaseController {
     this.listen(root, "click", (event) => this.onClick(event))
     this.listen(root, "dblclick", (event) => this.onDoubleClick(event))
     this.listen(root, "change", (event) => this.onChange(event))
-    this.listen(document, "keydown", (event) => this.onKeyDown(event as KeyboardEvent))
     void this.refresh()
   }
 
@@ -75,7 +72,7 @@ export class FilesController extends BaseController {
     this.root.innerHTML = `<section class="native-page files-page">
       <div class="native-toolbar files-toolbar">
         <div class="toolbar-group compact-only"><label>Machine<select data-role="machine"></select></label></div>
-        <div class="path-bar"><button class="native-icon-button" type="button" data-action="parent" title="Parent directory">↑</button><div class="breadcrumbs" data-role="breadcrumbs"></div><input data-role="path" aria-label="Path" value="${escapeHtml(this.path)}"/></div>
+        <div class="path-bar"><button class="native-button" type="button" data-action="parent" title="Parent directory"><span aria-hidden="true">↑</span>Up</button><div class="breadcrumbs" data-role="breadcrumbs"></div><input data-role="path" aria-label="Path" value="${escapeHtml(this.path)}"/></div>
         <div class="toolbar-actions" data-role="actions"></div>
       </div>
       <div class="files-layout">
@@ -84,7 +81,6 @@ export class FilesController extends BaseController {
         <section class="native-panel file-list-panel"><header><div><h3>Directory</h3><p data-role="directory-summary">Loading…</p></div><div class="panel-tools"><label class="native-toggle"><input data-role="hidden" type="checkbox"/>Hidden</label></div></header><div class="file-table-wrap" data-role="file-list"><div class="native-loading">Loading directory…</div></div></section>
         <section class="native-panel file-preview-panel"><header><div><h3>Preview</h3><p data-role="preview-summary">Choose an entry</p></div></header><div class="file-preview" data-role="preview"><div class="native-empty">No selection</div></div></section>
       </div>
-      <footer class="shortcut-strip"><span><kbd>↑/↓</kbd> select</span><span><kbd>Enter</kbd> open/edit</span><span><kbd>Backspace</kbd> parent</span><span><kbd>F2</kbd> rename</span><span><kbd>Del</kbd> delete</span><span><kbd>Ctrl C/X/V</kbd> copy/move/paste</span></footer>
     </section>`
     this.renderMachines()
     this.renderBreadcrumbs()
@@ -114,12 +110,14 @@ export class FilesController extends BaseController {
     const current = this.current()
     const ready = this.payload !== null
     const target = this.root.querySelector<HTMLElement>("[data-role=actions]")
+    const parent = this.root.querySelector<HTMLButtonElement>("[data-action=parent]")
+    if (parent) parent.disabled = !this.payload?.parent || this.payload.parent === this.path
     if (!target) return
     target.innerHTML = [
-      iconButton("Refresh", "refresh", "↻", this.busy),
+      button("Refresh", "refresh", { icon: "↻", disabled: this.busy }),
       button("New file", "new-file", { icon: "+", disabled: !ready }),
       button("New folder", "new-dir", { icon: "▰", disabled: !ready }),
-      button("Edit", "edit", { disabled: !current || current.type === "dir" }),
+      button(current?.type === "dir" ? "Open folder" : "Edit file", "open", { disabled: !current }),
       button("Rename", "rename", { disabled: !current }),
       button("Copy", "copy", { disabled: !current }),
       button("Move", "cut", { disabled: !current }),
@@ -454,7 +452,7 @@ export class FilesController extends BaseController {
     else if (action === "parent") this.parent()
     else if (action === "new-file") void this.create("file")
     else if (action === "new-dir") void this.create("dir")
-    else if (action === "edit") void this.editCurrent()
+    else if (action === "open") this.activate(this.current())
     else if (action === "rename") void this.renameCurrent()
     else if (action === "copy") {
       const current = this.current()
@@ -491,42 +489,5 @@ export class FilesController extends BaseController {
     }
   }
 
-  private onKeyDown(event: KeyboardEvent): void {
-    if (!this.root.isConnected || isTypingTarget(event.target)) return
-    const entries = this.entries()
-    const index = Math.max(0, entries.findIndex((entry) => entry.path === this.current()?.path))
-    if (event.key === "ArrowDown" || event.key.toLowerCase() === "j") {
-      event.preventDefault()
-      this.select(entries[Math.min(entries.length - 1, index + 1)]?.path || "")
-    } else if (event.key === "ArrowUp" || event.key.toLowerCase() === "k") {
-      event.preventDefault()
-      this.select(entries[Math.max(0, index - 1)]?.path || "")
-    } else if (event.key === "Enter") {
-      event.preventDefault()
-      this.activate(this.current())
-    } else if (event.key === "Backspace") {
-      event.preventDefault()
-      this.parent()
-    } else if (event.key === "F2") {
-      event.preventDefault()
-      void this.renameCurrent()
-    } else if (event.key === "Delete") {
-      event.preventDefault()
-      void this.deleteCurrent()
-    } else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "c") {
-      event.preventDefault()
-      const current = this.current()
-      if (current) this.clipboard = { mode: "copy", machine: this.machine, path: current.path }
-      this.renderActions()
-    } else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "x") {
-      event.preventDefault()
-      const current = this.current()
-      if (current) this.clipboard = { mode: "move", machine: this.machine, path: current.path }
-      this.renderActions()
-    } else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "v") {
-      event.preventDefault()
-      void this.paste()
-    }
-  }
 }
 
