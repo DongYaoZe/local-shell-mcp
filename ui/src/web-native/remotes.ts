@@ -51,6 +51,9 @@ export class RemotesController extends BaseController {
   }
 
   private render(): void {
+    const focusedName = document.activeElement instanceof HTMLElement && this.root.contains(document.activeElement)
+      ? document.activeElement.closest<HTMLElement>("[data-remote-name]")?.dataset.remoteName
+      : undefined
     const online = this.machines.filter((machine) => machine.status === "online").length
     const offline = this.machines.length - online
     const summary = this.root.querySelector<HTMLElement>("[data-role=remote-summary]")
@@ -63,8 +66,12 @@ export class RemotesController extends BaseController {
     if (list) {
       list.innerHTML = this.machines.length ? `<table class="native-table remote-table" role="grid" aria-label="Remote workers"><thead><tr><th>State</th><th>Name</th><th>Version</th><th>Workdir</th><th>Last seen</th></tr></thead><tbody>${this.machines.map((machine, index) => {
         const selected = index === this.selected
-        return `<tr class="${selected ? "selected" : ""}" data-remote-index="${index}" tabindex="${selected ? "0" : "-1"}" aria-selected="${selected}" aria-label="Remote worker ${escapeHtml(machine.name)}, ${escapeHtml(machine.status)}"><td><span class="status-chip ${statusClass(machine.status)}">${escapeHtml(machine.status)}</span></td><td><strong>${escapeHtml(machine.name)}</strong></td><td>${escapeHtml(String(machine.info?.version || machine.info?.lsm_version || "unknown"))}</td><td><code>${escapeHtml(machine.workdir || "—")}</code></td><td>${formatAge(machine.last_seen, machine.last_seen_age_s)}</td></tr>`
+        return `<tr class="${selected ? "selected" : ""}" data-remote-index="${index}" data-remote-name="${escapeHtml(machine.name)}" tabindex="${selected ? "0" : "-1"}" aria-selected="${selected}" aria-label="Remote worker ${escapeHtml(machine.name)}, ${escapeHtml(machine.status)}"><td><span class="status-chip ${statusClass(machine.status)}">${escapeHtml(machine.status)}</span></td><td><strong>${escapeHtml(machine.name)}</strong></td><td>${escapeHtml(String(machine.info?.version || machine.info?.lsm_version || "unknown"))}</td><td><code>${escapeHtml(machine.workdir || "—")}</code></td><td>${formatAge(machine.last_seen, machine.last_seen_age_s)}</td></tr>`
       }).join("")}</tbody></table>` : `<div class="native-empty"><strong>${this.enabled ? "No remote nodes" : "Remotes disabled"}</strong><span>${this.enabled ? "Create a one-time invitation to attach a worker." : "Enable remote workers in server configuration."}</span></div>`
+      if (focusedName) {
+        const focusedIndex = this.machines.findIndex((machine) => machine.name === focusedName)
+        if (focusedIndex >= 0) this.focusRemote(focusedIndex)
+      }
     }
     const current = this.current()
     const detail = this.root.querySelector<HTMLElement>("[data-role=remote-detail]")

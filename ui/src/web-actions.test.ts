@@ -29,6 +29,17 @@ describe("Native WebUI actions", () => {
       expect(source).toContain('event.key === "ArrowDown"')
       expect(source).toContain('event.key === "Enter"')
     }
+    expect(remotes).toContain("data-remote-name")
+    expect(remotes).toContain("focusedName")
+  })
+
+  test("keeps the terminal overlay inside the terminal grid row", async () => {
+    const styles = await Bun.file(new URL("./web-native.css", import.meta.url)).text()
+    const overlayRule = styles.match(/\.terminal-overlay\s*\{([^}]*)\}/)?.[1] || ""
+
+    expect(overlayRule).toContain("grid-row: 2")
+    expect(overlayRule).not.toContain("inset:")
+    expect(overlayRule).not.toContain("position: absolute")
   })
 
   test("exposes the previously shortcut-oriented operations as buttons", async () => {
