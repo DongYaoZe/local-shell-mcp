@@ -443,7 +443,7 @@ export class FilesController extends BaseController {
     }
     const entryPath = target.closest<HTMLElement>("[data-entry]")?.dataset.entry
     if (entryPath) {
-      this.select(entryPath)
+      this.select(entryPath, true)
       return
     }
     const previewPath = target.closest<HTMLElement>("[data-preview-entry]")?.dataset.previewEntry

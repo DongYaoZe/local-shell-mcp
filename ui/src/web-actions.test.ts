@@ -31,6 +31,7 @@ describe("Native WebUI actions", () => {
     }
     expect(remotes).toContain("data-remote-name")
     expect(remotes).toContain("focusedName")
+    expect(files).toContain("this.select(entryPath, true)")
   })
 
   test("keeps the terminal overlay inside the terminal grid row", async () => {
