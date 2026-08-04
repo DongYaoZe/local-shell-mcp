@@ -11,6 +11,7 @@ const result = await Bun.build({
   entrypoints: [
     resolve(root, "src/web.ts"),
     resolve(root, "src/web.css"),
+    resolve(root, "src/web-native.css"),
     resolve(root, "src/web-console-mobile.css"),
   ],
   outdir: staticDir,
@@ -24,11 +25,13 @@ if (!result.success) {
   process.exit(1)
 }
 const webCssPath = resolve(staticDir, "web.css")
+const nativeCssPath = resolve(staticDir, "web-native.css")
 const consoleCssPath = resolve(staticDir, "web-console-mobile.css")
 await Bun.write(
   webCssPath,
-  `${await Bun.file(webCssPath).text()}\n${await Bun.file(consoleCssPath).text()}`,
+  `${await Bun.file(webCssPath).text()}\n${await Bun.file(nativeCssPath).text()}\n${await Bun.file(consoleCssPath).text()}`,
 )
+await rm(nativeCssPath, { force: true })
 await rm(consoleCssPath, { force: true })
 await Bun.write(resolve(staticDir, "index.html"), Bun.file(resolve(root, "static/index.html")))
 console.log("Built WebUI assets")

@@ -846,6 +846,237 @@ def test_websocket_control_flow_and_limits(tmp_path, monkeypatch):
     assert any(code == 4400 for code, _ in invalid_resize.closed)
 
 
+
+def test_spawn_shell_process_selects_tmux_attachment_or_polling_bridge(tmp_path, monkeypatch):
+    _configure(tmp_path, monkeypatch)
+    spawned = []
+
+    async def fake_dispatch(machine, local_call, remote_tool, remote_args):
+        assert remote_tool == "shell_list"
+        backend = "tmux-system" if machine == "local" else "tmux-worker"
+        return {"sessions": [{"session_id": "demo", "backend": backend}]}
+
+    class FakePty:
+        def __init__(self, command, env, cols, rows):
+            spawned.append((command, env, cols, rows))
+
+    monkeypatch.setattr(ui, "_machine_dispatch", fake_dispatch)
+    monkeypatch.setattr(ui, "resolve_tmux", lambda: SimpleNamespace(path="/usr/bin/tmux"))
+    monkeypatch.setattr(ui, "tmux_socket_name", lambda: "lsm-test")
+    monkeypatch.setattr(ui, "_UnixPtyProcess", FakePty)
+    monkeypatch.setattr(ui, "os", SimpleNamespace(**{**vars(os), "name": "posix"}))
+
+    local = asyncio.run(ui._spawn_shell_process("local", "demo", 100, 32))
+    assert isinstance(local, FakePty)
+    command, env, cols, rows = spawned[0]
+    assert command == [
+        "/usr/bin/tmux",
+        "-L",
+        "lsm-test",
+        "attach-session",
+        "-t",
+        "=demo",
+    ]
+    assert env["TERM"] == "xterm-256color"
+    assert (cols, rows) == (100, 32)
+
+    remote = asyncio.run(ui._spawn_shell_process("worker", "demo", 80, 24))
+    assert isinstance(remote, ui._PollingShellProcess)
+    assert remote.machine == "worker"
+
+    with pytest.raises(ValueError, match="not found"):
+        async def missing(machine, local_call, remote_tool, remote_args):
+            return {"sessions": []}
+
+        monkeypatch.setattr(ui, "_machine_dispatch", missing)
+        asyncio.run(ui._spawn_shell_process("local", "missing", 80, 24))
+
+
+@pytest.mark.asyncio
+async def test_polling_shell_process_streams_snapshots_and_forwards_input(tmp_path, monkeypatch):
+    _configure(tmp_path, monkeypatch)
+    outputs = ["first screen", "first screen", "second screen"]
+    calls = []
+
+    async def fake_dispatch(machine, local_call, remote_tool, remote_args):
+        calls.append((machine, remote_tool, remote_args))
+        if remote_tool == "shell_read":
+            return {"output": outputs.pop(0)}
+        return {"ok": True}
+
+    monkeypatch.setattr(ui, "_machine_dispatch", fake_dispatch)
+    process = ui._PollingShellProcess("worker", "demo", 80, 24)
+
+    first = await process.read()
+    second = await process.read()
+    await process.write(b"echo ok\r")
+    await process.resize(120, 40)
+    await process.close()
+
+    assert first.startswith(b"\x1b[?25l\x1b[3J\x1b[H\x1b[2J")
+    assert b"first screen" in first
+    assert b"second screen" in second
+    assert ("worker", "shell_send", {"session_id": "demo", "input_text": "echo ok\r", "enter": False}) in calls
+    assert ("worker", "shell_resize", {"session_id": "demo", "cols": 120, "rows": 40}) in calls
+    assert await process.read() == b""
+
+
+@pytest.mark.asyncio
+async def test_polling_shell_process_stops_after_repeated_read_failures(tmp_path, monkeypatch):
+    _configure(tmp_path, monkeypatch)
+    attempts = 0
+
+    async def failing_dispatch(machine, local_call, remote_tool, remote_args):
+        nonlocal attempts
+        attempts += 1
+        raise RuntimeError("worker unavailable")
+
+    monkeypatch.setattr(ui, "_machine_dispatch", failing_dispatch)
+    process = ui._PollingShellProcess("worker", "demo", 80, 24)
+
+    message = await process.read()
+    await process.write(b"ignored after close")
+
+    assert attempts == 3
+    assert b"Persistent terminal stream stopped" in message
+    assert b"worker unavailable" in message
+    assert await process.exit_code() == 1
+
+
+@pytest.mark.asyncio
+async def test_native_shell_websocket_forwards_stream_input_and_resize(tmp_path, monkeypatch):
+    _configure(tmp_path, monkeypatch)
+
+    class Process:
+        def __init__(self):
+            self.reads = [b"hello"]
+            self.writes = []
+            self.resizes = []
+            self.closed = False
+
+        async def read(self):
+            if self.reads:
+                return self.reads.pop(0)
+            await asyncio.sleep(0.05)
+            return b""
+
+        async def write(self, data):
+            self.writes.append(data)
+
+        async def resize(self, cols, rows):
+            self.resizes.append((cols, rows))
+
+        async def exit_code(self):
+            return None
+
+        async def close(self):
+            self.closed = True
+
+    class Socket:
+        headers = {"sec-websocket-protocol": "lsm-ui"}
+        query_params = {"machine": "worker", "session_id": "demo", "cols": "90", "rows": "30"}
+
+        def __init__(self):
+            self.messages = [
+                {"type": "websocket.receive", "bytes": b"raw"},
+                {"type": "websocket.receive", "text": "plain"},
+                {
+                    "type": "websocket.receive",
+                    "text": json.dumps({"type": "resize", "cols": 100, "rows": 35}),
+                },
+                {"type": "websocket.disconnect"},
+            ]
+            self.sent = []
+            self.closed = []
+            self.accepted = None
+
+        async def accept(self, subprotocol=None):
+            self.accepted = subprotocol
+
+        async def close(self, code=1000, reason=""):
+            self.closed.append((code, reason))
+
+        async def send_bytes(self, data):
+            self.sent.append(data)
+
+        async def receive(self):
+            await asyncio.sleep(0)
+            return self.messages.pop(0)
+
+    process = Process()
+    spawn_calls = []
+
+    async def fake_spawn(*args):
+        spawn_calls.append(args)
+        return process
+
+    monkeypatch.setattr(ui, "_authorize_websocket", lambda websocket: True)
+    monkeypatch.setattr(ui, "_spawn_shell_process", fake_spawn)
+    ui._ACTIVE_UI_TERMINALS.clear()
+    socket = Socket()
+
+    await ui.ui_shell_websocket(socket)
+
+    assert socket.accepted == "lsm-ui"
+    assert spawn_calls == [("worker", "demo", 90, 30)]
+    assert b"hello" in socket.sent
+    assert b"raw" in process.writes
+    assert b"plain" in process.writes
+    assert process.resizes == [(100, 35)]
+    assert process.closed is True
+    assert id(socket) not in ui._ACTIVE_UI_TERMINALS
+
+
+@pytest.mark.asyncio
+async def test_native_shell_websocket_rejects_unauthorized_full_and_invalid_requests(
+    tmp_path, monkeypatch
+):
+    _configure(tmp_path, monkeypatch)
+
+    class Socket:
+        headers = {}
+
+        def __init__(self, query=None):
+            self.query_params = query or {}
+            self.accepted = False
+            self.sent = []
+            self.closed = []
+
+        async def accept(self, subprotocol=None):
+            self.accepted = True
+
+        async def close(self, code=1000, reason=""):
+            self.closed.append((code, reason))
+
+        async def send_bytes(self, data):
+            self.sent.append(data)
+
+    unauthorized = Socket()
+    monkeypatch.setattr(ui, "_authorize_websocket", lambda websocket: False)
+    await ui.ui_shell_websocket(unauthorized)
+    assert unauthorized.closed == [(4401, "OAuth authentication required")]
+
+    monkeypatch.setattr(ui, "_authorize_websocket", lambda websocket: True)
+    monkeypatch.setattr(
+        ui,
+        "get_settings",
+        lambda: SimpleNamespace(ui_terminal_max_sessions=1),
+    )
+    ui._ACTIVE_UI_TERMINALS.clear()
+    ui._ACTIVE_UI_TERMINALS.add(-1)
+    full = Socket()
+    await ui.ui_shell_websocket(full)
+    assert full.closed == [(4429, "Too many active WebUI terminal sessions")]
+
+    ui._ACTIVE_UI_TERMINALS.clear()
+    invalid = Socket()
+    await ui.ui_shell_websocket(invalid)
+    assert invalid.accepted is True
+    assert any(b"session_id is required" in data for data in invalid.sent)
+    assert invalid.closed[-1][0] == 1011
+    assert id(invalid) not in ui._ACTIVE_UI_TERMINALS
+
+
 def test_ui_routes_disabled(tmp_path, monkeypatch):
     _configure(tmp_path, monkeypatch)
     monkeypatch.setenv("LOCAL_SHELL_MCP_UI_ENABLED", "false")

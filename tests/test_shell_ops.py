@@ -1,6 +1,8 @@
 import asyncio
 import json
 import time
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from conftest import python_shell_command
@@ -455,7 +457,11 @@ async def test_unix_persistent_shell_falls_back_when_tmux_is_missing(tmp_path, m
     session = await shell_ops.start_shell(cwd=".", name="native-fallback")
     try:
         assert session["backend"] == "native"
-        await shell_ops.send_shell(session["session_id"], "printf 'fallback-ready\\n'")
+        await shell_ops.send_shell(
+            session["session_id"],
+            "printf 'fallback-ready\\n'\r",
+            enter=False,
+        )
         deadline = time.monotonic() + 2
         output = ""
         while time.monotonic() < deadline:
@@ -464,7 +470,240 @@ async def test_unix_persistent_shell_falls_back_when_tmux_is_missing(tmp_path, m
                 break
             await asyncio.sleep(0.05)
         assert "fallback-ready" in output
+
+        native = shell_ops._NATIVE_SHELL_SESSIONS[session["session_id"]]
+        await shell_ops.send_shell(session["session_id"], "sleep 30\r", enter=False)
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            if shell_ops._native_descendant_pids(native.process.pid):
+                break
+            await asyncio.sleep(0.05)
+        assert shell_ops._native_descendant_pids(native.process.pid)
+
+        await shell_ops.send_shell(session["session_id"], "\x03", enter=False)
+        await shell_ops.send_shell(
+            session["session_id"],
+            "printf 'interrupt-survived\\n'\r",
+            enter=False,
+        )
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            output = (await shell_ops.read_shell(session["session_id"], 20))["output"]
+            if "interrupt-survived" in output:
+                break
+            await asyncio.sleep(0.05)
+        assert "interrupt-survived" in output
+
         listed = await shell_ops.list_shells()
         assert any(row["session_id"] == session["session_id"] for row in listed["sessions"])
     finally:
         await shell_ops.kill_shell(session["session_id"])
+
+
+@pytest.mark.asyncio
+async def test_native_pipe_shell_translates_terminal_enter_and_interrupt(monkeypatch):
+    from local_shell_mcp import shell_ops
+
+    class Stdin:
+        def __init__(self):
+            self.writes = []
+
+        def write(self, data):
+            self.writes.append(data)
+
+        async def drain(self):
+            return None
+
+    stdin = Stdin()
+    signals = []
+    process = SimpleNamespace(
+        stdin=stdin,
+        returncode=None,
+        pid=42,
+    )
+    session = shell_ops.NativeShellSession(
+        session_id="native-terminal",
+        process=process,
+        cwd=Path("."),
+        command="shell",
+        created=0,
+        output=shell_ops.TailBuffer(1024, bytearray()),
+        readers=[],
+        lock=asyncio.Lock(),
+    )
+    monkeypatch.setitem(shell_ops._NATIVE_SHELL_SESSIONS, session.session_id, session)
+    monkeypatch.setattr(shell_ops.sys, "platform", "linux")
+    monkeypatch.setattr(shell_ops, "_native_descendant_pids", lambda pid: [84])
+    monkeypatch.setattr(
+        shell_ops.os,
+        "kill",
+        lambda pid, value: signals.append((pid, value)),
+        raising=False,
+    )
+
+    await shell_ops._native_send_shell(session.session_id, "printf ok\r", enter=False)
+    await shell_ops._native_send_shell(session.session_id, "\x03", enter=False)
+
+    assert stdin.writes == [b"printf ok\n"]
+    assert signals == [(84, shell_ops.signal.SIGINT)]
+
+
+@pytest.mark.asyncio
+async def test_native_pipe_shell_ctrl_c_clears_idle_input(monkeypatch):
+    from local_shell_mcp import shell_ops
+
+    class Stdin:
+        def __init__(self):
+            self.writes = []
+
+        def write(self, data):
+            self.writes.append(data)
+
+        async def drain(self):
+            return None
+
+    stdin = Stdin()
+    session = shell_ops.NativeShellSession(
+        session_id="native-idle",
+        process=SimpleNamespace(stdin=stdin, returncode=None, pid=42),
+        cwd=Path("."),
+        command="shell",
+        created=0,
+        output=shell_ops.TailBuffer(1024, bytearray()),
+        readers=[],
+        lock=asyncio.Lock(),
+    )
+    monkeypatch.setitem(shell_ops._NATIVE_SHELL_SESSIONS, session.session_id, session)
+    monkeypatch.setattr(shell_ops.sys, "platform", "linux")
+    monkeypatch.setattr(shell_ops, "_native_descendant_pids", lambda pid: [])
+
+    await shell_ops._native_send_shell(session.session_id, "echo should-not-run", enter=False)
+    await shell_ops._native_send_shell(session.session_id, "\x03", enter=False)
+    await shell_ops._native_send_shell(session.session_id, "echo safe\r", enter=False)
+
+    assert stdin.writes == [b"echo safe\n"]
+    assert session.input_buffer == bytearray()
+    assert b"^C\n" in session.output.data
+
+
+@pytest.mark.asyncio
+async def test_native_pipe_shell_buffers_line_editing(monkeypatch):
+    from local_shell_mcp import shell_ops
+
+    class Stdin:
+        def __init__(self):
+            self.writes = []
+
+        def write(self, data):
+            self.writes.append(data)
+
+        async def drain(self):
+            return None
+
+    stdin = Stdin()
+    session = shell_ops.NativeShellSession(
+        session_id="native-editing",
+        process=SimpleNamespace(stdin=stdin, returncode=None, pid=42),
+        cwd=Path("."),
+        command="shell",
+        created=0,
+        output=shell_ops.TailBuffer(1024, bytearray()),
+        readers=[],
+        lock=asyncio.Lock(),
+    )
+    monkeypatch.setitem(shell_ops._NATIVE_SHELL_SESSIONS, session.session_id, session)
+    monkeypatch.setattr(shell_ops.sys, "platform", "linux")
+    monkeypatch.setattr(shell_ops, "_native_descendant_pids", lambda pid: [])
+
+    await shell_ops._native_send_shell(session.session_id, "echo ax\x08b\r\n", enter=False)
+    await shell_ops._native_send_shell(session.session_id, "\x7fnext", enter=True)
+
+    assert stdin.writes == [b"echo ab\n", b"next\n"]
+    assert session.input_buffer == bytearray()
+    assert b"echo ax\b \bb\nnext\n" in session.output.data
+
+
+@pytest.mark.asyncio
+async def test_native_windows_shell_ctrl_c_fallback_and_ctrl_break(monkeypatch):
+    from local_shell_mcp import shell_ops
+
+    class Stdin:
+        def __init__(self):
+            self.writes = []
+
+        def write(self, data):
+            self.writes.append(data)
+
+        async def drain(self):
+            return None
+
+    class Process:
+        def __init__(self, stdin):
+            self.stdin = stdin
+            self.returncode = None
+            self.pid = 42
+            self.signals = []
+
+        def send_signal(self, value):
+            self.signals.append(value)
+            if len(self.signals) == 1:
+                raise OSError("ctrl-break unavailable")
+
+    stdin = Stdin()
+    process = Process(stdin)
+    session = shell_ops.NativeShellSession(
+        session_id="native-windows",
+        process=process,
+        cwd=Path("."),
+        command="shell",
+        created=0,
+        output=shell_ops.TailBuffer(1024, bytearray()),
+        readers=[],
+        lock=asyncio.Lock(),
+    )
+    monkeypatch.setitem(shell_ops._NATIVE_SHELL_SESSIONS, session.session_id, session)
+    monkeypatch.setattr(shell_ops.sys, "platform", "win32")
+    monkeypatch.setattr(shell_ops.signal, "CTRL_BREAK_EVENT", 123, raising=False)
+
+    await shell_ops._native_send_shell(session.session_id, "one\r\ntwo\x03three", enter=True)
+    await shell_ops._native_send_shell(session.session_id, "\x03", enter=False)
+
+    assert stdin.writes == [b"one\r\ntwo", b"\x03", b"three\r\n"]
+    assert process.signals == [123, 123]
+
+
+@pytest.mark.asyncio
+async def test_native_shell_rejects_missing_stdin(monkeypatch):
+    from local_shell_mcp import shell_ops
+
+    session = shell_ops.NativeShellSession(
+        session_id="native-no-stdin",
+        process=SimpleNamespace(stdin=None, returncode=None, pid=42),
+        cwd=Path("."),
+        command="shell",
+        created=0,
+        output=shell_ops.TailBuffer(1024, bytearray()),
+        readers=[],
+        lock=asyncio.Lock(),
+    )
+    monkeypatch.setitem(shell_ops._NATIVE_SHELL_SESSIONS, session.session_id, session)
+
+    with pytest.raises(RuntimeError, match="has no stdin"):
+        await shell_ops._native_send_shell(session.session_id, "echo")
+
+
+def test_native_descendant_pids_are_deepest_first(monkeypatch):
+    from local_shell_mcp import shell_ops
+
+    monkeypatch.setattr(
+        shell_ops.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            stdout="42 1\n84 42\n126 84\n100 42\ninvalid\n"
+        ),
+    )
+
+    descendants = shell_ops._native_descendant_pids(42)
+
+    assert descendants[0] == 126
+    assert set(descendants) == {84, 100, 126}

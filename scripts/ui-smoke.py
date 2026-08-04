@@ -10,6 +10,7 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from contextlib import suppress
 from pathlib import Path
 from urllib.parse import quote
@@ -55,6 +56,33 @@ def visible_scroll_line_numbers(page: Page) -> list[int]:
         for row in xterm_rows(page)
         for match in re.findall(r"SCROLL-LINE-(\d+)", row)
     ]
+
+
+def wait_for_stable_scroll_lines(
+    page: Page,
+    predicate: Callable[[list[int]], bool],
+    *,
+    timeout_s: float = 8,
+    stable_s: float = 0.25,
+) -> list[int]:
+    deadline = time.monotonic() + timeout_s
+    candidate: list[int] | None = None
+    stable_since = 0.0
+    latest: list[int] = []
+    while time.monotonic() < deadline:
+        latest = visible_scroll_line_numbers(page)
+        if predicate(latest):
+            if latest == candidate:
+                if time.monotonic() - stable_since >= stable_s:
+                    return latest
+            else:
+                candidate = latest
+                stable_since = time.monotonic()
+        else:
+            candidate = None
+            stable_since = 0.0
+        page.wait_for_timeout(50)
+    raise AssertionError(f"Terminal scroll view did not stabilize: {latest!r}")
 
 
 def click_tui_label(
@@ -379,29 +407,19 @@ def run_browser(port: int) -> None:
             assert 120 in initial_bottom_lines, initial_bottom_lines
             page.keyboard.press("PageUp")
             page.keyboard.press("PageUp")
-            deadline = time.monotonic() + 8
-            while time.monotonic() < deadline:
-                older_lines = visible_scroll_line_numbers(page)
-                if older_lines and min(older_lines) < min(initial_bottom_lines) and 120 not in older_lines:
-                    break
-                page.wait_for_timeout(100)
-            else:
-                raise AssertionError(
-                    f"PageUp did not reveal older output: {initial_bottom_lines!r}"
-                )
+            older_lines = wait_for_stable_scroll_lines(
+                page,
+                lambda lines: bool(lines)
+                and min(lines) < min(initial_bottom_lines)
+                and 120 not in lines,
+            )
 
             click_tui_label(page, f"SCROLL-LINE-{older_lines[-1]:03d}")
             page.mouse.wheel(0, -600)
-            deadline = time.monotonic() + 8
-            while time.monotonic() < deadline:
-                wheel_lines = visible_scroll_line_numbers(page)
-                if wheel_lines and min(wheel_lines) < min(older_lines):
-                    break
-                page.wait_for_timeout(100)
-            else:
-                raise AssertionError(
-                    f"Terminal mouse wheel did not reveal older output: {older_lines!r}"
-                )
+            wait_for_stable_scroll_lines(
+                page,
+                lambda lines: bool(lines) and min(lines) < min(older_lines),
+            )
             page.keyboard.press("PageDown")
             page.keyboard.press("PageDown")
             page.keyboard.press("PageDown")
@@ -410,21 +428,13 @@ def run_browser(port: int) -> None:
             before_freeze_bottom = visible_scroll_line_numbers(page)
             page.keyboard.press("PageUp")
             page.keyboard.press("PageUp")
-            deadline = time.monotonic() + 8
-            while time.monotonic() < deadline:
-                frozen_lines = visible_scroll_line_numbers(page)
-                if (
-                    frozen_lines
-                    and before_freeze_bottom
-                    and min(frozen_lines) < min(before_freeze_bottom)
-                    and 120 not in frozen_lines
-                ):
-                    break
-                page.wait_for_timeout(100)
-            else:
-                raise AssertionError(
-                    f"PageUp did not establish a frozen history view: {before_freeze_bottom!r}"
-                )
+            frozen_lines = wait_for_stable_scroll_lines(
+                page,
+                lambda lines: bool(lines)
+                and bool(before_freeze_bottom)
+                and min(lines) < min(before_freeze_bottom)
+                and 120 not in lines,
+            )
             repeated = api_request(
                 page,
                 "/api/ui/terminals/send",

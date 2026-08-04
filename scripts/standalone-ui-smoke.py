@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+import json
 import os
 import socket
 import subprocess
@@ -106,6 +107,72 @@ async def exercise_websocket(port: int) -> None:
         await receive_render(websocket, minimum_bytes=128)
 
 
+def api_request(
+    port: int,
+    path: str,
+    *,
+    method: str = "GET",
+    body: dict | None = None,
+) -> dict:
+    data = json.dumps(body).encode() if body is not None else None
+    request = urllib.request.Request(  # noqa: S310
+        f"http://127.0.0.1:{port}/api/ui{path}",
+        data=data,
+        method=method,
+        headers={"Content-Type": "application/json"} if data is not None else {},
+    )
+    with urllib.request.urlopen(request, timeout=10) as response:  # noqa: S310
+        payload = json.loads(response.read())
+    if not payload.get("ok"):
+        raise RuntimeError(payload.get("message") or f"UI API failed: {path}")
+    return payload.get("data") or {}
+
+
+async def exercise_native_terminal(port: int) -> None:
+    started = api_request(
+        port,
+        "/terminals/start",
+        method="POST",
+        body={"machine": "local", "name": "native-ui-smoke", "cwd": "."},
+    )
+    session_id = str(started.get("session_id") or "")
+    if not session_id:
+        raise RuntimeError("Native terminal smoke did not receive a session id")
+    uri = (
+        f"ws://127.0.0.1:{port}/ui/ws/shell"
+        f"?machine=local&session_id={session_id}&cols=100&rows=30"
+    )
+    marker = b"native-terminal-smoke-ok"
+    output = bytearray()
+    try:
+        async with websockets.connect(
+            uri,
+            subprotocols=["lsm-ui"],
+            max_size=8 * 1024 * 1024,
+        ) as websocket:
+            await websocket.send(b"printf 'native-terminal-smoke-ok\\n'\r")
+            await websocket.send('{"type":"resize","cols":90,"rows":28}')
+            deadline = asyncio.get_running_loop().time() + 15
+            while marker not in output and asyncio.get_running_loop().time() < deadline:
+                remaining = deadline - asyncio.get_running_loop().time()
+                message = await asyncio.wait_for(websocket.recv(), timeout=remaining)
+                output.extend(
+                    message.encode("utf-8", errors="replace")
+                    if isinstance(message, str)
+                    else message
+                )
+    finally:
+        with contextlib.suppress(Exception):
+            api_request(
+                port,
+                "/terminals/kill",
+                method="POST",
+                body={"machine": "local", "session_id": session_id},
+            )
+    if marker not in output:
+        raise TimeoutError(f"Native terminal did not echo marker; tail={bytes(output[-1000:])!r}")
+
+
 def _stop_process_tree(process: subprocess.Popen[bytes]) -> None:
     if process.poll() is not None:
         return
@@ -177,6 +244,7 @@ def main() -> int:
             try:
                 wait_for_http(port, process, stdout_path, stderr_path)
                 asyncio.run(exercise_websocket(port))
+                asyncio.run(exercise_native_terminal(port))
             except BaseException as exc:
                 failure = exc
             finally:

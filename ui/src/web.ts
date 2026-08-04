@@ -7,6 +7,8 @@ import { measureTerminalCellAspect } from "./terminal-geometry"
 import { TerminalWriteBuffer, type TerminalWriteChunk } from "./terminal-write-buffer"
 import { todoTitle, visibleWorkloadCount } from "./web-data"
 import { hashForView, interfaceModeForView, oauthReturnView, viewFromHash, type WebViewName } from "./web-mode"
+import { createNativePage, isNativeView, type NativePageController, type NoticeTone } from "./web-native"
+import type { Machine as UiMachine } from "./types"
 
 declare global {
   interface Window {
@@ -279,6 +281,47 @@ async function apiGet<T>(path: string): Promise<T> {
   return payload.data
 }
 
+async function apiSend<T>(path: string, method: "POST" | "PUT", body: Record<string, unknown>): Promise<T> {
+  const response = await fetch(`${API_PREFIX}${path}`, {
+    method,
+    headers: { Accept: "application/json", "Content-Type": "application/json", ...authorizationHeaders() },
+    body: JSON.stringify(body),
+  })
+  if (response.status === 401) {
+    sessionStorage.removeItem(TOKEN_KEY)
+    authenticated = false
+    throw new Error("Authentication required")
+  }
+  let payload: ApiEnvelope<T>
+  try {
+    payload = await response.json() as ApiEnvelope<T>
+  } catch {
+    throw new Error(`${path} returned ${response.status} ${response.statusText}`)
+  }
+  if (!response.ok || !payload.ok) throw new Error(payload.message || payload.error || `${path} failed`)
+  return payload.data
+}
+
+function notify(message: string, tone: NoticeTone = "info"): void {
+  let region = document.querySelector<HTMLElement>("#native-toast-region")
+  if (!region) {
+    region = document.createElement("div")
+    region.id = "native-toast-region"
+    region.className = "native-toast-region"
+    region.setAttribute("aria-live", "polite")
+    document.body.appendChild(region)
+  }
+  const toast = document.createElement("div")
+  toast.className = `native-toast ${tone}`
+  toast.textContent = message
+  region.appendChild(toast)
+  window.setTimeout(() => toast.classList.add("visible"), 10)
+  window.setTimeout(() => {
+    toast.classList.remove("visible")
+    window.setTimeout(() => toast.remove(), 180)
+  }, tone === "error" ? 6_000 : 3_500)
+}
+
 function base64Url(bytes: Uint8Array): string {
   let binary = ""
   for (const byte of bytes) binary += String.fromCharCode(byte)
@@ -455,7 +498,7 @@ function workloadRows(data: DashboardData, limit = 3): string {
       <div class="workload-main"><div><strong>${escapeHtml(workload.name)}</strong><span class="type-label ${kind === "session" ? "session-label" : ""}">${kind}</span></div><code>${escapeHtml(workload.detail)}</code></div>
       <div class="workload-node"><span class="tiny-avatar">${escapeHtml(workload.node.slice(0, 1).toUpperCase())}</span>${escapeHtml(workload.node)}</div>
       <div class="workload-time"><strong>${escapeHtml(workload.elapsed)}</strong><small>${escapeHtml(workload.status)}</small></div>
-      <button class="row-action" type="button" data-view="console">Open</button>
+      <button class="row-action" type="button" data-view="workloads">Open</button>
     </div>`
   }).join("")
 }
@@ -536,12 +579,12 @@ function overviewTemplate(data: DashboardData): string {
     <article class="metric-card network-card"><div class="metric-head"><div class="metric-icon green">${ICONS.network}</div><span class="trend positive">Live</span></div><div class="metric-label">Network throughput</div><div class="network-values"><div><span class="download-arrow">↓</span><strong>${escapeHtml(formatRate(system.network_rx_bps).replace("/s", ""))}</strong><small>received</small></div><div><span class="upload-arrow">↑</span><strong>${escapeHtml(formatRate(system.network_tx_bps).replace("/s", ""))}</strong><small>sent</small></div></div><div class="network-bar"><span style="width:70%"></span><i style="width:30%"></i></div><div class="metric-foot"><span>Downlink</span><span>Uplink</span></div></article>
   </section>
   <section class="dashboard-grid">
-    <article class="panel machines-panel"><div class="panel-header"><div><h3>Machines</h3><p>Controller and connected remote workers</p></div><button class="text-button" type="button" data-view="machines">View all →</button></div>${machineTable(data)}</article>
-    <article class="panel attention-panel"><div class="panel-header compact"><div><h3>Needs attention</h3><p>Alerts and open todos</p></div><span class="count-badge">${alerts.length + openTodos}</span></div><div class="attention-list">${alertItems(alerts)}</div><button class="full-width-link" type="button" data-view="activity">Open alerts & activity</button></article>
+    <article class="panel machines-panel"><div class="panel-header"><div><h3>Machines</h3><p>Controller and connected remote workers</p></div><button class="text-button" type="button" data-view="remotes">Manage remotes →</button></div>${machineTable(data)}</article>
+    <article class="panel attention-panel"><div class="panel-header compact"><div><h3>Needs attention</h3><p>Alerts and open todos</p></div><span class="count-badge">${alerts.length + openTodos}</span></div><div class="attention-list">${alertItems(alerts)}</div><button class="full-width-link" type="button" data-view="activity">View all alerts</button></article>
   </section>
   <section class="dashboard-grid lower-grid">
-    <article class="panel workloads-panel"><div class="panel-header"><div><h3>Active workloads</h3><p>Tracked jobs and persistent shell sessions</p></div><button class="text-button" type="button" data-view="workloads">View all →</button></div><div class="workload-list">${workloadRows(data)}</div><button class="full-width-link" type="button" data-view="workloads">View all ${activeWorkloads} workloads</button></article>
-    <article class="panel activity-panel"><div class="panel-header compact"><div><h3>Recent activity</h3><p>Latest MCP calls across all nodes</p></div><span class="tag">${version}</span></div><div class="activity-list">${activityRows(data.activity || [])}</div><button class="full-width-link" type="button" data-view="activity">Open audit activity</button></article>
+    <article class="panel workloads-panel"><div class="panel-header"><div><h3>Active workloads</h3><p>Tracked jobs and persistent shell sessions</p></div><button class="text-button" type="button" data-view="workloads">View all →</button></div><div class="workload-list">${workloadRows(data)}</div><button class="full-width-link" type="button" data-view="workloads">Manage ${activeWorkloads} active workloads</button></article>
+    <article class="panel activity-panel"><div class="panel-header compact"><div><h3>Recent activity</h3><p>Latest MCP calls across all nodes</p></div><span class="tag">${version}</span></div><div class="activity-list">${activityRows(data.activity || [])}</div><button class="full-width-link" type="button" data-view="audit">Open audit activity</button></article>
   </section>`
 }
 
@@ -551,7 +594,7 @@ function machinesTemplate(data: DashboardData): string {
 
 function workloadsTemplate(data: DashboardData): string {
   const count = visibleWorkloadCount(data)
-  return `<section class="page-stack"><article class="panel page-panel"><div class="panel-header"><div><h3>Active workloads</h3><p>Tracked jobs and persistent terminal sessions</p></div><span class="count-badge">${count}</span></div><div class="workload-list">${workloadRows(data, 100)}</div></article></section>`
+  return `<section class="page-stack"><article class="panel page-panel"><div class="panel-header"><div><h3>Active workloads</h3><p>Tracked jobs and persistent terminal sessions</p></div><div><span class="count-badge">${count}</span><button class="text-button" type="button" data-view="terminals">Open terminals →</button></div></div><div class="workload-list">${workloadRows(data, 100)}</div></article></section>`
 }
 
 function activityTemplate(data: DashboardData): string {
@@ -560,7 +603,7 @@ function activityTemplate(data: DashboardData): string {
     const severity = stringValue(alert.severity, "info")
     return `<div class="alert-card ${escapeHtml(severity)}"><div class="attention-icon">${severity === "warning" || severity === "critical" ? ICONS.warning : ICONS.info}</div><div><strong>${escapeHtml(alert.title || "Notice")}</strong><p>${escapeHtml(alert.detail || "No additional detail")}</p></div><time>${relativeTime(undefined, alert.age_s)}</time></div>`
   }).join("") : '<div class="empty-state">No active alerts.</div>'
-  return `<section class="page-stack"><article class="panel"><div class="panel-header"><div><h3>Alerts</h3><p>Conditions reported by the controller and workers</p></div><span class="count-badge">${alerts.length}</span></div><div class="alert-list-full">${alertCards}</div></article><article class="panel page-panel"><div class="panel-header"><div><h3>Recent MCP activity</h3><p>${data.audit_total_24h || 0} calls matched in the last 24 hours</p></div></div><div class="activity-list">${activityRows(data.activity || [], 100)}</div></article></section>`
+  return `<section class="page-stack"><article class="panel"><div class="panel-header"><div><h3>Alerts</h3><p>Conditions reported by the controller and workers</p></div><span class="count-badge">${alerts.length}</span></div><div class="alert-list-full">${alertCards}</div></article><article class="panel page-panel"><div class="panel-header"><div><h3>Recent MCP activity</h3><p>${data.audit_total_24h || 0} calls matched in the last 24 hours</p></div><button class="text-button" type="button" data-view="audit">Open audit →</button></div><div class="activity-list">${activityRows(data.activity || [], 100)}</div></article></section>`
 }
 
 function todosTemplate(data: BootstrapData | null): string {
@@ -577,10 +620,26 @@ function todosTemplate(data: BootstrapData | null): string {
 
 const PAGE_COPY: Record<Exclude<WebViewName, "console">, { name: string; title: string; description: string }> = {
   overview: { name: "Overview", title: "Control plane overview", description: "System health across your local and remote machines." },
-  machines: { name: "Machines", title: "Machines", description: "Connectivity, versions, capabilities, and resource snapshots." },
-  workloads: { name: "Workloads", title: "Active workloads", description: "Tracked jobs and persistent shell sessions." },
-  activity: { name: "Activity", title: "Alerts & activity", description: "Recent MCP calls and conditions that need attention." },
-  todos: { name: "Todos", title: "Operational todos", description: "Persistent tasks shared between human operators and MCP." },
+  files: { name: "Files", title: "File manager", description: "Browse, preview, edit, and organize files on local or remote machines." },
+  terminals: { name: "Terminals", title: "Persistent terminals", description: "Low-latency interactive shells with session, machine, and mobile controls." },
+  remotes: { name: "Remotes", title: "Remote workers", description: "Create invitations and manage persistent remote worker identities." },
+  audit: { name: "Audit", title: "Audit records", description: "Filter MCP calls and inspect call results and inputs in a TUI-aligned layout." },
+  todos: { name: "Todos", title: "Operational todos", description: "Create and update persistent tasks shared between operators and MCP." },
+  workloads: { name: "Workloads", title: "Active workloads", description: "Inspect all tracked jobs and persistent shell sessions." },
+  activity: { name: "Activity", title: "Alerts and activity", description: "Review all active alerts and recent MCP activity." },
+}
+
+let nativeController: NativePageController | null = null
+let nativeControllerView: WebViewName | null = null
+
+function destroyNativeController(): void {
+  nativeController?.destroy()
+  nativeController = null
+  nativeControllerView = null
+}
+
+function uiMachines(): UiMachine[] {
+  return (bootstrapData?.machines?.machines || dashboardData?.machines?.machines || []) as UiMachine[]
 }
 
 function bindRenderedActions(): void {
@@ -595,16 +654,38 @@ function renderActiveView(): void {
   pageName.textContent = copy.name
   pageTitle.textContent = copy.title
   pageDescription.textContent = copy.description
-  if (!dashboardData) {
+  if (["overview", "workloads", "activity"].includes(activeView) && !dashboardData) {
     viewRoot.innerHTML = '<div class="loading-state"><span></span><strong>Loading control plane…</strong></div>'
     return
   }
-  if (activeView === "overview") viewRoot.innerHTML = overviewTemplate(dashboardData)
-  else if (activeView === "machines") viewRoot.innerHTML = machinesTemplate(dashboardData)
-  else if (activeView === "workloads") viewRoot.innerHTML = workloadsTemplate(dashboardData)
-  else if (activeView === "activity") viewRoot.innerHTML = activityTemplate(dashboardData)
-  else viewRoot.innerHTML = todosTemplate(bootstrapData)
-  bindRenderedActions()
+  if (activeView === "overview") {
+    destroyNativeController()
+    viewRoot.innerHTML = overviewTemplate(dashboardData!)
+    bindRenderedActions()
+    return
+  }
+  if (activeView === "workloads" || activeView === "activity") {
+    destroyNativeController()
+    viewRoot.innerHTML = activeView === "workloads" ? workloadsTemplate(dashboardData!) : activityTemplate(dashboardData!)
+    bindRenderedActions()
+    return
+  }
+  if (!isNativeView(activeView)) return
+  if (nativeController && nativeControllerView === activeView) return
+  destroyNativeController()
+  viewRoot.innerHTML = ""
+  nativeController = createNativePage(activeView, {
+    api: { get: apiGet, send: apiSend },
+    uiPath: UI_PATH,
+    accessToken,
+    machines: uiMachines,
+    notify,
+    refreshChrome: async () => {
+      await refreshAll(false)
+    },
+  })
+  nativeControllerView = activeView
+  void nativeController.mount(viewRoot)
 }
 
 function showView(
@@ -623,6 +704,7 @@ function showView(
     button.setAttribute("aria-pressed", String(active))
   })
   if (view === "console") {
+    destroyNativeController()
     webView.hidden = true
     consoleView.hidden = false
     initializeTerminal()
@@ -644,9 +726,9 @@ function showView(
 
 function syncChrome(data: DashboardData): void {
   const machines = data.machines?.machines || []
-  const machineCount = data.machines?.counts?.total ?? machines.length
+  const remoteMachineCount = machines.filter((machine) => machine.info?.local !== true).length
   const activeWorkloadCount = visibleWorkloadCount(data)
-  machineNavCount.textContent = String(machineCount)
+  machineNavCount.textContent = String(remoteMachineCount)
   workloadNavCount.textContent = String(activeWorkloadCount)
   todoNavCount.textContent = String(data.todo_counts?.open || 0)
   const version = versionLabel(data.version)
@@ -673,7 +755,13 @@ async function refreshAll(manual = false): Promise<void> {
     bootstrapData = bootstrap
     dashboardData = dashboard
     syncChrome(dashboard)
+    const mountedController = nativeController && nativeControllerView === activeView
+      ? nativeController
+      : null
     renderActiveView()
+    if (mountedController && mountedController === nativeController) {
+      await mountedController.refresh()
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     if (message === "Authentication required") {

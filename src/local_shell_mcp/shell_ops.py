@@ -13,7 +13,7 @@ import time
 import uuid
 import weakref
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import conpty_ops
@@ -82,6 +82,7 @@ class NativeShellSession:
     output: TailBuffer
     readers: list
     lock: object
+    input_buffer: bytearray = field(default_factory=bytearray)
 
 
 def check_command_policy(command: str) -> None:
@@ -623,15 +624,107 @@ async def _native_start_shell(
     }
 
 
+def _native_descendant_pids(parent_pid: int) -> list[int]:
+    """Return descendants deepest-first without signaling the persistent shell itself."""
+    try:
+        result = subprocess.run(
+            ["ps", "-axo", "pid=,ppid="],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=1,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+
+    children: dict[int, list[int]] = {}
+    for line in result.stdout.splitlines():
+        fields = line.split()
+        if len(fields) != 2:
+            continue
+        try:
+            pid, ppid = map(int, fields)
+        except ValueError:
+            continue
+        children.setdefault(ppid, []).append(pid)
+
+    descendants: list[tuple[int, int]] = []
+    stack = [(pid, 1) for pid in children.get(parent_pid, [])]
+    while stack:
+        pid, depth = stack.pop()
+        descendants.append((pid, depth))
+        stack.extend((child, depth + 1) for child in children.get(pid, []))
+    descendants.sort(key=lambda item: item[1], reverse=True)
+    return [pid for pid, _depth in descendants]
+
+
 async def _native_send_shell(session_id: str, input_text: str, enter: bool = True) -> dict:
     session = _get_native_session(session_id)
     if session.process.stdin is None:
         raise RuntimeError(f"Persistent shell session has no stdin: {session_id}")
     newline = "\r\n" if sys.platform == "win32" else "\n"
-    data = input_text + (newline if enter else "")
-    async with session.lock:
-        session.process.stdin.write(data.encode())
+
+    async def write_input(value: str, append_newline: bool) -> None:
+        if not value and not append_newline:
+            return
+        if not append_newline:
+            value = value.replace("\r\n", "\n").replace("\r", "\n")
+            if newline != "\n":
+                value = value.replace("\n", newline)
+        session.process.stdin.write((value + (newline if append_newline else "")).encode())
         await session.process.stdin.drain()
+
+    async def interrupt() -> None:
+        if sys.platform != "win32":
+            descendants = await asyncio.to_thread(
+                _native_descendant_pids, session.process.pid
+            )
+            for pid in descendants:
+                with suppress(ProcessLookupError, PermissionError):
+                    os.kill(pid, signal.SIGINT)
+            return
+        ctrl_break = getattr(signal, "CTRL_BREAK_EVENT", None)
+        if ctrl_break is not None:
+            try:
+                session.process.send_signal(ctrl_break)
+                return
+            except (OSError, ValueError):
+                pass
+        await write_input("\x03", False)
+
+    async def send_unix_pipe_input(value: str, append_newline: bool) -> None:
+        normalized = value.replace("\r\n", "\n").replace("\r", "\n")
+        if append_newline:
+            normalized += "\n"
+        for character in normalized:
+            if character == "\x03":
+                session.input_buffer.clear()
+                session.output.append(b"^C\n")
+                await interrupt()
+            elif character in {"\x08", "\x7f"}:
+                if session.input_buffer:
+                    session.input_buffer.pop()
+                    session.output.append(b"\b \b")
+            elif character == "\n":
+                pending = bytes(session.input_buffer)
+                session.input_buffer.clear()
+                session.output.append(b"\n")
+                session.process.stdin.write(pending + b"\n")
+                await session.process.stdin.drain()
+            else:
+                encoded = character.encode()
+                session.input_buffer.extend(encoded)
+                session.output.append(encoded)
+
+    async with session.lock:
+        if sys.platform != "win32":
+            await send_unix_pipe_input(input_text, enter)
+        else:
+            parts = input_text.split("\x03")
+            for index, part in enumerate(parts):
+                await write_input(part, enter and index == len(parts) - 1)
+                if index < len(parts) - 1:
+                    await interrupt()
     audit(
         "shell_send",
         session=session_id,
