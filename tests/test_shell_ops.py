@@ -470,6 +470,30 @@ async def test_unix_persistent_shell_falls_back_when_tmux_is_missing(tmp_path, m
                 break
             await asyncio.sleep(0.05)
         assert "fallback-ready" in output
+
+        native = shell_ops._NATIVE_SHELL_SESSIONS[session["session_id"]]
+        await shell_ops.send_shell(session["session_id"], "sleep 30\r", enter=False)
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            if shell_ops._native_descendant_pids(native.process.pid):
+                break
+            await asyncio.sleep(0.05)
+        assert shell_ops._native_descendant_pids(native.process.pid)
+
+        await shell_ops.send_shell(session["session_id"], "\x03", enter=False)
+        await shell_ops.send_shell(
+            session["session_id"],
+            "printf 'interrupt-survived\\n'\r",
+            enter=False,
+        )
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            output = (await shell_ops.read_shell(session["session_id"], 20))["output"]
+            if "interrupt-survived" in output:
+                break
+            await asyncio.sleep(0.05)
+        assert "interrupt-survived" in output
+
         listed = await shell_ops.list_shells()
         assert any(row["session_id"] == session["session_id"] for row in listed["sessions"])
     finally:
@@ -496,7 +520,6 @@ async def test_native_pipe_shell_translates_terminal_enter_and_interrupt(monkeyp
         stdin=stdin,
         returncode=None,
         pid=42,
-        send_signal=lambda value: signals.append(("process", value)),
     )
     session = shell_ops.NativeShellSession(
         session_id="native-terminal",
@@ -510,10 +533,10 @@ async def test_native_pipe_shell_translates_terminal_enter_and_interrupt(monkeyp
     )
     monkeypatch.setitem(shell_ops._NATIVE_SHELL_SESSIONS, session.session_id, session)
     monkeypatch.setattr(shell_ops.sys, "platform", "linux")
-    monkeypatch.setattr(shell_ops.os, "getpgid", lambda pid: pid, raising=False)
+    monkeypatch.setattr(shell_ops, "_native_descendant_pids", lambda pid: [84])
     monkeypatch.setattr(
         shell_ops.os,
-        "killpg",
+        "kill",
         lambda pid, value: signals.append((pid, value)),
         raising=False,
     )
@@ -522,4 +545,21 @@ async def test_native_pipe_shell_translates_terminal_enter_and_interrupt(monkeyp
     await shell_ops._native_send_shell(session.session_id, "\x03", enter=False)
 
     assert stdin.writes == [b"printf ok\n"]
-    assert signals == [(42, shell_ops.signal.SIGINT)]
+    assert signals == [(84, shell_ops.signal.SIGINT)]
+
+
+def test_native_descendant_pids_are_deepest_first(monkeypatch):
+    from local_shell_mcp import shell_ops
+
+    monkeypatch.setattr(
+        shell_ops.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            stdout="42 1\n84 42\n126 84\n100 42\ninvalid\n"
+        ),
+    )
+
+    descendants = shell_ops._native_descendant_pids(42)
+
+    assert descendants[0] == 126
+    assert set(descendants) == {84, 100, 126}

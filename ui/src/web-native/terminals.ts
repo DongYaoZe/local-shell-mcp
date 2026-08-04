@@ -224,7 +224,8 @@ export class TerminalsController extends BaseController {
         return
       }
       if (event.code === 4411) {
-        this.setConnection("error", "Attachment exited")
+        this.setConnection("error", "Attachment interrupted")
+        this.scheduleReconnect()
         return
       }
       this.scheduleReconnect()

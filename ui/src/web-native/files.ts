@@ -104,19 +104,34 @@ export class FilesController extends BaseController {
 
   private renderActions(): void {
     const current = this.current()
+    const ready = this.payload !== null
     const target = this.root.querySelector<HTMLElement>("[data-role=actions]")
     if (!target) return
     target.innerHTML = [
       iconButton("Refresh", "refresh", "↻", this.busy),
-      button("New file", "new-file", { icon: "+" }),
-      button("New folder", "new-dir", { icon: "▰" }),
+      button("New file", "new-file", { icon: "+", disabled: !ready }),
+      button("New folder", "new-dir", { icon: "▰", disabled: !ready }),
       button("Edit", "edit", { disabled: !current || current.type === "dir" }),
       button("Rename", "rename", { disabled: !current }),
       button("Copy", "copy", { disabled: !current }),
       button("Move", "cut", { disabled: !current }),
-      button(this.clipboard ? `Paste ${this.clipboard.mode === "copy" ? "copy" : "move"}` : "Paste", "paste", { disabled: !this.clipboard }),
+      button(this.clipboard ? `Paste ${this.clipboard.mode === "copy" ? "copy" : "move"}` : "Paste", "paste", { disabled: !ready || !this.clipboard }),
       button("Delete", "delete", { danger: true, disabled: !current }),
     ].join("")
+  }
+
+  private navigate(path: string, pendingSelectionPath: string | null = null): void {
+    this.path = path
+    this.payload = null
+    this.preview = null
+    this.selectedPath = null
+    this.pendingSelectionPath = pendingSelectionPath
+    this.previewRequest += 1
+    this.renderBreadcrumbs()
+    this.renderParent()
+    this.renderDirectory()
+    this.renderActions()
+    void this.refresh()
   }
 
   async refresh(): Promise<void> {
@@ -166,9 +181,14 @@ export class FilesController extends BaseController {
   }
 
   private renderParent(): void {
-    const entries = (this.payload?.parent_entries || []).filter((entry) => this.showHidden || !entry.hidden)
     const list = this.root.querySelector<HTMLElement>("[data-role=parent-list]")
     const summary = this.root.querySelector<HTMLElement>("[data-role=parent-summary]")
+    if (!this.payload) {
+      if (summary) summary.textContent = "Loading…"
+      if (list) list.innerHTML = '<div class="native-loading">Loading parent directory…</div>'
+      return
+    }
+    const entries = this.payload.parent_entries.filter((entry) => this.showHidden || !entry.hidden)
     if (summary) summary.textContent = this.payload?.parent === this.path ? "Root" : this.payload?.parent || "."
     if (!list) return
     if (!entries.length) {
@@ -179,9 +199,16 @@ export class FilesController extends BaseController {
   }
 
   private renderDirectory(): void {
-    const entries = this.entries()
     const list = this.root.querySelector<HTMLElement>("[data-role=file-list]")
     const summary = this.root.querySelector<HTMLElement>("[data-role=directory-summary]")
+    if (!this.payload) {
+      if (summary) summary.textContent = `${this.machine}:${this.path} · loading`
+      if (list) list.innerHTML = '<div class="native-loading">Loading directory…</div>'
+      this.preview = null
+      this.renderPreview()
+      return
+    }
+    const entries = this.entries()
     if (summary) summary.textContent = `${this.machine}:${this.path} · ${entries.length} visible entries`
     if (!list) return
     if (!entries.length) {
@@ -261,11 +288,7 @@ export class FilesController extends BaseController {
   private activate(entry: FileEntry | undefined): void {
     if (!entry) return
     if (entry.type === "dir") {
-      this.path = entry.path
-      this.selectedPath = null
-      this.payload = null
-      this.renderBreadcrumbs()
-      void this.refresh()
+      this.navigate(entry.path)
     } else {
       void this.editCurrent()
     }
@@ -366,26 +389,15 @@ export class FilesController extends BaseController {
   private parent(): void {
     const parent = this.payload?.parent
     if (!parent || parent === this.path) return
-    this.path = parent
-    this.selectedPath = null
-    this.payload = null
-    this.pendingSelectionPath = null
-    this.renderBreadcrumbs()
-    void this.refresh()
+    this.navigate(parent)
   }
 
   private switchMachine(machine: string): void {
     if (!machine || machine === this.machine) return
     this.machine = machine
-    this.path = "."
-    this.payload = null
-    this.preview = null
-    this.selectedPath = null
     this.clipboard = null
-    this.pendingSelectionPath = null
     this.renderMachines()
-    this.renderBreadcrumbs()
-    void this.refresh()
+    this.navigate(".")
   }
 
   private onClick(event: MouseEvent): void {
@@ -397,9 +409,7 @@ export class FilesController extends BaseController {
     }
     const path = target.closest<HTMLElement>("[data-path]")?.dataset.path
     if (path) {
-      this.path = path
-      this.selectedPath = null
-      void this.refresh()
+      this.navigate(path)
       return
     }
     const entryPath = target.closest<HTMLElement>("[data-entry]")?.dataset.entry
@@ -412,18 +422,13 @@ export class FilesController extends BaseController {
       const previewEntry = this.preview?.entries?.find((entry) => entry.path === previewPath)
       const current = this.current()
       if (previewEntry && current?.type === "dir") {
-        this.path = current.path
-        this.pendingSelectionPath = previewEntry.path
-        this.selectedPath = null
-        void this.refresh()
+        this.navigate(current.path, previewEntry.path)
       }
       return
     }
     const parentPath = target.closest<HTMLElement>("[data-parent-path]")?.dataset.parentPath
     if (parentPath && parentPath !== this.path) {
-      this.path = parentPath
-      this.selectedPath = null
-      void this.refresh()
+      this.navigate(parentPath)
       return
     }
     const action = target.closest<HTMLElement>("[data-action]")?.dataset.action
@@ -465,9 +470,7 @@ export class FilesController extends BaseController {
       void this.loadPreview()
     }
     if (target instanceof HTMLInputElement && target.dataset.role === "path") {
-      this.path = target.value.trim() || "."
-      this.selectedPath = null
-      void this.refresh()
+      this.navigate(target.value.trim() || ".")
     }
   }
 

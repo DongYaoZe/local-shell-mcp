@@ -28,6 +28,7 @@ export class AuditController extends BaseController {
   private detail: AuditEntry | null = null
   private loading = false
   private refreshQueued = false
+  private totalMatched = 0
   private detailRequest = 0
   private filterTimer: number | null = null
   private filters = { node: "", operation: "", time: "24h", sort: "desc", search: "", event: "", session: "" }
@@ -69,10 +70,11 @@ export class AuditController extends BaseController {
       const payload = await this.context.api.get<AuditPayload>(`/audit${queryString({ limit: 800, node: requestedFilters.node, operation: requestedFilters.operation, search: requestedFilters.search, event: requestedFilters.event, session: requestedFilters.session, start_ts: range.seconds ? Date.now() / 1000 - range.seconds : undefined, sort: requestedFilters.sort })}`)
       if (this.destroyed || filtersChanged()) return
       this.entries = payload.entries
+      this.totalMatched = payload.total_matched
       this.selected = currentId ? Math.max(0, this.entries.findIndex((entry) => entry.id === currentId)) : Math.min(this.selected, Math.max(0, this.entries.length - 1))
       if (this.selected < 0) this.selected = 0
       this.loading = false
-      this.renderList(payload.total_matched)
+      this.renderList()
       void this.loadDetail()
     } catch (error) {
       if (this.destroyed || filtersChanged()) return
@@ -86,9 +88,9 @@ export class AuditController extends BaseController {
     }
   }
 
-  private renderList(total: number): void {
+  private renderList(): void {
     const summary = this.root.querySelector<HTMLElement>("[data-role=audit-summary]")
-    if (summary) summary.textContent = `${total} matching calls and events · ${this.loading ? "syncing" : "ready"}`
+    if (summary) summary.textContent = `${this.totalMatched} matching calls and events · ${this.loading ? "syncing" : "ready"}`
     const list = this.root.querySelector<HTMLElement>("[data-role=audit-list]")
     if (!list) return
     if (!this.entries.length) {
@@ -117,7 +119,7 @@ export class AuditController extends BaseController {
       this.detail = detail
       this.renderDetail()
     } catch (error) {
-      if (request !== this.detailRequest) return
+      if (request !== this.detailRequest || this.destroyed) return
       this.detail = current
       this.renderDetail()
       this.context.notify(`Audit detail: ${error instanceof Error ? error.message : String(error)}`, "error")
@@ -130,10 +132,11 @@ export class AuditController extends BaseController {
     const title = this.root.querySelector<HTMLElement>("[data-role=audit-title]")
     const meta = this.root.querySelector<HTMLElement>("[data-role=audit-meta]")
     const statusElement = this.root.querySelector<HTMLElement>("[data-role=audit-status]")
-    if (!entry || !target) {
+    if (!target) return
+    if (!entry) {
       if (title) title.textContent = "Call details"
       if (meta) meta.textContent = "Select a record"
-      target!.innerHTML = '<div class="native-empty">No record selected</div>'
+      target.innerHTML = '<div class="native-empty">No record selected</div>'
       return
     }
     const status = entry.paired === false ? entry.status === "running" ? "RUNNING" : "UNPAIRED" : entry.ok === false || entry.error || entry.status === "failed" ? "FAILED" : entry.ok === true || entry.status === "success" ? "SUCCESS" : String(entry.status || "EVENT").toUpperCase()
@@ -171,7 +174,7 @@ export class AuditController extends BaseController {
     const index = target.closest<HTMLElement>("[data-audit-index]")?.dataset.auditIndex
     if (index !== undefined) {
       this.selected = Number(index)
-      this.renderList(this.entries.length)
+      this.renderList()
       void this.loadDetail()
       return
     }
@@ -214,9 +217,9 @@ export class AuditController extends BaseController {
   private onKeyDown(event: KeyboardEvent): void {
     if (!this.root.isConnected || isTypingTarget(event.target)) return
     if (event.key === "ArrowDown" || event.key.toLowerCase() === "j") {
-      event.preventDefault(); this.selected = Math.min(this.entries.length - 1, this.selected + 1); this.renderList(this.entries.length); void this.loadDetail()
+      event.preventDefault(); this.selected = Math.min(this.entries.length - 1, this.selected + 1); this.renderList(); void this.loadDetail()
     } else if (event.key === "ArrowUp" || event.key.toLowerCase() === "k") {
-      event.preventDefault(); this.selected = Math.max(0, this.selected - 1); this.renderList(this.entries.length); void this.loadDetail()
+      event.preventDefault(); this.selected = Math.max(0, this.selected - 1); this.renderList(); void this.loadDetail()
     } else if (event.key.toLowerCase() === "r") void this.refresh()
     else if (event.key === "/") {
       event.preventDefault()

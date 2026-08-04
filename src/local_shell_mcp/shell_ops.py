@@ -623,6 +623,40 @@ async def _native_start_shell(
     }
 
 
+def _native_descendant_pids(parent_pid: int) -> list[int]:
+    """Return descendants deepest-first without signaling the persistent shell itself."""
+    try:
+        result = subprocess.run(
+            ["ps", "-axo", "pid=,ppid="],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=1,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+
+    children: dict[int, list[int]] = {}
+    for line in result.stdout.splitlines():
+        fields = line.split()
+        if len(fields) != 2:
+            continue
+        try:
+            pid, ppid = map(int, fields)
+        except ValueError:
+            continue
+        children.setdefault(ppid, []).append(pid)
+
+    descendants: list[tuple[int, int]] = []
+    stack = [(pid, 1) for pid in children.get(parent_pid, [])]
+    while stack:
+        pid, depth = stack.pop()
+        descendants.append((pid, depth))
+        stack.extend((child, depth + 1) for child in children.get(pid, []))
+    descendants.sort(key=lambda item: item[1], reverse=True)
+    return [pid for pid, _depth in descendants]
+
+
 async def _native_send_shell(session_id: str, input_text: str, enter: bool = True) -> dict:
     session = _get_native_session(session_id)
     if session.process.stdin is None:
@@ -641,10 +675,12 @@ async def _native_send_shell(session_id: str, input_text: str, enter: bool = Tru
 
     async def interrupt() -> None:
         if sys.platform != "win32":
-            try:
-                os.killpg(os.getpgid(session.process.pid), signal.SIGINT)
-            except OSError:
-                session.process.send_signal(signal.SIGINT)
+            descendants = await asyncio.to_thread(
+                _native_descendant_pids, session.process.pid
+            )
+            for pid in descendants:
+                with suppress(ProcessLookupError, PermissionError):
+                    os.kill(pid, signal.SIGINT)
             return
         ctrl_break = getattr(signal, "CTRL_BREAK_EVENT", None)
         if ctrl_break is not None:
