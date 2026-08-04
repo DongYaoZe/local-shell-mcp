@@ -19,6 +19,18 @@ describe("Native WebUI actions", () => {
     for (const source of sources) expect(source).not.toContain('this.listen(document, "keydown"')
   })
 
+  test("keeps file and remote rows keyboard accessible within their page", async () => {
+    const files = await Bun.file(new URL("./web-native/files.ts", import.meta.url)).text()
+    const remotes = await Bun.file(new URL("./web-native/remotes.ts", import.meta.url)).text()
+
+    for (const source of [files, remotes]) {
+      expect(source).toContain('this.listen(root, "keydown"')
+      expect(source).toContain('tabindex="${selected ? "0" : "-1"}"')
+      expect(source).toContain('event.key === "ArrowDown"')
+      expect(source).toContain('event.key === "Enter"')
+    }
+  })
+
   test("exposes the previously shortcut-oriented operations as buttons", async () => {
     const files = await Bun.file(new URL("./web-native/files.ts", import.meta.url)).text()
     const audit = await Bun.file(new URL("./web-native/audit.ts", import.meta.url)).text()

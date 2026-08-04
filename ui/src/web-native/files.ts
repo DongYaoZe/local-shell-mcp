@@ -53,6 +53,7 @@ export class FilesController extends BaseController {
     this.listen(root, "click", (event) => this.onClick(event))
     this.listen(root, "dblclick", (event) => this.onDoubleClick(event))
     this.listen(root, "change", (event) => this.onChange(event))
+    this.listen(root, "keydown", (event) => this.onListKeyDown(event as KeyboardEvent))
     void this.refresh()
   }
 
@@ -233,7 +234,10 @@ export class FilesController extends BaseController {
       this.renderPreview()
       return
     }
-    list.innerHTML = `<table class="native-table file-table"><thead><tr><th>Name</th><th>Size</th><th>Modified</th></tr></thead><tbody>${entries.map((entry) => `<tr class="${entry.path === this.selectedPath ? "selected" : ""}" data-entry="${escapeHtml(entry.path)}"><td><span class="file-kind ${entry.type === "dir" ? "directory" : ""}">${fileIcon(entry)}</span><span class="file-name ${entry.hidden ? "hidden" : ""}">${escapeHtml(entry.name)}</span></td><td>${entry.type === "dir" ? "dir" : formatBytes(entry.size)}</td><td>${formatDate(entry.modified)}</td></tr>`).join("")}</tbody></table>`
+    list.innerHTML = `<table class="native-table file-table" role="grid" aria-label="Directory entries"><thead><tr><th>Name</th><th>Size</th><th>Modified</th></tr></thead><tbody>${entries.map((entry) => {
+      const selected = entry.path === this.selectedPath
+      return `<tr class="${selected ? "selected" : ""}" data-entry="${escapeHtml(entry.path)}" tabindex="${selected ? "0" : "-1"}" aria-selected="${selected}" aria-label="${escapeHtml(`${entry.type === "dir" ? "Folder" : "File"} ${entry.name}`)}"><td><span class="file-kind ${entry.type === "dir" ? "directory" : ""}">${fileIcon(entry)}</span><span class="file-name ${entry.hidden ? "hidden" : ""}">${escapeHtml(entry.name)}</span></td><td>${entry.type === "dir" ? "dir" : formatBytes(entry.size)}</td><td>${formatDate(entry.modified)}</td></tr>`
+    }).join("")}</tbody></table>`
     this.renderActions()
   }
 
@@ -292,11 +296,21 @@ export class FilesController extends BaseController {
     target.innerHTML = `<pre class="code-preview ${preview.kind === "binary" ? "binary" : ""}"><code>${preview.kind === "binary" ? escapeHtml(content || "Empty file") : highlightedHtml(content || "Empty file", entry.name)}</code></pre>${preview.truncated ? '<div class="preview-warning">Preview truncated</div>' : ""}`
   }
 
-  private select(path: string): void {
-    if (this.selectedPath === path) return
+  private focusEntry(path: string): void {
+    const row = Array.from(this.root.querySelectorAll<HTMLElement>("[data-entry]"))
+      .find((element) => element.dataset.entry === path)
+    row?.focus()
+  }
+
+  private select(path: string, focus = false): void {
+    if (this.selectedPath === path) {
+      if (focus) this.focusEntry(path)
+      return
+    }
     this.selectedPath = path
     this.preview = null
     this.renderDirectory()
+    if (focus) this.focusEntry(path)
     void this.loadPreview()
   }
 
@@ -487,6 +501,33 @@ export class FilesController extends BaseController {
     if (target instanceof HTMLInputElement && target.dataset.role === "path") {
       this.navigate(target.value.trim() || ".")
     }
+  }
+
+  private onListKeyDown(event: KeyboardEvent): void {
+    const row = (event.target as HTMLElement).closest<HTMLElement>("[data-entry]")
+    const path = row?.dataset.entry
+    if (!path) return
+    const entries = this.entries()
+    const index = entries.findIndex((entry) => entry.path === path)
+    if (index < 0) return
+    let nextIndex: number | null = null
+    if (event.key === "ArrowDown") nextIndex = Math.min(entries.length - 1, index + 1)
+    else if (event.key === "ArrowUp") nextIndex = Math.max(0, index - 1)
+    else if (event.key === "Home") nextIndex = 0
+    else if (event.key === "End") nextIndex = entries.length - 1
+    else if (event.key === "Enter") {
+      event.preventDefault()
+      this.activate(entries[index])
+      return
+    } else if (event.key === " ") {
+      event.preventDefault()
+      this.select(path, true)
+      return
+    }
+    if (nextIndex === null) return
+    event.preventDefault()
+    const next = entries[nextIndex]
+    if (next) this.select(next.path, true)
   }
 
 }
