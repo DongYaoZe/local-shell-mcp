@@ -70,7 +70,7 @@ The intended isolation boundary is the container or VM running the service.
 | Git | `run_shell_tool`, `run_shell_tool`, `run_shell_tool`, `run_shell_tool` | Reviewable source-control workflows |
 | Browser | `browser_session`, `browser_snapshot`, `browser_act`, one-shot capture/text tools, `playwright_run_script_tool` | Persistent interaction, UI checks, screenshots, rendered docs, page text |
 | File links | `create_file_link`, `revoke_file_link` | Downloading generated artifacts from chat |
-| Remote workers | `remote_invite`, `run_shell_tool`, `transfer_path` | Machines behind NAT, firewalls, or cluster login flows |
+| Remote workers | `remote_manage`, `run_shell_tool`, `remote_transfer` | Machines behind NAT, firewalls, or cluster login flows |
 
 ## Typical workflows
 
@@ -87,7 +87,7 @@ The intended isolation boundary is the container or VM running the service.
 
 1. Create a one-time remote worker invite.
 2. Paste the generated command on the remote host.
-3. Use normal tools with `machine`; run Git through `run_shell_tool` and transfer paths with `transfer_path`.
+3. Use normal tools with `machine`; run Git through `run_shell_tool` and transfer paths with `remote_transfer`.
 4. Revoke the worker after the task.
 
 ### Artifact generation

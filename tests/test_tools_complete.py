@@ -176,7 +176,7 @@ async def test_all_public_tool_wrappers_local_and_remote(tmp_path, monkeypatch):
         "edit_file": {"path": "x", "edits": [], "purpose": "test"},
         "delete_file_or_dir": {"path": "x", "purpose": "test"},
         "apply_patch": {"patch": "diff", "purpose": "test"},
-        "transfer_path": {"source_path": "a", "destination_path": "b", "destination_machine": "node", "purpose": "test"},
+        "remote_transfer": {"source_path": "a", "destination_path": "b", "destination_machine": "node", "purpose": "test"},
         "secret_scan": {},
         "todo_read_tool": {},
         "todo_write_tool": {"todos": []},
@@ -191,10 +191,7 @@ async def test_all_public_tool_wrappers_local_and_remote(tmp_path, monkeypatch):
         "browser_get_text_tool": {"url": "https://example.test"},
         "playwright_run_script_tool": {"script": "print(1)"},
         "audit_tail": {},
-        "remote_invite": {"name": "node"},
-        "remote_list_machines": {},
-        "remote_revoke_machine": {"machine": "node"},
-        "remote_rename_machine": {"machine": "node", "new_name": "renamed"},
+        "remote_manage": {"action": "list"},
     }
     assert set(local_cases) == set(mcp._tool_manager._tools)
     for name, kwargs in local_cases.items():
@@ -204,6 +201,23 @@ async def test_all_public_tool_wrappers_local_and_remote(tmp_path, monkeypatch):
     search_payload = json.loads(await _raw_tool(mcp, "search")(query="needle"))
     assert len(search_payload["results"]) == 1
     assert search_payload["results"][0]["title"] == "found.txt:1"
+
+    invite = await _raw_tool(mcp, "remote_manage")(
+        action="invite", name="node", workdir="/workspace", ttl_s=120
+    )
+    assert invite["ok"] is True
+    assert invite["data"] == {"name": "node", "workdir": "/workspace", "ttl_s": 120}
+    renamed = await _raw_tool(mcp, "remote_manage")(
+        action="rename", machine="node", new_name="renamed"
+    )
+    assert renamed["ok"] is True
+    assert renamed["data"] == {"old_name": "node", "new_name": "renamed"}
+    revoked = await _raw_tool(mcp, "remote_manage")(action="revoke", machine="node")
+    assert revoked["ok"] is True
+    assert revoked["data"] == {"machine": "node", "revoked": True}
+    invalid = await _raw_tool(mcp, "remote_manage")(action="rename", machine="node")
+    assert invalid.isError is True
+    assert _handled_error_data(invalid)["message"] == "new_name is required for action=rename"
 
     remote_cases = {
         "environment_info": {},
@@ -315,7 +329,7 @@ async def test_tool_wrapper_error_paths_and_remote_disabled(tmp_path, monkeypatc
         ("edit_file", {"path": "x", "edits": []}),
         ("delete_file_or_dir", {"path": "x"}),
         ("apply_patch", {"patch": "x"}),
-        ("transfer_path", {"source_path": "a", "destination_path": "b"}),
+        ("remote_transfer", {"source_path": "a", "destination_path": "b"}),
         ("secret_scan", {}),
         ("todo_read_tool", {}),
         ("todo_write_tool", {"todos": []}),
@@ -334,10 +348,7 @@ async def test_tool_wrapper_error_paths_and_remote_disabled(tmp_path, monkeypatc
 
     _configure(tmp_path, monkeypatch, remote_enabled=False)
     disabled = tools.build_mcp()
-    assert not any(
-        name.startswith("remote_") or name == "transfer_path"
-        for name in disabled._tool_manager._tools
-    )
+    assert not any(name.startswith("remote_") for name in disabled._tool_manager._tools)
 
 
 def test_tool_helpers_audit_serialization_timeout_and_tail(tmp_path, monkeypatch):

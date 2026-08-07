@@ -163,11 +163,11 @@ The public MCP surface includes:
 
 - Shell and jobs: `run_shell_tool`, `run_python_tool`, persistent `shell_*`, and tracked `job_*` tools. Use `run_shell_tool` for Git CLI operations.
 - Filesystem: `list_files`, `tree_view`, `glob_search`, `grep_search`, unified `read_file`, native-vision `view_image`, `write_file`, unified `edit_file`, `delete_file_or_dir`, and `apply_patch`.
-- Transfer: `transfer_path` for files or directories across controller and worker endpoints.
+- Transfer: `remote_transfer` for files or directories across controller and worker endpoints.
 - Dynamic MCP: `mcp_manage`, `mcp_tool_search`, `mcp_tool_inspect`, and `mcp_tool_call`. External tools are discovered progressively and never expand LSM's own `tools/list` surface.
 - Browser: persistent high-level `browser_session`, `browser_snapshot`, and `browser_act`; one-shot `browser_get_text_tool` / `browser_capture_tool`; `playwright_run_script_tool` remains the low-level escape hatch.
 - File links: `create_file_link`, `list_file_links`, `revoke_file_link`.
-- Remote workers: `remote_invite`, `remote_list_machines`, `remote_rename_machine`, and `remote_revoke_machine`; normal execution tools accept optional `machine`.
+- Remote workers: `remote_manage` with `invite`, `list`, `rename`, and `revoke` actions; normal execution tools accept optional `machine`.
 - Agent Skills: `skills_list`, `skill_load`, `skill_read_file`.
 - Diagnostics: `environment_info` (including version information), `secret_scan`, `audit_tail`, `todo_read_tool`, and `todo_write_tool`.
 

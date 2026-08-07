@@ -60,7 +60,7 @@ GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "edit_file",
             "delete_file_or_dir",
             "apply_patch",
-            "transfer_path",
+            "remote_transfer",
             "create_file_link",
             "list_file_links",
             "revoke_file_link",
@@ -89,10 +89,7 @@ GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
         "Remote worker administration",
         (
-            "remote_invite",
-            "remote_list_machines",
-            "remote_revoke_machine",
-            "remote_rename_machine",
+            "remote_manage",
         ),
     ),
 )
@@ -152,7 +149,7 @@ async def generate() -> str:
         "| Run a short command or Git operation | `run_shell_tool` |",
         "| Run an interactive or long task | `shell_start` or `job_start` |",
         "| Make exact file changes | `edit_file` or `apply_patch` |",
-        "| Transfer a file or directory | `transfer_path` |",
+        "| Transfer a file or directory | `remote_transfer` |",
         "| Discover an external MCP capability | `mcp_tool_search`, then `mcp_tool_inspect` |",
         "| Interact with a page | `browser_session`, `browser_snapshot`, then `browser_act` |",
         "| Capture a one-shot page | `browser_get_text_tool` or `browser_capture_tool` |",
@@ -199,7 +196,7 @@ async def generate() -> str:
                         "",
                     ]
                 )
-            if name == "transfer_path":
+            if name == "remote_transfer":
                 lines.extend(
                     [
                         "At least one of `source_machine` and `destination_machine` must be supplied. Omitted endpoints refer to the controller workspace; the source may be either a file or a directory.",
