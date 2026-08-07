@@ -68,9 +68,9 @@ Docker、VS Code 扩展、二进制、Python 和 stdio 是运行时；ChatGPT �
 | Shell 和 Python | `run_shell_tool`, `run_python_tool`, `shell_start` | 构建、测试、脚本、长时间进程 |
 | 文件和搜索 | `tree_view`, `grep_search`, `read_file`, `apply_patch` | 仓库检查和精确修改 |
 | Git | `run_shell_tool`, `run_shell_tool`, `run_shell_tool`, `run_shell_tool` | 可审查的源码管理流程 |
-| 浏览器 | `browser_session`, `browser_snapshot`, `browser_act`、一次性截图/文本工具、`playwright_run_script_tool` | 持久交互、UI 检查、截图、渲染文档、页面文本 |
+| 浏览器 | `browser_session`, `browser_snapshot`, `browser_act`、`browser_run_script` | 持久交互、UI 检查、截图、渲染文档、页面文本 |
 | 文件链接 | `create_file_link`, `revoke_file_link` | 从聊天中下载生成产物 |
-| 远程节点 | `remote_invite`, `run_shell_tool`, `transfer_path` | NAT、防火墙或集群登录流程后的机器 |
+| 远程节点 | `remote_manage`, `run_shell_tool`, `remote_transfer` | NAT、防火墙或集群登录流程后的机器 |
 
 ## 典型工作流
 
@@ -87,7 +87,7 @@ Docker、VS Code 扩展、二进制、Python 和 stdio 是运行时；ChatGPT �
 
 1. 创建一次性远程节点邀请。
 2. 在远程主机上粘贴生成的命令。
-3. 通过普通工具的 `machine` 参数操作远程节点；Git 使用 `run_shell_tool`，路径传输使用 `transfer_path`。
+3. 通过普通工具的 `machine` 参数操作远程节点；Git 使用 `run_shell_tool`，路径传输使用 `remote_transfer`。
 4. 任务结束后撤销该节点。
 
 ### 产物生成

@@ -46,18 +46,13 @@ CORE_TOOL_NAMES = {
     "browser_session",
     "browser_snapshot",
     "browser_act",
-    "browser_capture_tool",
-    "browser_get_text_tool",
-    "playwright_run_script_tool",
+    "browser_run_script",
     "audit_tail",
 }
 
 REMOTE_DEPENDENT_TOOL_NAMES = {
-    "transfer_path",
-    "remote_invite",
-    "remote_list_machines",
-    "remote_revoke_machine",
-    "remote_rename_machine",
+    "remote_manage",
+    "remote_transfer",
 }
 
 REMOVED_TOOL_NAMES = {
@@ -75,7 +70,15 @@ REMOVED_TOOL_NAMES = {
     "browser_screenshot_tool",
     "browser_pdf_tool",
     "browser_eval_tool",
+    "browser_capture_tool",
+    "browser_get_text_tool",
+    "playwright_run_script_tool",
     "playwright_install_tool",
+    "transfer_path",
+    "remote_invite",
+    "remote_list_machines",
+    "remote_revoke_machine",
+    "remote_rename_machine",
 }
 
 
@@ -139,14 +142,12 @@ async def test_machine_capable_tools_use_optional_machine_arguments(tmp_path, mo
         "browser_session",
         "browser_snapshot",
         "browser_act",
-        "browser_capture_tool",
-        "browser_get_text_tool",
-        "playwright_run_script_tool",
+        "browser_run_script",
     }
 
     for name in machine_capable:
         assert "machine" in tools[name].inputSchema["properties"], name
-    transfer_properties = tools["transfer_path"].inputSchema["properties"]
+    transfer_properties = tools["remote_transfer"].inputSchema["properties"]
     assert {"source_machine", "destination_machine"} <= set(transfer_properties)
 
     edit_schema = tools["edit_file"].inputSchema
@@ -179,7 +180,7 @@ async def test_key_tool_descriptions_guide_tool_choice(tmp_path, monkeypatch):
     assert "tools/list" in tools["mcp_tool_search"].description
     assert "mcp_tool_inspect" in tools["mcp_tool_search"].description
     assert "stable short refs" in tools["browser_snapshot"].description
-    assert "playwright_run_script_tool" in tools["browser_act"].description
+    assert "browser_run_script" in tools["browser_act"].description
 
 
 @pytest.mark.asyncio

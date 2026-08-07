@@ -50,6 +50,27 @@ def _handled_error_data(result: CallToolResult) -> dict:
     return result.structuredContent["data"]
 
 
+@pytest.mark.asyncio
+async def test_dynamic_mcp_downstream_error_is_exposed_as_tool_error(tmp_path, monkeypatch):
+    _configure(tmp_path, monkeypatch)
+
+    async def fake_call(_self, name, arguments=None, *, timeout_s=None):
+        return {
+            "name": name,
+            "result": {
+                "content": [{"type": "text", "text": "downstream failed"}],
+                "isError": True,
+            },
+        }
+
+    monkeypatch.setattr(tools.DynamicMCPManager, "call", fake_call)
+    mcp = tools.build_mcp()
+    result = await _raw_tool(mcp, "mcp_tool_call")("demo:fail", {"x": 1})
+    data = _handled_error_data(result)
+    assert data["name"] == "demo:fail"
+    assert data["result"]["isError"] is True
+
+
 class FakeRemoteManager:
     def __init__(self):
         self.calls = []
@@ -117,8 +138,6 @@ async def test_all_public_tool_wrappers_local_and_remote(tmp_path, monkeypatch):
         "_apply_patch_text",
         "_start_transfer_job",
         "_secret_scan",
-        "browser_capture",
-        "browser_get_text",
         "playwright_run_script",
     ):
         monkeypatch.setattr(tools, name, async_value)
@@ -176,7 +195,7 @@ async def test_all_public_tool_wrappers_local_and_remote(tmp_path, monkeypatch):
         "edit_file": {"path": "x", "edits": [], "purpose": "test"},
         "delete_file_or_dir": {"path": "x", "purpose": "test"},
         "apply_patch": {"patch": "diff", "purpose": "test"},
-        "transfer_path": {"source_path": "a", "destination_path": "b", "destination_machine": "node", "purpose": "test"},
+        "remote_transfer": {"source_path": "a", "destination_path": "b", "destination_machine": "node", "purpose": "test"},
         "secret_scan": {},
         "todo_read_tool": {},
         "todo_write_tool": {"todos": []},
@@ -187,14 +206,9 @@ async def test_all_public_tool_wrappers_local_and_remote(tmp_path, monkeypatch):
         "browser_session": {"action": "list"},
         "browser_snapshot": {"session_id": "missing"},
         "browser_act": {"session_id": "missing", "actions": [{"action": "wait"}]},
-        "browser_capture_tool": {"url": "https://example.test"},
-        "browser_get_text_tool": {"url": "https://example.test"},
-        "playwright_run_script_tool": {"script": "print(1)"},
+        "browser_run_script": {"script": "print(1)"},
         "audit_tail": {},
-        "remote_invite": {"name": "node"},
-        "remote_list_machines": {},
-        "remote_revoke_machine": {"machine": "node"},
-        "remote_rename_machine": {"machine": "node", "new_name": "renamed"},
+        "remote_manage": {"action": "list"},
     }
     assert set(local_cases) == set(mcp._tool_manager._tools)
     for name, kwargs in local_cases.items():
@@ -204,6 +218,23 @@ async def test_all_public_tool_wrappers_local_and_remote(tmp_path, monkeypatch):
     search_payload = json.loads(await _raw_tool(mcp, "search")(query="needle"))
     assert len(search_payload["results"]) == 1
     assert search_payload["results"][0]["title"] == "found.txt:1"
+
+    invite = await _raw_tool(mcp, "remote_manage")(
+        action="invite", name="node", workdir="/workspace", ttl_s=120
+    )
+    assert invite["ok"] is True
+    assert invite["data"] == {"name": "node", "workdir": "/workspace", "ttl_s": 120}
+    renamed = await _raw_tool(mcp, "remote_manage")(
+        action="rename", machine="node", new_name="renamed"
+    )
+    assert renamed["ok"] is True
+    assert renamed["data"] == {"old_name": "node", "new_name": "renamed"}
+    revoked = await _raw_tool(mcp, "remote_manage")(action="revoke", machine="node")
+    assert revoked["ok"] is True
+    assert revoked["data"] == {"machine": "node", "revoked": True}
+    invalid = await _raw_tool(mcp, "remote_manage")(action="rename", machine="node")
+    assert invalid.isError is True
+    assert _handled_error_data(invalid)["message"] == "new_name is required for action=rename"
 
     remote_cases = {
         "environment_info": {},
@@ -232,9 +263,7 @@ async def test_all_public_tool_wrappers_local_and_remote(tmp_path, monkeypatch):
         "browser_session": {"action": "list"},
         "browser_snapshot": {"session_id": "s"},
         "browser_act": {"session_id": "s", "actions": [{"action": "wait"}]},
-        "browser_capture_tool": {"url": "https://x"},
-        "browser_get_text_tool": {"url": "https://x"},
-        "playwright_run_script_tool": {"script": "x"},
+        "browser_run_script": {"script": "x"},
     }
     for name, kwargs in remote_cases.items():
         result = await _raw_tool(mcp, name)(**kwargs, machine="node")
@@ -281,8 +310,6 @@ async def test_tool_wrapper_error_paths_and_remote_disabled(tmp_path, monkeypatc
     monkeypatch.setattr(tools, "_secret_scan", fail_async)
     monkeypatch.setattr(tools, "todo_read", fail_sync)
     monkeypatch.setattr(tools, "todo_write", fail_sync)
-    monkeypatch.setattr(tools, "browser_capture", fail_async)
-    monkeypatch.setattr(tools, "browser_get_text", fail_async)
     monkeypatch.setattr(tools, "playwright_run_script", fail_async)
     monkeypatch.setattr(tools, "_read_audit_tail_entries", fail_sync)
     fake_remote = FakeRemoteManager()
@@ -315,13 +342,11 @@ async def test_tool_wrapper_error_paths_and_remote_disabled(tmp_path, monkeypatc
         ("edit_file", {"path": "x", "edits": []}),
         ("delete_file_or_dir", {"path": "x"}),
         ("apply_patch", {"patch": "x"}),
-        ("transfer_path", {"source_path": "a", "destination_path": "b"}),
+        ("remote_transfer", {"source_path": "a", "destination_path": "b"}),
         ("secret_scan", {}),
         ("todo_read_tool", {}),
         ("todo_write_tool", {"todos": []}),
-        ("browser_capture_tool", {"url": "x"}),
-        ("browser_get_text_tool", {"url": "x"}),
-        ("playwright_run_script_tool", {"script": "x"}),
+        ("browser_run_script", {"script": "x"}),
         ("audit_tail", {}),
     ]
     for name, kwargs in checks:
@@ -334,10 +359,7 @@ async def test_tool_wrapper_error_paths_and_remote_disabled(tmp_path, monkeypatc
 
     _configure(tmp_path, monkeypatch, remote_enabled=False)
     disabled = tools.build_mcp()
-    assert not any(
-        name.startswith("remote_") or name == "transfer_path"
-        for name in disabled._tool_manager._tools
-    )
+    assert not any(name.startswith("remote_") for name in disabled._tool_manager._tools)
 
 
 def test_tool_helpers_audit_serialization_timeout_and_tail(tmp_path, monkeypatch):

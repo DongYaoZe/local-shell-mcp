@@ -25,9 +25,9 @@ Use this loop for most coding tasks:
 | Multi-file patch | `apply_patch` | Ad hoc shell edits |
 | Finding files | `tree_view`, `glob_search` | Full recursive listings of large repositories |
 | Finding code | `grep_search` | Reading many files blindly |
-| Browser evidence | `browser_capture_tool`, `browser_get_text_tool` | Guessing from page names or routes |
+| Browser evidence | `browser_snapshot`, `browser_run_script` | Guessing from page names or routes |
 | Downloadable artifacts | `create_file_link` | Pasting large binary content into chat |
-| Remote machine work | normal tools with `machine`, plus `transfer_path` | Opening inbound SSH when outbound worker mode is enough |
+| Remote machine work | normal tools with `machine`, plus `remote_transfer` | Opening inbound SSH when outbound worker mode is enough |
 
 ## Prompt templates
 
@@ -92,10 +92,10 @@ Remote worker mode is useful when a machine can make outbound HTTPS requests but
 
 Good practice:
 
-- Name machines clearly with `remote_invite` or `remote_rename_machine`.
+- Create or rename machines with `remote_manage(action="invite", ...)` or `remote_manage(action="rename", ...)`.
 - Call `environment_info(machine=...)` before acting.
-- Use `transfer_path` to start tracked controller/worker and worker/worker file or directory transfers, then manage them with the normal `job_*` tools.
-- Revoke workers after the task with `remote_revoke_machine`.
+- Use `remote_transfer` to start tracked controller/worker and worker/worker file or directory transfers, then manage them with the normal `job_*` tools.
+- Revoke workers after the task with `remote_manage(action="revoke", ...)`.
 
 ## Anti-patterns
 

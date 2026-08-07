@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import sys
 from contextlib import asynccontextmanager
@@ -119,12 +120,17 @@ async def test_register_without_refresh_and_refresh_failure_are_recoverable(tmp_
         refresh=False,
     )
     assert saved["refreshed"] is False
+    assert saved["server"]["cwd"] == str(tmp_path.resolve())
     search = await manager.search(server="cold")
     assert search["tools"] == []
     assert search["unrefreshed_servers"] == ["cold"]
 
     async def fail_refresh(_server):
-        raise RuntimeError("offline env-secret header-secret")
+        raise RuntimeError(
+            "offline env-secret header-secret "
+            "postgres://user:db-pass@db.example.test/app "
+            "DefaultEndpointsProtocol=https;AccountKey=storage-secret"
+        )
 
     monkeypatch.setattr(manager, "_fetch_tools", fail_refresh)
     failed = await manager.manage(
@@ -132,13 +138,23 @@ async def test_register_without_refresh_and_refresh_failure_are_recoverable(tmp_
         name="broken",
         command=sys.executable,
         args=[str(script)],
-        env={"TOKEN": "env-secret"},
+        env={
+            "TOKEN": "env-secret",
+            "DATABASE_URL": "postgres://user:db-pass@db.example.test/app",
+            "AZURE_STORAGE_CONNECTION_STRING": (
+                "DefaultEndpointsProtocol=https;AccountKey=storage-secret"
+            ),
+        },
         headers={"Authorization": "header-secret"},
     )
     assert failed["refreshed"] is False
-    assert failed["refresh_error"] == "offline <redacted> <redacted>"
+    assert failed["refresh_error"] == (
+        "offline <redacted> <redacted> <redacted> <redacted>"
+    )
     assert "env-secret" not in repr(failed)
     assert "header-secret" not in repr(failed)
+    assert "db-pass" not in repr(failed)
+    assert "storage-secret" not in repr(failed)
     assert {row["name"] for row in (await manager.manage(action="list"))["servers"]} == {
         "broken",
         "cold",
@@ -192,7 +208,9 @@ async def test_http_transport_pagination_call_and_tool_limit(tmp_path, monkeypat
 
         async def call_tool(self, name, arguments):
             seen["call"] = (name, arguments)
-            return CallToolResult(content=[TextContent(type="text", text="ok")], isError=False)
+            return CallToolResult(
+                content=[TextContent(type="text", text="ok Bearer hidden")], isError=False
+            )
 
     monkeypatch.setattr(dynamic_mcp, "streamablehttp_client", fake_http)
     monkeypatch.setattr(dynamic_mcp, "ClientSession", FakeSession)
@@ -207,12 +225,180 @@ async def test_http_transport_pagination_call_and_tool_limit(tmp_path, monkeypat
         "web:beta",
     ]
     called = await manager.call("web:alpha", {"x": 1}, timeout_s=5)
-    assert called["result"]["content"][0]["text"] == "ok"
+    assert called["result"]["content"][0]["text"] == "ok <redacted>"
+    assert "Bearer hidden" not in repr(called)
     assert seen["call"] == ("alpha", {"x": 1})
 
     monkeypatch.setattr(dynamic_mcp, "_MAX_TOOLS_PER_SERVER", 1)
     with pytest.raises(ValueError, match="more than 1 tools"):
         await manager.refresh("web")
+
+
+def test_config_redaction_only_treats_secret_like_values_as_substrings():
+    server = dynamic_mcp.DynamicMCPServer(
+        name="demo",
+        transport="stdio",
+        env={
+            "FLAG": "1",
+            "MODE": "on",
+            "TYPE_TOKEN": "text",
+            "TOKEN": "token-12345",
+            "SHORT_TOKEN": "abc",
+            "GITHUB_PAT": "github-pat-secret",
+            "PGPASSWORD": "postgres-secret",
+            "DATABASE_URL": "postgres://user:db-pass@db.example.test/app",
+            "AZURE_STORAGE_CONNECTION_STRING": (
+                "DefaultEndpointsProtocol=https;AccountKey=storage-secret"
+            ),
+        },
+        headers={"Authorization": "Bearer hidden"},
+    )
+    payload = {
+        "content": [
+            {
+                "type": "text",
+                "text": (
+                    "version 1 is on; token-12345; Bearer hidden; abc suffix; "
+                    "github-pat-secret; postgres-secret; "
+                    "postgres://user:db-pass@db.example.test/app; "
+                    "DefaultEndpointsProtocol=https;AccountKey=storage-secret"
+                ),
+            }
+        ],
+        "structuredContent": {
+            "type": "abc",
+            "mode": "on",
+            "flag": "1",
+            "token": "abc",
+            "Bearer hidden": True,
+            "prefix-token-12345-suffix": "value",
+        },
+    }
+
+    redacted = dynamic_mcp._redact_config_value(payload, server)
+
+    assert redacted["content"][0]["type"] == "text"
+    assert redacted["content"][0]["text"] == (
+        "version 1 is on; <redacted>; <redacted>; abc suffix; <redacted>; <redacted>; "
+        "<redacted>; <redacted>"
+    )
+    assert redacted["structuredContent"]["type"] == "<redacted>"
+    assert redacted["structuredContent"]["mode"] == "on"
+    assert redacted["structuredContent"]["flag"] == "1"
+    assert redacted["structuredContent"]["token"] == "<redacted>"
+    assert redacted["structuredContent"]["<redacted>"] is True
+    assert redacted["structuredContent"]["prefix-<redacted>-suffix"] == "value"
+    assert "Bearer hidden" not in repr(redacted)
+    assert "token-12345" not in repr(redacted)
+    assert "github-pat-secret" not in repr(redacted)
+    assert "postgres-secret" not in repr(redacted)
+    assert "db-pass" not in repr(redacted)
+    assert "storage-secret" not in repr(redacted)
+
+
+def test_config_redaction_preserves_call_tool_result_root_keys():
+    server = dynamic_mcp.DynamicMCPServer(
+        name="demo",
+        transport="stdio",
+        env={
+            "CONTENT_TOKEN": "content",
+            "ERROR_TOKEN": "isError",
+            "STRUCTURED_TOKEN": "structuredContent",
+            "META_TOKEN": "_meta",
+        },
+    )
+    payload = {
+        "content": [{"type": "text", "text": "ok"}],
+        "structuredContent": {"content": "content"},
+        "isError": True,
+        "_meta": {"isError": "isError"},
+    }
+
+    redacted = dynamic_mcp._redact_config_value(payload, server)
+
+    assert set(redacted) == {"content", "structuredContent", "isError", "_meta"}
+    assert redacted["isError"] is True
+    assert redacted["structuredContent"] == {"<redacted>": "<redacted>"}
+    assert redacted["_meta"] == {"<redacted>": "<redacted>"}
+
+
+@pytest.mark.asyncio
+async def test_legacy_stdio_registry_without_cwd_uses_workspace(tmp_path):
+    state_dir = tmp_path / ".state"
+    state_dir.mkdir()
+    registry = state_dir / "dynamic-mcp.json"
+    registry.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "servers": [
+                    {
+                        "name": "legacy",
+                        "transport": "stdio",
+                        "enabled": True,
+                        "command": sys.executable,
+                        "args": [],
+                        "cwd": None,
+                        "env": {},
+                        "headers": {},
+                        "tools": [],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manager = DynamicMCPManager(state_dir)
+    server = (await manager.manage(action="get", name="legacy"))["server"]
+    assert server["cwd"] == str(tmp_path.resolve())
+
+
+@pytest.mark.asyncio
+async def test_registry_uses_same_compact_encoding_as_schema_limits(tmp_path):
+    state_dir = tmp_path / ".state"
+    manager = DynamicMCPManager(state_dir)
+    await manager.manage(
+        action="register",
+        name="compact",
+        command=sys.executable,
+        refresh=False,
+    )
+    raw = (state_dir / "dynamic-mcp.json").read_text(encoding="utf-8")
+    assert "\n  " not in raw
+    assert json.loads(raw)["servers"][0]["name"] == "compact"
+
+
+@pytest.mark.asyncio
+async def test_tool_schema_cache_enforces_descriptor_and_total_byte_limits(tmp_path, monkeypatch):
+    manager = DynamicMCPManager(tmp_path / ".state")
+    server = dynamic_mcp.DynamicMCPServer(
+        name="demo", transport="stdio", command=sys.executable, cwd=str(tmp_path)
+    )
+
+    class FakeSession:
+        async def list_tools(self, cursor=None):
+            return SimpleNamespace(
+                tools=[
+                    Tool(name="one", description="x" * 80, inputSchema={}),
+                    Tool(name="two", description="y" * 80, inputSchema={}),
+                ],
+                nextCursor=None,
+            )
+
+    @asynccontextmanager
+    async def fake_session(_server):
+        yield FakeSession()
+
+    monkeypatch.setattr(manager, "_session", fake_session)
+    monkeypatch.setattr(dynamic_mcp, "_MAX_TOOL_DESCRIPTOR_BYTES", 64)
+    with pytest.raises(ValueError, match="descriptor exceeds"):
+        await manager._fetch_tools(server)
+
+    monkeypatch.setattr(dynamic_mcp, "_MAX_TOOL_DESCRIPTOR_BYTES", 1024)
+    monkeypatch.setattr(dynamic_mcp, "_MAX_TOOL_CACHE_BYTES_PER_SERVER", 200)
+    with pytest.raises(ValueError, match="cache exceeds"):
+        await manager._fetch_tools(server)
 
 
 @pytest.mark.asyncio

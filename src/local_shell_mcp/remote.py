@@ -52,7 +52,7 @@ from .fs_ops import (
 from .jobs import list_jobs, retry_job, start_job, stop_job, tail_job
 from .models import ok_result as _ok
 from .patch_ops import git_apply_command, git_apply_prefix, normalize_patch_text
-from .playwright_ops import browser_capture, browser_get_text, playwright_run_script
+from .playwright_ops import playwright_run_script
 from .search_ops import grep, tree
 from .settings import get_settings, safe_settings_dump
 from .shell_ops import (
@@ -1131,9 +1131,7 @@ WORKER_BROWSER_TOOLS = frozenset(
         "browser_session",
         "browser_snapshot",
         "browser_act",
-        "browser_capture_tool",
-        "browser_get_text_tool",
-        "playwright_run_script_tool",
+        "browser_run_script",
     }
 )
 REMOTE_WORKER_TOOL_NAMES = frozenset().union(
@@ -1596,27 +1594,7 @@ async def _execute_browser_worker_tool(tool: str, args: dict[str, Any]) -> Any:
             timeout_ms=args.get("timeout_ms", 30_000),
         )
 
-    if tool == "browser_capture_tool":
-        return await browser_capture(
-            args["url"],
-            args.get("output_path"),
-            args.get("capture_format", "png"),
-            args.get("browser", "chromium"),
-            args.get("full_page", True),
-            args.get("width", 1440),
-            args.get("height", 1000),
-            args.get("wait_until", "networkidle"),
-        )
-
-    if tool == "browser_get_text_tool":
-        return await browser_get_text(
-            args["url"],
-            args.get("browser", "chromium"),
-            args.get("wait_until", "networkidle"),
-            args.get("selector", "body"),
-        )
-
-    if tool == "playwright_run_script_tool":
+    if tool == "browser_run_script":
         return await playwright_run_script(
             args["script"], args.get("cwd", "."), args.get("timeout_s", 60)
         )

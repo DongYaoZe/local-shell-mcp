@@ -130,6 +130,23 @@ async def test_browser_session_snapshot_refs_actions_and_storage_state(tmp_path,
     assert await original_page.locator("#check").is_checked() is False
     assert await original_page.locator("#status").inner_text() == "clicked"
 
+    await original_page.locator("#link").evaluate(
+        """
+element => {
+  element.setAttribute('name', 'n'.repeat(10000));
+  element.setAttribute('aria-label', 'a'.repeat(10000));
+  element.href = 'https://example.test/' + 'x'.repeat(10000);
+}
+"""
+    )
+    bounded_metadata = await manager.snapshot(
+        session_id, page_id=page_id, screenshot=False, include_text=False, max_elements=50
+    )
+    link = next(item for item in bounded_metadata["interactive_elements"] if item["tag"] == "a")
+    assert len(link["name"]) == browser_sessions._MAX_ELEMENT_METADATA_CHARS
+    assert len(link["href"]) == browser_sessions._MAX_ELEMENT_METADATA_CHARS
+    assert len(link["text"]) <= 500
+
     new_page = await manager.act(
         session_id,
         [
@@ -425,7 +442,241 @@ async def test_close_releases_browser_when_storage_state_save_fails(tmp_path):
     with pytest.raises(RuntimeError, match="save failed"):
         await manager.close("session", save_storage_state_path="state.json")
     assert manager._sessions == {}
+    assert manager._closing_sessions == {}
     assert closed == {"context": True, "browser": True, "playwright": True}
+
+
+@pytest.mark.asyncio
+async def test_explicit_close_stays_within_capacity_while_inflight(tmp_path, monkeypatch):
+    manager = BrowserSessionManager(tmp_path / ".state")
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    session = BrowserSessionState(
+        session_id="session",
+        playwright=object(),
+        context=object(),
+        browser=None,
+        browser_name="chromium",
+        profile_id=None,
+        created_at=0,
+        last_used_at=0,
+    )
+    manager._cleanup_pending[session.session_id] = session
+
+    async def blocking_close(_session):
+        entered.set()
+        await release.wait()
+        raise RuntimeError("close failed")
+
+    monkeypatch.setattr(manager, "_close_state", blocking_close)
+    close = asyncio.create_task(manager.close("session"))
+    await entered.wait()
+    assert manager._cleanup_pending == {}
+    assert list(manager._closing_sessions) == ["session"]
+
+    monkeypatch.setattr(browser_sessions, "_MAX_SESSIONS", 1)
+    with pytest.raises(ValueError, match="at most 1 browser sessions"):
+        await manager.start()
+
+    release.set()
+    with pytest.raises(RuntimeError, match="close failed"):
+        await close
+    assert manager._closing_sessions == {}
+    assert list(manager._cleanup_pending) == ["session"]
+
+
+@pytest.mark.asyncio
+async def test_cleanup_attempts_all_sessions_and_retains_failed_one(tmp_path, monkeypatch):
+    manager = BrowserSessionManager(tmp_path / ".state")
+    calls: list[str] = []
+
+    class Context:
+        def __init__(self, name: str, *, fail: bool = False):
+            self.name = name
+            self.fail = fail
+
+        async def close(self):
+            calls.append(f"context:{self.name}")
+            if self.fail:
+                raise RuntimeError("first close failed")
+
+    class Browser:
+        def __init__(self, name: str):
+            self.name = name
+
+        async def close(self):
+            calls.append(f"browser:{self.name}")
+
+    class Playwright:
+        def __init__(self, name: str):
+            self.name = name
+
+        async def stop(self):
+            calls.append(f"playwright:{self.name}")
+
+    def session(name: str, *, fail: bool = False) -> BrowserSessionState:
+        return BrowserSessionState(
+            session_id=name,
+            playwright=Playwright(name),
+            context=Context(name, fail=fail),
+            browser=Browser(name),
+            browser_name="chromium",
+            profile_id=None,
+            created_at=0,
+            last_used_at=0,
+        )
+
+    manager._sessions = {"first": session("first", fail=True), "second": session("second")}
+    assert await manager._cleanup_idle() == 1
+    assert "context:second" in calls
+    assert "browser:second" in calls
+    assert "playwright:second" in calls
+    assert manager._sessions == {}
+    assert list(manager._cleanup_pending) == ["first"]
+
+    # A quarantined cleanup failure must not block unrelated browser operations.
+    listed = await manager.manage(action="list")
+    assert listed == {"sessions": [], "cleanup_pending": ["first"]}
+
+    monkeypatch.setattr(browser_sessions, "_MAX_SESSIONS", 1)
+    with pytest.raises(ValueError, match="at most 1 browser sessions"):
+        await manager.start()
+
+    with pytest.raises(RuntimeError, match="first close failed"):
+        await manager._cleanup_idle(force=True)
+    assert list(manager._cleanup_pending) == ["first"]
+
+
+@pytest.mark.asyncio
+async def test_cleanup_inflight_sessions_stay_within_capacity(tmp_path, monkeypatch):
+    manager = BrowserSessionManager(tmp_path / ".state")
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    session = BrowserSessionState(
+        session_id="pending",
+        playwright=object(),
+        context=object(),
+        browser=None,
+        browser_name="chromium",
+        profile_id=None,
+        created_at=0,
+        last_used_at=0,
+    )
+    manager._cleanup_pending[session.session_id] = session
+
+    async def blocking_close(_session):
+        entered.set()
+        await release.wait()
+        raise RuntimeError("close failed")
+
+    monkeypatch.setattr(manager, "_close_state", blocking_close)
+    cleanup = asyncio.create_task(manager._cleanup_idle(force=True))
+    await entered.wait()
+    assert list(manager._closing_sessions) == ["pending"]
+
+    monkeypatch.setattr(browser_sessions, "_MAX_SESSIONS", 1)
+    with pytest.raises(ValueError, match="at most 1 browser sessions"):
+        await manager.start()
+
+    release.set()
+    with pytest.raises(RuntimeError, match="close failed"):
+        await cleanup
+    assert manager._closing_sessions == {}
+    assert list(manager._cleanup_pending) == ["pending"]
+
+
+@pytest.mark.asyncio
+async def test_cleanup_moves_candidates_to_closing_without_capacity_gap(tmp_path):
+    manager = BrowserSessionManager(tmp_path / ".state")
+    gap = asyncio.Event()
+    probed = asyncio.Event()
+    observed_capacity = []
+
+    class InterleavingLock:
+        def __init__(self):
+            self._lock = asyncio.Lock()
+            self._exits = 0
+
+        async def __aenter__(self):
+            await self._lock.acquire()
+            return self
+
+        async def __aexit__(self, *_args):
+            self._lock.release()
+            self._exits += 1
+            if self._exits == 1:
+                gap.set()
+                await probed.wait()
+
+    session = BrowserSessionState(
+        session_id="stale",
+        playwright=object(),
+        context=object(),
+        browser=None,
+        browser_name="chromium",
+        profile_id=None,
+        created_at=0,
+        last_used_at=0,
+    )
+    manager._sessions[session.session_id] = session
+    manager._lock = InterleavingLock()
+
+    async def probe_capacity():
+        await gap.wait()
+        async with manager._lock:
+            observed_capacity.append(
+                len(manager._sessions)
+                + len(manager._cleanup_pending)
+                + len(manager._closing_sessions)
+                + manager._starting_sessions
+            )
+        probed.set()
+
+    async def close_state(_session):
+        return None
+
+    manager._close_state = close_state
+    probe = asyncio.create_task(probe_capacity())
+    assert await manager._cleanup_idle(force=True) == 1
+    await probe
+    assert observed_capacity == [1]
+
+
+@pytest.mark.asyncio
+async def test_cleanup_cancellation_retains_earlier_failures(tmp_path, monkeypatch):
+    manager = BrowserSessionManager(tmp_path / ".state")
+    second_entered = asyncio.Event()
+
+    def session(name: str) -> BrowserSessionState:
+        return BrowserSessionState(
+            session_id=name,
+            playwright=object(),
+            context=object(),
+            browser=None,
+            browser_name="chromium",
+            profile_id=None,
+            created_at=0,
+            last_used_at=0,
+        )
+
+    manager._sessions = {"first": session("first"), "second": session("second")}
+
+    async def close_state(state):
+        if state.session_id == "first":
+            raise RuntimeError("first close failed")
+        second_entered.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(manager, "_close_state", close_state)
+    cleanup = asyncio.create_task(manager._cleanup_idle(force=True))
+    await second_entered.wait()
+    cleanup.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await cleanup
+
+    assert manager._sessions == {}
+    assert manager._closing_sessions == {}
+    assert set(manager._cleanup_pending) == {"first", "second"}
 
 
 @pytest.mark.asyncio

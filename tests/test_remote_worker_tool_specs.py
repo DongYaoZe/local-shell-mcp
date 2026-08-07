@@ -24,7 +24,7 @@ def test_remote_worker_allowlist_covers_core_capabilities():
         "job_list",
         "transfer_read_chunk",
         "transfer_write_chunk",
-        "browser_capture_tool",
+        "browser_run_script",
     } <= REMOTE_WORKER_TOOL_NAMES
 
 
@@ -34,6 +34,9 @@ def test_remote_worker_allowlist_covers_core_capabilities():
         "multi_edit_file",
         "browser_screenshot_tool",
         "browser_pdf_tool",
+        "browser_capture_tool",
+        "browser_get_text_tool",
+        "playwright_run_script_tool",
     }.isdisjoint(REMOTE_WORKER_TOOL_NAMES)
 
     capabilities = set(worker_capabilities())

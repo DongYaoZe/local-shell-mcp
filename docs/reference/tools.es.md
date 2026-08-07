@@ -18,7 +18,7 @@ Esta página es una vista general localizada de las herramientas. Los nombres de
 
 ### Filesystem
 
-`list_files`, `read_file`, `write_file`, `edit_file`, `delete_file_or_dir`, `transfer_path`, `tree_view`, `glob_search`, `grep_search`
+`list_files`, `read_file`, `write_file`, `edit_file`, `delete_file_or_dir`, `remote_transfer`, `tree_view`, `glob_search`, `grep_search`
 
 ### Shell and jobs
 
@@ -26,7 +26,7 @@ Esta página es una vista general localizada de las herramientas. Los nombres de
 
 ### Browser automation
 
-`browser_get_text_tool`, `browser_capture_tool`, `playwright_run_script_tool`
+`browser_session`, `browser_snapshot`, `browser_act`, `browser_run_script`
 
 ### File links
 
@@ -34,7 +34,7 @@ Esta página es una vista general localizada de las herramientas. Los nombres de
 
 ### Remote workers
 
-`remote_invite`, `remote_list_machines`, `remote_rename_machine`, `remote_revoke_machine`; normal tools use optional `machine`, and `transfer_path` handles transfers
+`remote_manage`; normal tools use optional `machine`, and `remote_transfer` handles transfers
 
 ## Recomendaciones de uso
 

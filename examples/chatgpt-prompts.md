@@ -14,7 +14,7 @@ Use local-shell-mcp. Open `https://example.com` with Playwright, save a screensh
 
 ## One-command remote worker onboarding
 
-Use local-shell-mcp. Create a remote worker invite named `npu-4card` with workdir `/home/cyh/FrameDiff`. Show me only the pasteable join command and then, after I say it has run, call `remote_list_machines` to confirm it is online.
+Use local-shell-mcp. Call `remote_manage(action="invite", name="npu-4card", workdir="/home/cyh/FrameDiff")`. Show me only the pasteable join command and then, after I say it has run, call `remote_manage(action="list")` to confirm it is online.
 
 ## Remote machine diagnostics
 
@@ -27,8 +27,8 @@ Use local-shell-mcp. On remote machine `hpc-a`, inspect `/home/cyh/project` with
 
 ## Remote host-to-host file transfer
 
-Use local-shell-mcp. Copy `/data/run-42/result.tar.zst` from remote machine `hpc-a` to `/scratch/imports/result.tar.zst` on remote machine `hpc-b` using `transfer_path` with both machine endpoints, then verify the destination size and checksum with `run_shell_tool` on `hpc-b`.
+Use local-shell-mcp. Copy `/data/run-42/result.tar.zst` from remote machine `hpc-a` to `/scratch/imports/result.tar.zst` on remote machine `hpc-b` using `remote_transfer` with both machine endpoints, then verify the destination size and checksum with `run_shell_tool` on `hpc-b`.
 
 ## Remote directory transfer through the controller
 
-Use local-shell-mcp. Copy directory `/data/run-42` from remote machine `hpc-a` to `/scratch/run-42` on remote machine `hpc-b` using `transfer_path` with both machine endpoints. The remote machines cannot SSH to each other, so use the controller-mediated transfer rather than `scp` or `rsync`.
+Use local-shell-mcp. Copy directory `/data/run-42` from remote machine `hpc-a` to `/scratch/run-42` on remote machine `hpc-b` using `remote_transfer` with both machine endpoints. The remote machines cannot SSH to each other, so use the controller-mediated transfer rather than `scp` or `rsync`.

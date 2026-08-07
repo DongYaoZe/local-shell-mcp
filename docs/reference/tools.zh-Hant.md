@@ -28,18 +28,18 @@ Git 不再擁有專用 MCP 工具。請透過 `run_shell_tool` 執行標準 Git 
 
 ### 檔案、搜尋與傳輸
 
-`list_files`、`tree_view`、`glob_search`、`grep_search`、`read_file`、`write_file`、`edit_file`、`delete_file_or_dir`、`apply_patch`、`transfer_path`
+`list_files`、`tree_view`、`glob_search`、`grep_search`、`read_file`、`write_file`、`edit_file`、`delete_file_or_dir`、`apply_patch`、`remote_transfer`
 
 - `read_file.path` 可以是單一路徑，也可以是路徑陣列。
 - `edit_file.edits` 接受一個或多個精確替換項，不再區分單次與批次編輯工具。
-- `transfer_path` 自動判斷來源是檔案還是目錄，並立即建立一個可追蹤的傳輸 job，支援控制端到 worker、worker 到控制端以及 worker 到 worker。使用 `job_list`、`job_tail`、`job_stop` 和 `job_retry` 查看、停止或重試；worker 到控制端的上傳使用可續傳的原始二進位分塊。`source_machine` 或 `destination_machine` 至少指定一個。
+- `remote_transfer` 自動判斷來源是檔案還是目錄，並立即建立一個可追蹤的傳輸 job，支援控制端到 worker、worker 到控制端以及 worker 到 worker。使用 `job_list`、`job_tail`、`job_stop` 和 `job_retry` 查看、停止或重試；worker 到控制端的上傳使用可續傳的原始二進位分塊。`source_machine` 或 `destination_machine` 至少指定一個。
 
 ### 瀏覽器自動化
 
-`browser_get_text_tool`、`browser_capture_tool`、`playwright_run_script_tool`
+`browser_session`、`browser_snapshot`、`browser_act`、`browser_run_script`
 
-- `browser_capture_tool` 透過 `capture_format="png"` 或 `"pdf"` 統一截圖和 PDF 輸出。
-- 頁面互動、JavaScript 求值、複雜流程由完整 Playwright 腳本處理。
+- 一般頁面檢查、文字讀取和截圖優先使用 `browser_session`、`browser_snapshot` 與 `browser_act`。
+- JavaScript 求值、自訂截圖/PDF 和複雜流程由 `browser_run_script` 執行完整 Playwright 腳本。
 - 瀏覽器安裝使用一般 shell 命令，不再長期占用獨立工具入口。
 
 ### 檔案下載連結
@@ -50,7 +50,7 @@ Git 不再擁有專用 MCP 工具。請透過 `run_shell_tool` 執行標準 Git 
 
 ### 遠端 worker 管理
 
-`remote_invite`、`remote_list_machines`、`remote_rename_machine`、`remote_revoke_machine`
+`remote_manage`
 
 只有 worker 管理繼續使用 `remote_*` 名稱。實際執行使用一般工具及其 `machine` 參數。
 
@@ -63,5 +63,5 @@ Git 不再擁有專用 MCP 工具。請透過 `run_shell_tool` 執行標準 Git 
 | 精確修改檔案 | `read_file` → `edit_file` / `apply_patch` → 測試與 `git diff` |
 | 長時間任務 | `job_start` → `job_tail` → `job_stop` / `job_retry` |
 | 遠端執行 | 同一工具增加 `machine` |
-| 跨機器傳輸 | `transfer_path` |
-| 瀏覽器證據 | `browser_get_text_tool` / `browser_capture_tool` |
+| 跨機器傳輸 | `remote_transfer` |
+| 瀏覽器證據 | `browser_snapshot` / `browser_run_script` |

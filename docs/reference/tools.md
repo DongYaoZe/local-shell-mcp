@@ -13,10 +13,10 @@ Most tools return a structured `ToolResult` containing `ok`, `message`, and `dat
 | Run a short command or Git operation | `run_shell_tool` |
 | Run an interactive or long task | `shell_start` or `job_start` |
 | Make exact file changes | `edit_file` or `apply_patch` |
-| Transfer a file or directory | `transfer_path` |
+| Transfer a file or directory | `remote_transfer` |
 | Discover an external MCP capability | `mcp_tool_search`, then `mcp_tool_inspect` |
 | Interact with a page | `browser_session`, `browser_snapshot`, then `browser_act` |
-| Capture a one-shot page | `browser_get_text_tool` or `browser_capture_tool` |
+| Run custom browser logic | `browser_run_script` |
 | Work on a remote machine | use the same tool with `machine`; use `remote_*` only for worker administration |
 
 ## Connector and discovery
@@ -475,7 +475,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 
 When `machine` is supplied, the call additionally requires `remote:use` and runs through the remote worker protocol.
 
-### `transfer_path`
+### `remote_transfer`
 
 Start a tracked job that copies a file or directory between the controller and remote machines. Remote uploads use resumable raw-binary chunks; use job_list, job_tail, job_stop, and job_retry to manage the transfer.
 
@@ -633,7 +633,7 @@ When `machine` is supplied, the call additionally requires `remote:use` and runs
 
 ### `browser_act`
 
-Run structured actions in a persistent browser session. Supports navigate, new_page, close_page, click, fill, type, select, press, check, uncheck, hover, wait, wait_for_text, and wait_for_url. target may be a browser_snapshot ref such as e1 or a CSS selector. Use playwright_run_script_tool only when these high-level actions are insufficient.
+Run structured actions in a persistent browser session. Supports navigate, new_page, close_page, click, fill, type, select, press, check, uncheck, hover, wait, wait_for_text, and wait_for_url. target may be a browser_snapshot ref such as e1 or a CSS selector. Use browser_run_script only when these high-level actions are insufficient.
 
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
@@ -647,43 +647,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 
 When `machine` is supplied, the call additionally requires `remote:use` and runs through the remote worker protocol.
 
-### `browser_capture_tool`
-
-Open a URL and save a PNG screenshot or PDF locally or on a remote machine.
-
-| Parameter | Type | Required/default | Description |
-|---|---|---|---|
-| `url` | `string` | required |  |
-| `output_path` | `string \| null` | `null` |  |
-| `capture_format` | `string` | `"png"` |  |
-| `browser` | `string` | `"chromium"` |  |
-| `full_page` | `boolean` | `true` |  |
-| `width` | `integer` | `1440` |  |
-| `height` | `integer` | `1000` |  |
-| `wait_until` | `string` | `"networkidle"` |  |
-| `machine` | `string \| null` | `null` |  |
-
-OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
-
-When `machine` is supplied, the call additionally requires `remote:use` and runs through the remote worker protocol.
-
-### `browser_get_text_tool`
-
-Open a URL and return visible text locally or on a remote machine.
-
-| Parameter | Type | Required/default | Description |
-|---|---|---|---|
-| `url` | `string` | required |  |
-| `browser` | `string` | `"chromium"` |  |
-| `wait_until` | `string` | `"networkidle"` |  |
-| `selector` | `string` | `"body"` |  |
-| `machine` | `string \| null` | `null` |  |
-
-OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
-
-When `machine` is supplied, the call additionally requires `remote:use` and runs through the remote worker protocol.
-
-### `playwright_run_script_tool`
+### `browser_run_script`
 
 Run a full Python Playwright script locally or on a remote machine.
 
@@ -700,44 +664,18 @@ When `machine` is supplied, the call additionally requires `remote:use` and runs
 
 ## Remote worker administration
 
-### `remote_invite`
+### `remote_manage`
 
-Create a one-time command for a remote machine to join this server.
+Manage remote workers with action=invite, list, revoke, or rename. invite accepts name/workdir/ttl_s; revoke requires machine; rename requires machine and new_name.
 
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
+| `action` | `string` | required |  |
 | `name` | `string \| null` | `null` |  |
 | `workdir` | `string \| null` | `null` |  |
 | `ttl_s` | `integer \| null` | `null` |  |
-
-OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
-
-### `remote_list_machines`
-
-List registered remote worker machines.
-
-OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
-
-### `remote_revoke_machine`
-
-Revoke and remove a remote worker machine.
-
-| Parameter | Type | Required/default | Description |
-|---|---|---|---|
-| `machine` | `string` | required |  |
-
-OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
-
-When `machine` is supplied, the call additionally requires `remote:use` and runs through the remote worker protocol.
-
-### `remote_rename_machine`
-
-Rename a remote worker machine.
-
-| Parameter | Type | Required/default | Description |
-|---|---|---|---|
-| `machine` | `string` | required |  |
-| `new_name` | `string` | required |  |
+| `machine` | `string \| null` | `null` |  |
+| `new_name` | `string \| null` | `null` |  |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 

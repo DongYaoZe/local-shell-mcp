@@ -64,7 +64,7 @@ from .models import ToolResult
 from .models import ok_result as _ok
 from .oauth import ALL_OAUTH_SCOPES
 from .patch_ops import git_apply_command, git_apply_prefix, normalize_patch_text
-from .playwright_ops import browser_capture, browser_get_text, playwright_run_script
+from .playwright_ops import playwright_run_script
 from .remote import remote_manager
 from .remote_transfer import (
     create_download_ticket,
@@ -309,7 +309,7 @@ NON_CANCELLABLE_TOOL_NAMES = frozenset(
         "edit_file",
         "delete_file_or_dir",
         "apply_patch",
-        "transfer_path",
+        "remote_transfer",
         "todo_write_tool",
         "mcp_tool_call",
     }
@@ -745,7 +745,7 @@ def _remove_remote_tools_when_disabled(mcp: FastMCP) -> None:
         return
     tools = mcp._tool_manager._tools  # noqa: SLF001
     for name in list(tools):
-        if name.startswith("remote_") or name == "transfer_path":
+        if name.startswith("remote_"):
             tools.pop(name, None)
 
 
@@ -776,29 +776,25 @@ MACHINE_CAPABLE_TOOL_NAMES = {
     "browser_session",
     "browser_snapshot",
     "browser_act",
-    "browser_capture_tool",
-    "browser_get_text_tool",
-    "playwright_run_script_tool",
+    "browser_run_script",
 }
 
 OPEN_WORLD_TOOL_NAMES = {
     *MACHINE_CAPABLE_TOOL_NAMES,
     "create_file_link",
     "revoke_file_link",
-    "transfer_path",
+    "remote_transfer",
     "mcp_manage",
     "mcp_tool_call",
 }
 
 READ_ONLY_OPEN_WORLD_TOOL_NAMES = {
     "browser_snapshot",
-    "browser_get_text_tool",
 }
 
 NON_DESTRUCTIVE_MUTATION_TOOL_NAMES = {
     "create_file_link",
     "open_live_workspace",
-    "remote_invite",
 }
 
 
@@ -2225,7 +2221,7 @@ def _register_workspace_write_tools(mcp: FastMCP, settings: Any) -> None:
         return await _tool_call(_apply_patch_text, patch, cwd)
 
     @mcp.tool(structured_output=True, meta=transfer_meta)
-    async def transfer_path(
+    async def remote_transfer(
         source_path: str,
         destination_path: str,
         source_machine: str | None = None,
@@ -2236,7 +2232,7 @@ def _register_workspace_write_tools(mcp: FastMCP, settings: Any) -> None:
         explanation: str | None = None,
     ) -> ToolResult:
         """Start a tracked job that copies a file or directory between the controller and remote machines. Remote uploads use resumable raw-binary chunks; use job_list, job_tail, job_stop, and job_retry to manage the transfer."""
-        _audit_tool_purpose("transfer_path", purpose, explanation)
+        _audit_tool_purpose("remote_transfer", purpose, explanation)
         return await _tool_call(
             _start_transfer_job,
             source_path,
@@ -2339,12 +2335,18 @@ def _register_dynamic_mcp_tools(
         timeout_s: int | None = None,
     ) -> ToolResult:
         """Call one cached dynamic MCP tool named <server>:<tool>. Discover it with mcp_tool_search and inspect its schema with mcp_tool_inspect first. External MCP connections are opened only for the duration of this call."""
-        return await _tool_call(manager.call, name, arguments, timeout_s=timeout_s)
+        try:
+            result = await manager.call(name, arguments, timeout_s=timeout_s)
+        except Exception as exc:
+            return _handled_error(exc)
+        downstream = result.get("result") if isinstance(result, dict) else None
+        if isinstance(downstream, dict) and downstream.get("isError") is True:
+            return _error_call_result(result, f"Dynamic MCP tool returned an error: {name}")
+        return _ok(result)
 
 
 def _register_browser_tools(mcp: FastMCP, settings: Any, read_only_tool: ToolAnnotations) -> None:
     browser_meta = _oauth_meta(["browser:use"])
-    browser_write_meta = _oauth_meta(["browser:use", "shell:write"])
     browser_execute_meta = _oauth_meta(["browser:use", "shell:execute"])
     session_manager = get_browser_session_manager(settings.state_dir)
 
@@ -2414,7 +2416,7 @@ def _register_browser_tools(mcp: FastMCP, settings: Any, read_only_tool: ToolAnn
         timeout_ms: int = 30_000,
         machine: str | None = None,
     ) -> ToolResult:
-        """Run structured actions in a persistent browser session. Supports navigate, new_page, close_page, click, fill, type, select, press, check, uncheck, hover, wait, wait_for_text, and wait_for_url. target may be a browser_snapshot ref such as e1 or a CSS selector. Use playwright_run_script_tool only when these high-level actions are insufficient."""
+        """Run structured actions in a persistent browser session. Supports navigate, new_page, close_page, click, fill, type, select, press, check, uncheck, hover, wait, wait_for_text, and wait_for_url. target may be a browser_snapshot ref such as e1 or a CSS selector. Use browser_run_script only when these high-level actions are insufficient."""
         args = {
             "session_id": session_id,
             "actions": actions,
@@ -2425,54 +2427,8 @@ def _register_browser_tools(mcp: FastMCP, settings: Any, read_only_tool: ToolAnn
             return await _remote_call(settings, machine, "browser_act", args)
         return await _tool_call(session_manager.act, **args)
 
-    @mcp.tool(structured_output=True, meta=browser_write_meta)
-    async def browser_capture_tool(
-        url: str,
-        output_path: str | None = None,
-        capture_format: str = "png",
-        browser: str = "chromium",
-        full_page: bool = True,
-        width: int = 1440,
-        height: int = 1000,
-        wait_until: str = "networkidle",
-        machine: str | None = None,
-    ) -> ToolResult:
-        """Open a URL and save a PNG screenshot or PDF locally or on a remote machine."""
-        args = {
-            "url": url,
-            "output_path": output_path,
-            "capture_format": capture_format,
-            "browser": browser,
-            "full_page": full_page,
-            "width": width,
-            "height": height,
-            "wait_until": wait_until,
-        }
-        if machine:
-            return await _remote_call(settings, machine, "browser_capture_tool", args)
-        return await _tool_call(browser_capture, **args)
-
-    @mcp.tool(structured_output=True, meta=browser_meta)
-    async def browser_get_text_tool(
-        url: str,
-        browser: str = "chromium",
-        wait_until: str = "networkidle",
-        selector: str = "body",
-        machine: str | None = None,
-    ) -> ToolResult:
-        """Open a URL and return visible text locally or on a remote machine."""
-        args = {
-            "url": url,
-            "browser": browser,
-            "wait_until": wait_until,
-            "selector": selector,
-        }
-        if machine:
-            return await _remote_call(settings, machine, "browser_get_text_tool", args)
-        return await _tool_call(browser_get_text, **args)
-
     @mcp.tool(structured_output=True, meta=browser_execute_meta)
-    async def playwright_run_script_tool(
+    async def browser_run_script(
         script: str,
         cwd: str = ".",
         timeout_s: int = 60,
@@ -2483,39 +2439,47 @@ def _register_browser_tools(mcp: FastMCP, settings: Any, read_only_tool: ToolAnn
             return await _remote_call(
                 settings,
                 machine,
-                "playwright_run_script_tool",
+                "browser_run_script",
                 {"script": script, "cwd": cwd, "timeout_s": timeout_s},
                 timeout_s,
             )
         return await _tool_call(playwright_run_script, script, cwd, timeout_s)
 
 
-def _register_remote_admin_tools(mcp: FastMCP, read_only_tool: ToolAnnotations) -> None:
+def _register_remote_admin_tools(mcp: FastMCP) -> None:
     remote_meta = _oauth_meta(["remote:use"])
 
     @mcp.tool(structured_output=True, meta=remote_meta)
-    async def remote_invite(
+    async def remote_manage(
+        action: str,
         name: str | None = None,
         workdir: str | None = None,
         ttl_s: int | None = None,
+        machine: str | None = None,
+        new_name: str | None = None,
     ) -> ToolResult:
-        """Create a one-time command for a remote machine to join this server."""
-        return await _tool_call(lambda: remote_manager().create_invite(name, workdir, ttl_s))
+        """Manage remote workers with action=invite, list, revoke, or rename. invite accepts name/workdir/ttl_s; revoke requires machine; rename requires machine and new_name."""
 
-    @mcp.tool(structured_output=True, annotations=read_only_tool, meta=remote_meta)
-    async def remote_list_machines() -> ToolResult:
-        """List registered remote worker machines."""
-        return await _tool_call(lambda: remote_manager().list_machines())
+        async def run() -> Any:
+            manager = remote_manager()
+            normalized = action.strip().lower()
+            if normalized == "invite":
+                return await manager.create_invite(name, workdir, ttl_s)
+            if normalized == "list":
+                return manager.list_machines()
+            if normalized == "revoke":
+                if not machine:
+                    raise ValueError("machine is required for action=revoke")
+                return manager.revoke(machine)
+            if normalized == "rename":
+                if not machine:
+                    raise ValueError("machine is required for action=rename")
+                if not new_name:
+                    raise ValueError("new_name is required for action=rename")
+                return manager.rename(machine, new_name)
+            raise ValueError("action must be one of: invite, list, revoke, rename")
 
-    @mcp.tool(structured_output=True, meta=remote_meta)
-    async def remote_revoke_machine(machine: str) -> ToolResult:
-        """Revoke and remove a remote worker machine."""
-        return await _tool_call(lambda: remote_manager().revoke(machine))
-
-    @mcp.tool(structured_output=True, meta=remote_meta)
-    async def remote_rename_machine(machine: str, new_name: str) -> ToolResult:
-        """Rename a remote worker machine."""
-        return await _tool_call(lambda: remote_manager().rename(machine, new_name))
+        return await _tool_call(run)
 
 
 def _register_live_workspace_tools(
@@ -2636,7 +2600,7 @@ def build_mcp() -> FastMCP:
     _register_maintenance_tools(mcp, read_only_tool)
     _register_dynamic_mcp_tools(mcp, settings, read_only_tool)
     _register_browser_tools(mcp, settings, read_only_tool)
-    _register_remote_admin_tools(mcp, read_only_tool)
+    _register_remote_admin_tools(mcp)
 
     _remove_remote_tools_when_disabled(mcp)
     _install_tool_annotations(mcp)
