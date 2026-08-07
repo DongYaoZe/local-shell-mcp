@@ -57,6 +57,7 @@ class BrowserSessionManager:
     def __init__(self, state_dir: Path) -> None:
         self._state_dir = Path(state_dir)
         self._sessions: dict[str, BrowserSessionState] = {}
+        self._cleanup_pending: dict[str, BrowserSessionState] = {}
         self._starting_sessions = 0
         self._lock = asyncio.Lock()
         self._artifact_lock = asyncio.Lock()
@@ -92,7 +93,11 @@ class BrowserSessionManager:
             await self._cleanup_idle()
             async with self._lock:
                 sessions = list(self._sessions.values())
-            return {"sessions": [await self._session_summary(item) for item in sessions]}
+                cleanup_pending = sorted(self._cleanup_pending)
+            return {
+                "sessions": [await self._session_summary(item) for item in sessions],
+                "cleanup_pending": cleanup_pending,
+            }
         if action == "close":
             if not session_id:
                 raise ValueError("session_id is required for action=close")
@@ -210,15 +215,26 @@ class BrowserSessionManager:
     ) -> dict[str, Any]:
         async with self._lock:
             session = self._sessions.pop(session_id, None)
+            if session is None:
+                session = self._cleanup_pending.pop(session_id, None)
         if session is None:
             raise ValueError(f"unknown browser session: {session_id}")
+        save_error: BaseException | None = None
         try:
             if save_storage_state_path:
                 target = resolve_path(save_storage_state_path)
                 target.parent.mkdir(parents=True, exist_ok=True)
                 await session.context.storage_state(path=str(target))
-        finally:
+        except (Exception, asyncio.CancelledError) as exc:
+            save_error = exc
+        try:
             await self._close_state(session)
+        except (Exception, asyncio.CancelledError):
+            async with self._lock:
+                self._cleanup_pending.setdefault(session.session_id, session)
+            raise
+        if save_error is not None:
+            raise save_error
         result: dict[str, Any] = {"session_id": session_id, "closed": True}
         if save_storage_state_path:
             result["storage_state_path"] = relative_display(resolve_path(save_storage_state_path))
@@ -569,23 +585,33 @@ class BrowserSessionManager:
                 if force or state.last_used_at < cutoff
             ]
             stale = [self._sessions.pop(session_id) for session_id in stale_ids]
+            pending = list(self._cleanup_pending.values()) if force else []
+            if force:
+                self._cleanup_pending.clear()
+        pending_ids = {session.session_id for session in pending}
+        candidates = stale + [session for session in pending if session.session_id not in stale_ids]
         failed: list[tuple[BrowserSessionState, Exception]] = []
-        for index, session in enumerate(stale):
+        for index, session in enumerate(candidates):
             try:
                 await self._close_state(session)
             except asyncio.CancelledError:
                 async with self._lock:
-                    for remaining in stale[index:]:
-                        self._sessions.setdefault(remaining.session_id, remaining)
+                    self._cleanup_pending.setdefault(session.session_id, session)
+                    for remaining in candidates[index + 1 :]:
+                        if remaining.session_id in pending_ids:
+                            self._cleanup_pending.setdefault(remaining.session_id, remaining)
+                        else:
+                            self._sessions.setdefault(remaining.session_id, remaining)
                 raise
             except Exception as exc:
                 failed.append((session, exc))
         if failed:
             async with self._lock:
                 for session, _ in failed:
-                    self._sessions.setdefault(session.session_id, session)
-            raise failed[0][1]
-        return len(stale)
+                    self._cleanup_pending.setdefault(session.session_id, session)
+            if force:
+                raise failed[0][1]
+        return len(candidates) - len(failed)
 
     @staticmethod
     async def _close_state(session: BrowserSessionState) -> None:

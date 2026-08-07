@@ -487,12 +487,20 @@ async def test_cleanup_attempts_all_sessions_and_retains_failed_one(tmp_path):
         )
 
     manager._sessions = {"first": session("first", fail=True), "second": session("second")}
-    with pytest.raises(RuntimeError, match="first close failed"):
-        await manager._cleanup_idle(force=True)
+    assert await manager._cleanup_idle() == 1
     assert "context:second" in calls
     assert "browser:second" in calls
     assert "playwright:second" in calls
-    assert list(manager._sessions) == ["first"]
+    assert manager._sessions == {}
+    assert list(manager._cleanup_pending) == ["first"]
+
+    # A quarantined cleanup failure must not block unrelated browser operations.
+    listed = await manager.manage(action="list")
+    assert listed == {"sessions": [], "cleanup_pending": ["first"]}
+
+    with pytest.raises(RuntimeError, match="first close failed"):
+        await manager._cleanup_idle(force=True)
+    assert list(manager._cleanup_pending) == ["first"]
 
 
 @pytest.mark.asyncio
