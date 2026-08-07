@@ -111,12 +111,35 @@ async def live_git(request: Request) -> Response:
             max_output_bytes=80_000,
         )
         diff_task = run_shell(
-            "git diff --no-ext-diff --unified=3 && printf '\\n--- STAGED ---\\n' && git diff --cached --no-ext-diff --unified=3",
+            "git diff --no-ext-diff --unified=3",
             cwd=cwd,
             timeout_s=20,
-            max_output_bytes=350_000,
+            max_output_bytes=250_000,
         )
-        status, diff = await asyncio.gather(status_task, diff_task)
+        staged_diff_task = run_shell(
+            "git diff --cached --no-ext-diff --unified=3",
+            cwd=cwd,
+            timeout_s=20,
+            max_output_bytes=100_000,
+        )
+        status, diff, staged_diff = await asyncio.gather(
+            status_task, diff_task, staged_diff_task
+        )
+        diff_data = diff.model_dump()
+        diff_data.update(
+            {
+                "ok": diff.ok and staged_diff.ok,
+                "exit_code": diff.exit_code if not diff.ok else staged_diff.exit_code,
+                "timed_out": diff.timed_out or staged_diff.timed_out,
+                "duration_ms": diff.duration_ms + staged_diff.duration_ms,
+                "command": "git diff --no-ext-diff --unified=3; git diff --cached --no-ext-diff --unified=3",
+                "stdout": f"{diff.stdout}\n--- STAGED ---\n{staged_diff.stdout}",
+                "stderr": "\n".join(
+                    part for part in (diff.stderr, staged_diff.stderr) if part
+                ),
+                "truncated": diff.truncated or staged_diff.truncated,
+            }
+        )
         get_live_workspace_manager().publish_workspace(
             workspace.workspace_id,
             "human.inspected_diff",
@@ -127,7 +150,7 @@ async def live_git(request: Request) -> Response:
             {
                 "cwd": cwd,
                 "status": status.model_dump(),
-                "diff": diff.model_dump(),
+                "diff": diff_data,
             }
         )
     except Exception as exc:
