@@ -26,7 +26,7 @@ Ta strona jest zlokalizowanym przeglądem narzędzi. Nazwy narzędzi i parametr�
 
 ### Browser automation
 
-`browser_get_text_tool`, `browser_capture_tool`, `playwright_run_script_tool`
+`browser_session`, `browser_snapshot`, `browser_act`, `browser_run_script`
 
 ### File links
 

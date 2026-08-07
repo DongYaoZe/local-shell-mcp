@@ -25,7 +25,7 @@
 | 多文件補丁 | `apply_patch` | 臨時拼接 shell 編輯命令 |
 | 查找文件 | `tree_view`、`glob_search` | 對大型倉庫做完整遞歸列表 |
 | 查找代碼 | `grep_search` | 盲目讀取大量文件 |
-| 瀏覽器證據 | `browser_capture_tool`、`browser_get_text_tool` | 只根據頁面名或路由猜測 |
+| 瀏覽器證據 | `browser_snapshot`、`browser_run_script` | 只根據頁面名或路由猜測 |
 | 可下載產物 | `create_file_link` | 在聊天中粘貼大型二進制內容 |
 | 遠端機器任務 | 一般工具加 `machine`，以及 `transfer_path` | 在出站 worker 模式足夠時開放入站 SSH |
 

@@ -487,9 +487,7 @@ _TOOL_OPERATION_GROUPS: dict[str, frozenset[str]] = {
             "browser_session",
             "browser_snapshot",
             "browser_act",
-            "browser_capture_tool",
-            "browser_get_text_tool",
-            "playwright_run_script_tool",
+            "browser_run_script",
         }
     ),
     "remote": frozenset(

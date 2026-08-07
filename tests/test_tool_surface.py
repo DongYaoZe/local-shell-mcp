@@ -45,9 +45,7 @@ CORE_TOOL_NAMES = {
     "browser_session",
     "browser_snapshot",
     "browser_act",
-    "browser_capture_tool",
-    "browser_get_text_tool",
-    "playwright_run_script_tool",
+    "browser_run_script",
     "audit_tail",
 }
 
@@ -74,6 +72,9 @@ REMOVED_TOOL_NAMES = {
     "browser_screenshot_tool",
     "browser_pdf_tool",
     "browser_eval_tool",
+    "browser_capture_tool",
+    "browser_get_text_tool",
+    "playwright_run_script_tool",
     "playwright_install_tool",
 }
 
@@ -137,9 +138,7 @@ async def test_machine_capable_tools_use_optional_machine_arguments(tmp_path, mo
         "browser_session",
         "browser_snapshot",
         "browser_act",
-        "browser_capture_tool",
-        "browser_get_text_tool",
-        "playwright_run_script_tool",
+        "browser_run_script",
     }
 
     for name in machine_capable:
@@ -177,7 +176,7 @@ async def test_key_tool_descriptions_guide_tool_choice(tmp_path, monkeypatch):
     assert "tools/list" in tools["mcp_tool_search"].description
     assert "mcp_tool_inspect" in tools["mcp_tool_search"].description
     assert "stable short refs" in tools["browser_snapshot"].description
-    assert "playwright_run_script_tool" in tools["browser_act"].description
+    assert "browser_run_script" in tools["browser_act"].description
 
 
 @pytest.mark.asyncio

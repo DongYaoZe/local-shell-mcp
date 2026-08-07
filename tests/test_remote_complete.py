@@ -273,8 +273,6 @@ async def test_every_worker_tool_dispatch_branch(monkeypatch, tmp_path):
         "resize_shell",
         "tree",
         "grep",
-        "browser_capture",
-        "browser_get_text",
         "playwright_run_script",
         "_apply_patch_text",
     ):
@@ -340,9 +338,7 @@ async def test_every_worker_tool_dispatch_branch(monkeypatch, tmp_path):
         "browser_session": {"action": "list"},
         "browser_snapshot": {"session_id": "s"},
         "browser_act": {"session_id": "s", "actions": [{"action": "wait"}]},
-        "browser_capture_tool": {"url": "https://x"},
-        "browser_get_text_tool": {"url": "https://x"},
-        "playwright_run_script_tool": {"script": "print(1)"},
+        "browser_run_script": {"script": "print(1)"},
     }
     for tool, args in cases.items():
         result = await remote.execute_worker_tool(tool, {**args, "_human": True})

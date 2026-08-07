@@ -58,3 +58,19 @@ async def test_remote_tombstone_points_to_unified_machine_tool() -> None:
     assert result["data"]["status"] == "stale_tool_snapshot"
     assert result["data"]["replacement"] == "run_shell_tool"
     assert "refresh the LSM App's tools" in result["data"]["assistant_instruction"]
+
+
+async def test_browser_tombstones_point_to_browser_run_script() -> None:
+    mcp = DeprecatedToolFastMCP("test")
+
+    for name in (
+        "browser_capture_tool",
+        "browser_get_text_tool",
+        "playwright_run_script_tool",
+    ):
+        result = await mcp.call_tool(name, {})
+        assert result["data"]["status"] == "stale_tool_snapshot"
+        assert result["data"]["replacement"] == "browser_run_script"
+
+    renamed = await mcp.call_tool("playwright_run_script_tool", {})
+    assert renamed["data"]["removed_in"] == "3.3.0"

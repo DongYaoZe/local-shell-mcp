@@ -36,10 +36,10 @@ Git 不再拥有专用 MCP 工具。请通过 `run_shell_tool` 执行标准 Git 
 
 ### 浏览器自动化
 
-`browser_get_text_tool`、`browser_capture_tool`、`playwright_run_script_tool`
+`browser_session`、`browser_snapshot`、`browser_act`、`browser_run_script`
 
-- `browser_capture_tool` 通过 `capture_format="png"` 或 `"pdf"` 统一截图和 PDF 输出。
-- 页面交互、JavaScript 求值、复杂流程由完整 Playwright 脚本处理。
+- 常规页面检查、文本读取和截图优先使用 `browser_session`、`browser_snapshot` 与 `browser_act`。
+- JavaScript 求值、自定义截图/PDF 和复杂流程由 `browser_run_script` 执行完整 Playwright 脚本。
 - 浏览器安装使用普通 shell 命令，不再长期占用独立工具入口。
 
 ### 文件下载链接
@@ -64,4 +64,4 @@ Git 不再拥有专用 MCP 工具。请通过 `run_shell_tool` 执行标准 Git 
 | 长时间任务 | `job_start` → `job_tail` → `job_stop` / `job_retry` |
 | 远程执行 | 同一工具增加 `machine` |
 | 跨机器传输 | `transfer_path` |
-| 浏览器证据 | `browser_get_text_tool` / `browser_capture_tool` |
+| 浏览器证据 | `browser_snapshot` / `browser_run_script` |
