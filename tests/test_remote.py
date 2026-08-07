@@ -488,25 +488,28 @@ async def test_remote_heartbeat_refreshes_worker_last_seen(monkeypatch):
 @pytest.mark.asyncio
 async def test_worker_job_sends_heartbeats_while_running(monkeypatch):
     posted_urls = []
+    heartbeat_seen = asyncio.Event()
+    loop = asyncio.get_running_loop()
 
     async def fake_execute(tool, args):
         assert tool == "slow_tool"
         assert args == {"value": 1}
-        await asyncio.sleep(0.05)
+        await asyncio.wait_for(heartbeat_seen.wait(), timeout=1)
         return {"done": True}
 
     def fake_post(url, payload, headers=None, timeout=None):
         posted_urls.append(url)
-        assert payload == {}
+        assert payload == {"job_id": "job-1"}
         assert headers == {"Authorization": "Bearer token"}
         assert timeout == 30
+        loop.call_soon_threadsafe(heartbeat_seen.set)
         return {"ok": True, "data": {"accepted": True}}
 
     monkeypatch.setattr(remote, "execute_worker_tool", fake_execute)
     monkeypatch.setattr(remote, "_worker_post_json", fake_post)
 
     result = await remote._execute_worker_job_with_heartbeat(  # noqa: SLF001
-        {"tool": "slow_tool", "args": {"value": 1}},
+        {"id": "job-1", "tool": "slow_tool", "args": {"value": 1}},
         "https://example.test",
         {"Authorization": "Bearer token"},
         0.01,
