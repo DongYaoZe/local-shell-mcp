@@ -19,6 +19,7 @@ from mcp.types import CallToolResult, ImageContent, TextContent, ToolAnnotations
 from pathspec.gitignore import GitIgnoreSpec
 from pydantic import BaseModel, ConfigDict, Field
 
+from . import __version__
 from .audit import audit, audit_call_context, audit_result_ok
 from .auth import current_principal, principal_scopes, require_current_scopes
 from .browser_sessions import get_browser_session_manager
@@ -2580,6 +2581,10 @@ def build_mcp() -> FastMCP:
         instructions=MCP_INSTRUCTIONS,
         transport_security=_transport_security_settings(),
     )
+    # FastMCP currently leaves the low-level server version unset, which makes
+    # the MCP SDK advertise its own package version during initialize. Report
+    # the local-shell-mcp version instead.
+    mcp._mcp_server.version = __version__
     read_only_tool = ToolAnnotations(
         readOnlyHint=True,
         destructiveHint=False,
