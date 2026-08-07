@@ -45,8 +45,9 @@ def _with_oauth_routes(inner_app):  # noqa: ANN001
     ]
     settings = get_settings()
     routes[2:2] = download_routes()
-    routes[2:2] = live_workspace_routes()
-    routes[2:2] = ui_routes()
+    if settings.ui_enabled:
+        routes[2:2] = live_workspace_routes()
+        routes[2:2] = ui_routes()
     if settings.remote_enabled:
         routes[2:2] = remote_routes()
     return Starlette(

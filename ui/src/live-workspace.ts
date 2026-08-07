@@ -91,7 +91,7 @@ let fileEditing = false
 let fileEditContent = ""
 let fileEditSha = ""
 
-let gitSnapshot: { cwd: string; status: JsonRecord; diff: JsonRecord } | null = null
+let gitSnapshot: { machine?: string; cwd: string; status: JsonRecord; diff: JsonRecord } | null = null
 let auditEntries: JsonRecord[] = []
 let remoteSnapshot: JsonRecord | null = null
 
@@ -606,11 +606,15 @@ async function selectFile(path: string): Promise<void> {
   fileEditing = false
   filePreview = null
   renderFiles()
+  const requestMachine = fileMachine
   const entry = fileEntries.find((item) => item.path === path)
   if (!entry) return
-  if (entry.type === "dir") filePreview = { kind: "directory" }
-  else filePreview = await api<JsonRecord>(`/api/ui/files/preview?machine=${encodeURIComponent(fileMachine)}&path=${encodeURIComponent(path)}&columns=120&rows=50`)
-  if (activeTab === "files" && selectedFile === path) renderFiles()
+  const preview = entry.type === "dir"
+    ? { kind: "directory" }
+    : await api<JsonRecord>(`/api/ui/files/preview?machine=${encodeURIComponent(requestMachine)}&path=${encodeURIComponent(path)}&columns=120&rows=50`)
+  if (selectedFile !== path || fileMachine !== requestMachine) return
+  filePreview = preview
+  if (activeTab === "files") renderFiles()
 }
 
 async function refreshFiles(): Promise<void> {
@@ -676,13 +680,13 @@ function renderDiff(): void {
   const status = gitSnapshot ? String(gitSnapshot.status.stdout || gitSnapshot.status.stderr || "") : ""
   const diff = gitSnapshot ? String(gitSnapshot.diff.stdout || gitSnapshot.diff.stderr || "") : ""
   mainNode().innerHTML = `
-    <section class="view diff-view"><div class="view-toolbar"><div><h2>Working tree diff</h2><p>${escapeHtml(config?.cwd || ".")} · unstaged and staged changes</p></div><div class="toolbar-actions"><button class="button" data-action="diff-context">Send context</button><button class="button" data-action="diff-ask">${icon("chat")}Ask for review</button><button class="button" data-action="refresh">${icon("refresh")}Refresh</button></div></div>
+    <section class="view diff-view"><div class="view-toolbar"><div><h2>Working tree diff</h2><p>${escapeHtml(gitSnapshot?.machine || config?.machine || "local")}:${escapeHtml(config?.cwd || ".")} · unstaged and staged changes</p></div><div class="toolbar-actions"><button class="button" data-action="diff-context">Send context</button><button class="button" data-action="diff-ask">${icon("chat")}Ask for review</button><button class="button" data-action="refresh">${icon("refresh")}Refresh</button></div></div>
       <div class="diff-layout"><section class="panel status-panel"><div class="panel-head"><strong>Git status</strong><span>${escapeHtml(gitSnapshot?.cwd || config?.cwd || ".")}</span></div><pre>${escapeHtml(status || "Clean")}</pre></section><section class="panel diff-panel"><div class="panel-head"><strong>Changes</strong><span>${diff ? `${diff.split("\n").length} lines` : "clean"}</span></div><div class="diff-code">${gitSnapshot ? renderDiffHtml(diff) : '<div class="loading small"><span></span>Loading diff…</div>'}</div></section></div>
     </section>`
 }
 
 async function refreshDiff(): Promise<void> {
-  gitSnapshot = await api(`/api/live/git?cwd=${encodeURIComponent(config?.cwd || ".")}`)
+  gitSnapshot = await api(`/api/live/git?machine=${encodeURIComponent(config?.machine || "local")}&cwd=${encodeURIComponent(config?.cwd || ".")}`)
   if (activeTab === "diff") renderDiff()
 }
 
@@ -690,7 +694,7 @@ async function shareDiff(ask: boolean): Promise<void> {
   if (!gitSnapshot) await refreshDiff()
   const status = String(gitSnapshot?.status.stdout || "")
   const diff = truncateContext(String(gitSnapshot?.diff.stdout || ""), 28_000)
-  await app.updateModelContext({ content: [{ type: "text", text: `Live Workspace git status:\n${status}\n\nDiff:\n${diff}` }], structuredContent: { git: { cwd: gitSnapshot?.cwd, status } } })
+  await app.updateModelContext({ content: [{ type: "text", text: `Live Workspace git status (${gitSnapshot?.machine || config?.machine || "local"}):\n${status}\n\nDiff:\n${diff}` }], structuredContent: { git: { machine: gitSnapshot?.machine || config?.machine || "local", cwd: gitSnapshot?.cwd, status } } })
   notify("Diff added to model context", "success")
   if (ask) await app.sendMessage({ role: "user", content: [{ type: "text", text: "Review the current Live Workspace git diff. Identify correctness risks, regressions, missing tests, and concrete improvements. Make fixes when appropriate." }] })
 }

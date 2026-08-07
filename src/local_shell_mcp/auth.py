@@ -229,8 +229,6 @@ def _verify_oauth(request: Request, settings: Settings) -> Principal:
 def verify_request(request: Request) -> Principal:
     settings = get_settings()
     path = str(request.url.path)
-    if settings.auth_mode == "none":
-        return Principal(email=None, subject="anonymous", claims={"auth": "none"})
     if (
         path.startswith(HUMAN_UI_API_PREFIX)
         and is_loopback_connection(request)
@@ -253,6 +251,8 @@ def verify_request(request: Request) -> Principal:
                         "live_workspace_id": workspace.workspace_id,
                     },
                 )
+    if settings.auth_mode == "none":
+        return Principal(email=None, subject="anonymous", claims={"auth": "none"})
     if (
         settings.auth_bypass_localhost
         and settings.mode == "http"

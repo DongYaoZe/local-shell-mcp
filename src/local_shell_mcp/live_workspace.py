@@ -6,6 +6,7 @@ import secrets
 import threading
 import time
 import uuid
+import weakref
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Any
@@ -18,6 +19,8 @@ LIVE_EVENT_LIMIT = 2_000
 LIVE_EVENT_BATCH = 300
 LIVE_LONG_POLL_S = 25.0
 CONTROL_MODES = frozenset({"agent", "shared", "human"})
+_SESSION_KEYS: weakref.WeakKeyDictionary[Any, str] = weakref.WeakKeyDictionary()
+_SESSION_KEYS_LOCK = threading.Lock()
 
 
 class HumanControlActiveError(RuntimeError):
@@ -82,8 +85,12 @@ class LiveWorkspaceManager:
         session_key: str,
         subject: str,
         scopes: tuple[str, ...],
+        parent_expires_at: float | None = None,
     ) -> tuple[LiveWorkspace, str]:
         now = time.time()
+        expires_at = now + LIVE_TOKEN_TTL_S
+        if parent_expires_at is not None:
+            expires_at = min(expires_at, parent_expires_at)
         token = secrets.token_urlsafe(32)
         digest = self._digest(token)
         with self._lock:
@@ -98,7 +105,7 @@ class LiveWorkspaceManager:
                     scopes=scopes,
                     token_digest=digest,
                     created_at=now,
-                    expires_at=now + LIVE_TOKEN_TTL_S,
+                    expires_at=expires_at,
                 )
                 self._workspaces[workspace.workspace_id] = workspace
                 self._session_workspaces[session_key] = workspace.workspace_id
@@ -106,7 +113,7 @@ class LiveWorkspaceManager:
                 workspace.subject = subject
                 workspace.scopes = scopes
                 workspace.token_digest = digest
-                workspace.expires_at = now + LIVE_TOKEN_TTL_S
+                workspace.expires_at = expires_at
             self._publish_locked(
                 workspace,
                 "workspace.opened",
@@ -264,10 +271,31 @@ def get_live_workspace_manager() -> LiveWorkspaceManager:
 def mcp_session_key(mcp: Any) -> str:
     try:
         context = mcp.get_context()
-        session = context.request_context.session
+        request_context = context.request_context
+        session = request_context.session
     except (AttributeError, LookupError, ValueError):
         return "direct"
-    return f"mcp:{id(session):x}"
+
+    request = getattr(request_context, "request", None)
+    headers = getattr(request, "headers", None)
+    if headers is not None:
+        session_id = headers.get("mcp-session-id")
+        if session_id:
+            return f"mcp-http:{session_id}"
+
+    with _SESSION_KEYS_LOCK:
+        try:
+            key = _SESSION_KEYS.get(session)
+        except TypeError:
+            key = getattr(session, "_lsm_live_session_key", None)
+            if key is None:
+                key = uuid.uuid4().hex
+                session._lsm_live_session_key = key
+            return f"mcp-session:{key}"
+        if key is None:
+            key = uuid.uuid4().hex
+            _SESSION_KEYS[session] = key
+    return f"mcp-session:{key}"
 
 
 def workspace_id_from_claims(claims: dict[str, Any]) -> str | None:

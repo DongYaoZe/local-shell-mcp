@@ -416,6 +416,15 @@ def _serialize_audit_value(value: Any) -> Any:
     return repr(value)
 
 
+def _safe_audit_result(tool_name: str, value: Any) -> Any:
+    serialized = _serialize_audit_value(value)
+    if tool_name != "open_live_workspace" or not isinstance(serialized, dict):
+        return serialized
+    sanitized = dict(serialized)
+    sanitized.pop("meta", None)
+    return sanitized
+
+
 def _audit_tool_arguments(args: tuple[Any, ...], kwargs: dict[str, Any]) -> dict[str, Any]:
     return {
         "positional_count": len(args),
@@ -519,6 +528,12 @@ def _live_result_summary(result: Any) -> dict[str, Any]:
     return summary
 
 
+def _live_tool_mutates(tool_name: str, read_only: bool, arguments: dict[str, Any]) -> bool:
+    if not read_only:
+        return True
+    return tool_name == "browser_snapshot" and bool(arguments.get("screenshot", True))
+
+
 def _audit_tool_purpose(
     tool_name: str, purpose: str | None = None, explanation: str | None = None
 ) -> dict[str, str]:
@@ -616,7 +631,7 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
                 **audit_context,
             )
             try:
-                if not __read_only:
+                if _live_tool_mutates(__tool_name, __read_only, call_arguments):
                     get_live_workspace_manager().require_agent_mutation_allowed(
                         live_session_key,
                         __tool_name,
@@ -628,7 +643,7 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
                         result = await asyncio.wait_for(
                             __original(*args, **kwargs), timeout=PUBLIC_TOOL_TIMEOUT_S
                         )
-                serialized_result = _serialize_audit_value(result)
+                serialized_result = _safe_audit_result(__tool_name, result)
                 call_ok = audit_result_ok(result) and not bool(call_state["failed"])
                 failure_context = {}
                 if not call_ok and call_state.get("error"):
@@ -2545,6 +2560,11 @@ def _register_live_workspace_tools(
             session_key=mcp_session_key(mcp),
             subject=subject,
             scopes=scopes,
+            parent_expires_at=(
+                float(principal.claims["exp"])
+                if principal is not None and principal.claims.get("exp") is not None
+                else None
+            ),
         )
         result = LiveWorkspaceResult(
             workspace_id=workspace.workspace_id,
@@ -2594,7 +2614,8 @@ def build_mcp() -> FastMCP:
     )
 
     _register_connector_tools(mcp, read_only_tool)
-    _register_live_workspace_tools(mcp, settings, read_only_tool)
+    if settings.ui_enabled:
+        _register_live_workspace_tools(mcp, settings, read_only_tool)
     _register_environment_tools(mcp, settings, read_only_tool)
     _register_command_tools(mcp, settings)
     _register_shell_tools(mcp, settings, read_only_tool)

@@ -10,6 +10,9 @@ from starlette.routing import Route
 
 from .auth import Principal, current_principal, require_scopes, verify_request
 from .live_workspace import LIVE_API_PREFIX, get_live_workspace_manager, workspace_id_from_claims
+from .models import CommandResult
+from .remote import remote_manager
+from .settings import get_settings
 from .shell_ops import run_shell
 
 
@@ -50,6 +53,41 @@ def _error(exc: Exception) -> JSONResponse:
         status_code=400,
         headers={"Cache-Control": "no-store"},
     )
+
+
+async def _run_machine_shell(
+    machine: str,
+    command: str,
+    *,
+    cwd: str,
+    timeout_s: int,
+    max_output_bytes: int,
+) -> CommandResult:
+    if machine == "local":
+        return await run_shell(
+            command,
+            cwd=cwd,
+            timeout_s=timeout_s,
+            max_output_bytes=max_output_bytes,
+        )
+    response = await remote_manager().call(
+        machine,
+        "run_shell_tool",
+        {
+            "command": command,
+            "cwd": cwd,
+            "timeout_s": timeout_s,
+            "max_output_bytes": max_output_bytes,
+            "_human": True,
+        },
+        timeout_s=max(timeout_s, get_settings().ui_remote_request_timeout_s),
+    )
+    if not response.get("ok", False):
+        raise RuntimeError(response.get("message") or f"Remote Git inspection failed on {machine}")
+    data = response.get("data")
+    if not isinstance(data, dict):
+        raise RuntimeError(f"Remote Git inspection returned invalid data on {machine}")
+    return CommandResult(**data)
 
 
 async def live_snapshot(request: Request) -> Response:
@@ -102,21 +140,26 @@ async def live_control(request: Request) -> Response:
 async def live_git(request: Request) -> Response:
     try:
         principal, workspace = _live_workspace(request)
-        require_scopes(principal, ("shell:read",))
+        machine = str(request.query_params.get("machine") or "local")
+        required_scopes = ("shell:read", "remote:use") if machine != "local" else ("shell:read",)
+        require_scopes(principal, required_scopes)
         cwd = str(request.query_params.get("cwd") or ".")
-        status_task = run_shell(
+        status_task = _run_machine_shell(
+            machine,
             "git status --short --branch",
             cwd=cwd,
             timeout_s=15,
             max_output_bytes=80_000,
         )
-        diff_task = run_shell(
+        diff_task = _run_machine_shell(
+            machine,
             "git diff --no-ext-diff --unified=3",
             cwd=cwd,
             timeout_s=20,
             max_output_bytes=250_000,
         )
-        staged_diff_task = run_shell(
+        staged_diff_task = _run_machine_shell(
+            machine,
             "git diff --cached --no-ext-diff --unified=3",
             cwd=cwd,
             timeout_s=20,
@@ -144,10 +187,11 @@ async def live_git(request: Request) -> Response:
             workspace.workspace_id,
             "human.inspected_diff",
             actor="human",
-            data={"cwd": cwd},
+            data={"machine": machine, "cwd": cwd},
         )
         return _ok(
             {
+                "machine": machine,
                 "cwd": cwd,
                 "status": status.model_dump(),
                 "diff": diff_data,

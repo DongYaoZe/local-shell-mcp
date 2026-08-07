@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -39,21 +40,25 @@ def _configure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, auth: str = "
 
 def test_live_workspace_tokens_rotate_and_events_are_bounded():
     manager = LiveWorkspaceManager()
+    parent_deadline = time.time() + 60
     workspace, first_token = manager.open(
         session_key="mcp:test",
         subject="user",
         scopes=tuple(ALL_OAUTH_SCOPES),
+        parent_expires_at=parent_deadline,
     )
     same_workspace, second_token = manager.open(
         session_key="mcp:test",
         subject="user",
         scopes=tuple(ALL_OAUTH_SCOPES),
+        parent_expires_at=parent_deadline,
     )
 
     assert same_workspace.workspace_id == workspace.workspace_id
     assert first_token != second_token
     assert manager.authenticate(first_token) is None
     assert manager.authenticate(second_token) is workspace
+    assert workspace.expires_at <= parent_deadline
 
     for index in range(LIVE_EVENT_LIMIT + 50):
         manager.publish_workspace(
@@ -121,18 +126,38 @@ def test_live_workspace_rejects_invalid_control_and_missing_workspace():
 
 
 def test_mcp_session_key_uses_request_session_identity():
-    session = object()
+    class Session:
+        pass
 
     class FakeMcp:
-        @staticmethod
-        def get_context():
+        def __init__(self, session, headers=None):
+            self.session = session
+            self.headers = headers or {}
+
+        def get_context(self):
             return type(
                 "Context",
                 (),
-                {"request_context": type("RequestContext", (), {"session": session})()},
+                {
+                    "request_context": type(
+                        "RequestContext",
+                        (),
+                        {
+                            "session": self.session,
+                            "request": type("Request", (), {"headers": self.headers})(),
+                        },
+                    )()
+                },
             )()
 
-    assert live_module.mcp_session_key(FakeMcp()) == f"mcp:{id(session):x}"
+    assert live_module.mcp_session_key(FakeMcp(Session(), {"mcp-session-id": "abc123"})) == (
+        "mcp-http:abc123"
+    )
+    first_session = Session()
+    second_session = Session()
+    first_key = live_module.mcp_session_key(FakeMcp(first_session))
+    assert live_module.mcp_session_key(FakeMcp(first_session)) == first_key
+    assert live_module.mcp_session_key(FakeMcp(second_session)) != first_key
 
 
 def test_control_modes_enforce_both_sides():
@@ -185,6 +210,7 @@ async def test_mcp_app_resource_and_render_result_hide_live_token(tmp_path, monk
     hidden = result.meta["local-shell-mcp/live"]
     assert hidden["token"]
     assert hidden["apiBase"] == "https://lsm.example.test"
+    assert hidden["token"] not in (tmp_path / "audit.jsonl").read_text(encoding="utf-8")
 
     contents = list(await mcp.read_resource(LIVE_RESOURCE_URI))
     assert contents[0].mime_type == LIVE_RESOURCE_MIME
@@ -203,10 +229,17 @@ async def test_human_takeover_blocks_model_mutation_but_not_reads(tmp_path, monk
 
     with pytest.raises(Exception, match="human takeover mode"):
         await mcp.call_tool("write_file", {"path": "blocked.txt", "content": "blocked"})
+    with pytest.raises(Exception, match="human takeover mode"):
+        await mcp.call_tool("browser_snapshot", {"session_id": "missing"})
 
     assert not (tmp_path / "blocked.txt").exists()
     _, structured = await mcp.call_tool("list_files", {"path": "."})
     assert structured["ok"] is True
+    snapshot_without_screenshot = await mcp.call_tool(
+        "browser_snapshot",
+        {"session_id": "missing", "screenshot": False},
+    )
+    assert snapshot_without_screenshot is not None
     event_types = [event["type"] for event in workspace.events]
     assert "tool.blocked" in event_types
     assert "tool.failed" in event_types
@@ -304,6 +337,95 @@ def test_live_http_token_cors_and_human_mutation_modes(tmp_path, monkeypatch):
             json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
         )
         assert mcp_attempt.status_code in {401, 403}
+
+
+def test_live_http_token_authenticates_when_global_auth_is_disabled(tmp_path, monkeypatch):
+    _configure(tmp_path, monkeypatch, auth="none")
+    manager = live_module.get_live_workspace_manager()
+    workspace, token = manager.open(
+        session_key="mcp:no-auth-http",
+        subject="user",
+        scopes=tuple(ALL_OAUTH_SCOPES),
+    )
+    app = _build_mcp_http_app(build_mcp())
+    with TestClient(app, base_url="http://testserver") as client:
+        snapshot = client.get(
+            "/api/live/snapshot",
+            headers={"Authorization": f"Bearer {token}", "Origin": "https://chatgpt.com"},
+        )
+    assert snapshot.status_code == 200
+    assert snapshot.json()["data"]["workspace"]["workspace_id"] == workspace.workspace_id
+
+
+def test_live_workspace_is_hidden_when_ui_is_disabled(tmp_path, monkeypatch):
+    _configure(tmp_path, monkeypatch, auth="none")
+    monkeypatch.setenv("LOCAL_SHELL_MCP_UI_ENABLED", "false")
+    get_settings.cache_clear()
+    mcp = build_mcp()
+
+    async def inspect_surface():
+        tools = {tool.name for tool in await mcp.list_tools()}
+        resources = {str(resource.uri) for resource in await mcp.list_resources()}
+        return tools, resources
+
+    tools, resources = asyncio.run(inspect_surface())
+    assert "open_live_workspace" not in tools
+    assert LIVE_RESOURCE_URI not in resources
+
+    app = _build_mcp_http_app(mcp)
+    with TestClient(app, base_url="http://testserver") as client:
+        assert client.get("/api/live/snapshot").status_code == 404
+
+
+def test_live_git_routes_remote_inspection_to_selected_machine(tmp_path, monkeypatch):
+    _configure(tmp_path, monkeypatch, auth="oauth")
+    manager = live_module.get_live_workspace_manager()
+    _, token = manager.open(
+        session_key="mcp:remote-git",
+        subject="user",
+        scopes=tuple(ALL_OAUTH_SCOPES),
+    )
+
+    class FakeRemote:
+        def __init__(self):
+            self.calls = []
+
+        async def call(self, machine, tool, args, timeout_s=None):
+            self.calls.append((machine, tool, args, timeout_s))
+            command = args["command"]
+            stdout = "## main\n" if "status" in command else "diff --git a/remote.txt b/remote.txt\n"
+            return {
+                "ok": True,
+                "message": "",
+                "data": {
+                    "ok": True,
+                    "exit_code": 0,
+                    "timed_out": False,
+                    "duration_ms": 1,
+                    "cwd": ".",
+                    "command": command,
+                    "stdout": stdout,
+                    "stderr": "",
+                    "truncated": False,
+                },
+            }
+
+    fake_remote = FakeRemote()
+    monkeypatch.setattr(live_routes, "remote_manager", lambda: fake_remote)
+    app = _build_mcp_http_app(build_mcp())
+    with TestClient(app, base_url="http://testserver") as client:
+        response = client.get(
+            "/api/live/git?machine=worker&cwd=.",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["machine"] == "worker"
+    assert "remote.txt" in data["diff"]["stdout"]
+    assert len(fake_remote.calls) == 3
+    assert all(call[0] == "worker" and call[1] == "run_shell_tool" for call in fake_remote.calls)
+    assert all(call[2]["_human"] is True for call in fake_remote.calls)
 
 
 def test_live_route_helpers_reject_missing_or_expired_workspace(monkeypatch):
