@@ -23,6 +23,8 @@ from .shell_ops import check_command_policy
 
 _REGISTRY_VERSION = 1
 _MAX_TOOLS_PER_SERVER = 512
+_MAX_TOOL_DESCRIPTOR_BYTES = 256 * 1024
+_MAX_TOOL_CACHE_BYTES_PER_SERVER = 4 * 1024 * 1024
 _SERVER_NAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 _INHERITED_ENV_KEYS = {
     "COMSPEC",
@@ -87,6 +89,22 @@ def _redact_config_secrets(message: str, server: DynamicMCPServer) -> str:
     for secret in secrets:
         redacted = redacted.replace(secret, "<redacted>")
     return redacted
+
+
+def _redact_config_value(value: Any, server: DynamicMCPServer) -> Any:
+    if isinstance(value, str):
+        return _redact_config_secrets(value, server)
+    if isinstance(value, list):
+        return [_redact_config_value(item, server) for item in value]
+    if isinstance(value, dict):
+        return {str(key): _redact_config_value(item, server) for key, item in value.items()}
+    return value
+
+
+def _serialized_json_bytes(value: Any) -> int:
+    return len(
+        json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    )
 
 
 @dataclass(slots=True)
@@ -259,16 +277,31 @@ class DynamicMCPManager:
 
     async def _fetch_tools(self, server: DynamicMCPServer) -> list[dict[str, Any]]:
         tools: list[dict[str, Any]] = []
+        cached_bytes = 0
         cursor: str | None = None
         async with asyncio.timeout(min(30, self._max_timeout_s)):
             async with self._session(server) as session:
                 while True:
                     response = await session.list_tools(cursor=cursor)
-                    tools.extend(_tool_json(tool) for tool in response.tools)
-                    if len(tools) > _MAX_TOOLS_PER_SERVER:
-                        raise ValueError(
-                            f"dynamic MCP server exposes more than {_MAX_TOOLS_PER_SERVER} tools"
-                        )
+                    for tool in response.tools:
+                        if len(tools) >= _MAX_TOOLS_PER_SERVER:
+                            raise ValueError(
+                                f"dynamic MCP server exposes more than {_MAX_TOOLS_PER_SERVER} tools"
+                            )
+                        descriptor = _tool_json(tool)
+                        descriptor_bytes = _serialized_json_bytes(descriptor)
+                        if descriptor_bytes > _MAX_TOOL_DESCRIPTOR_BYTES:
+                            raise ValueError(
+                                "dynamic MCP tool descriptor exceeds "
+                                f"{_MAX_TOOL_DESCRIPTOR_BYTES} bytes"
+                            )
+                        cached_bytes += descriptor_bytes
+                        if cached_bytes > _MAX_TOOL_CACHE_BYTES_PER_SERVER:
+                            raise ValueError(
+                                "dynamic MCP tool cache exceeds "
+                                f"{_MAX_TOOL_CACHE_BYTES_PER_SERVER} bytes per server"
+                            )
+                        tools.append(descriptor)
                     cursor = response.nextCursor
                     if not cursor:
                         break
@@ -314,7 +347,11 @@ class DynamicMCPManager:
                 enabled=enabled,
                 command=normalized_command,
                 args=normalized_args,
-                cwd=str(resolve_path(cwd.strip())) if cwd else None,
+                cwd=(
+                    str(resolve_path(cwd.strip() if cwd else "."))
+                    if normalized_transport == "stdio"
+                    else None
+                ),
                 url=url.strip() if url else None,
                 env=_string_dict(env, label="env"),
                 headers=_string_dict(headers, label="headers"),
@@ -499,9 +536,10 @@ class DynamicMCPManager:
         async with asyncio.timeout(bounded_timeout):
             async with self._session(config) as session:
                 result = await session.call_tool(tool_name, arguments or {})
+        result_payload = result.model_dump(mode="json", by_alias=True, exclude_none=True)
         return {
             "name": qualified_name,
-            "result": result.model_dump(mode="json", by_alias=True, exclude_none=True),
+            "result": _redact_config_value(result_payload, config),
         }
 
     @staticmethod

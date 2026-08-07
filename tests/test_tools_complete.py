@@ -50,6 +50,27 @@ def _handled_error_data(result: CallToolResult) -> dict:
     return result.structuredContent["data"]
 
 
+@pytest.mark.asyncio
+async def test_dynamic_mcp_downstream_error_is_exposed_as_tool_error(tmp_path, monkeypatch):
+    _configure(tmp_path, monkeypatch)
+
+    async def fake_call(_self, name, arguments=None, *, timeout_s=None):
+        return {
+            "name": name,
+            "result": {
+                "content": [{"type": "text", "text": "downstream failed"}],
+                "isError": True,
+            },
+        }
+
+    monkeypatch.setattr(tools.DynamicMCPManager, "call", fake_call)
+    mcp = tools.build_mcp()
+    result = await _raw_tool(mcp, "mcp_tool_call")("demo:fail", {"x": 1})
+    data = _handled_error_data(result)
+    assert data["name"] == "demo:fail"
+    assert data["result"]["isError"] is True
+
+
 class FakeRemoteManager:
     def __init__(self):
         self.calls = []

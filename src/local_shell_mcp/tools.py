@@ -2147,7 +2147,14 @@ def _register_dynamic_mcp_tools(
         timeout_s: int | None = None,
     ) -> ToolResult:
         """Call one cached dynamic MCP tool named <server>:<tool>. Discover it with mcp_tool_search and inspect its schema with mcp_tool_inspect first. External MCP connections are opened only for the duration of this call."""
-        return await _tool_call(manager.call, name, arguments, timeout_s=timeout_s)
+        try:
+            result = await manager.call(name, arguments, timeout_s=timeout_s)
+        except Exception as exc:
+            return _handled_error(exc)
+        downstream = result.get("result") if isinstance(result, dict) else None
+        if isinstance(downstream, dict) and downstream.get("isError") is True:
+            return _error_call_result(result, f"Dynamic MCP tool returned an error: {name}")
+        return _ok(result)
 
 
 def _register_browser_tools(mcp: FastMCP, settings: Any, read_only_tool: ToolAnnotations) -> None:

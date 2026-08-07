@@ -119,6 +119,7 @@ async def test_register_without_refresh_and_refresh_failure_are_recoverable(tmp_
         refresh=False,
     )
     assert saved["refreshed"] is False
+    assert saved["server"]["cwd"] == str(tmp_path.resolve())
     search = await manager.search(server="cold")
     assert search["tools"] == []
     assert search["unrefreshed_servers"] == ["cold"]
@@ -192,7 +193,9 @@ async def test_http_transport_pagination_call_and_tool_limit(tmp_path, monkeypat
 
         async def call_tool(self, name, arguments):
             seen["call"] = (name, arguments)
-            return CallToolResult(content=[TextContent(type="text", text="ok")], isError=False)
+            return CallToolResult(
+                content=[TextContent(type="text", text="ok Bearer hidden")], isError=False
+            )
 
     monkeypatch.setattr(dynamic_mcp, "streamablehttp_client", fake_http)
     monkeypatch.setattr(dynamic_mcp, "ClientSession", FakeSession)
@@ -207,12 +210,45 @@ async def test_http_transport_pagination_call_and_tool_limit(tmp_path, monkeypat
         "web:beta",
     ]
     called = await manager.call("web:alpha", {"x": 1}, timeout_s=5)
-    assert called["result"]["content"][0]["text"] == "ok"
+    assert called["result"]["content"][0]["text"] == "ok <redacted>"
+    assert "Bearer hidden" not in repr(called)
     assert seen["call"] == ("alpha", {"x": 1})
 
     monkeypatch.setattr(dynamic_mcp, "_MAX_TOOLS_PER_SERVER", 1)
     with pytest.raises(ValueError, match="more than 1 tools"):
         await manager.refresh("web")
+
+
+@pytest.mark.asyncio
+async def test_tool_schema_cache_enforces_descriptor_and_total_byte_limits(tmp_path, monkeypatch):
+    manager = DynamicMCPManager(tmp_path / ".state")
+    server = dynamic_mcp.DynamicMCPServer(
+        name="demo", transport="stdio", command=sys.executable, cwd=str(tmp_path)
+    )
+
+    class FakeSession:
+        async def list_tools(self, cursor=None):
+            return SimpleNamespace(
+                tools=[
+                    Tool(name="one", description="x" * 80, inputSchema={}),
+                    Tool(name="two", description="y" * 80, inputSchema={}),
+                ],
+                nextCursor=None,
+            )
+
+    @asynccontextmanager
+    async def fake_session(_server):
+        yield FakeSession()
+
+    monkeypatch.setattr(manager, "_session", fake_session)
+    monkeypatch.setattr(dynamic_mcp, "_MAX_TOOL_DESCRIPTOR_BYTES", 64)
+    with pytest.raises(ValueError, match="descriptor exceeds"):
+        await manager._fetch_tools(server)
+
+    monkeypatch.setattr(dynamic_mcp, "_MAX_TOOL_DESCRIPTOR_BYTES", 1024)
+    monkeypatch.setattr(dynamic_mcp, "_MAX_TOOL_CACHE_BYTES_PER_SERVER", 200)
+    with pytest.raises(ValueError, match="cache exceeds"):
+        await manager._fetch_tools(server)
 
 
 @pytest.mark.asyncio
