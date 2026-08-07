@@ -26,6 +26,12 @@ _MAX_TOOLS_PER_SERVER = 512
 _MAX_TOOL_DESCRIPTOR_BYTES = 256 * 1024
 _MAX_TOOL_CACHE_BYTES_PER_SERVER = 4 * 1024 * 1024
 _SERVER_NAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+_SENSITIVE_CONFIG_KEY_RE = re.compile(
+    r"(?:^|[_-])(?:auth(?:orization)?|api[_-]?key|access[_-]?key|credential|cookie|"
+    r"password|passwd|private[_-]?key|secret|session|token)(?:$|[_-])",
+    re.IGNORECASE,
+)
+_MIN_SECRET_SUBSTRING_CHARS = 8
 _INHERITED_ENV_KEYS = {
     "COMSPEC",
     "HOME",
@@ -79,25 +85,37 @@ def _config_key(server: DynamicMCPServer) -> tuple[Any, ...]:
     )
 
 
+def _configured_secrets(server: DynamicMCPServer) -> list[str]:
+    secrets: set[str] = set()
+    for key, value in (*server.env.items(), *server.headers.items()):
+        normalized_key = re.sub(r"[^A-Za-z0-9]+", "_", key).strip("_")
+        if value and _SENSITIVE_CONFIG_KEY_RE.search(normalized_key):
+            secrets.add(value)
+    return sorted(secrets, key=len, reverse=True)
+
+
 def _redact_config_secrets(message: str, server: DynamicMCPServer) -> str:
     redacted = message
-    secrets = sorted(
-        {value for value in (*server.env.values(), *server.headers.values()) if value},
-        key=len,
-        reverse=True,
-    )
-    for secret in secrets:
-        redacted = redacted.replace(secret, "<redacted>")
+    for secret in _configured_secrets(server):
+        if redacted == secret:
+            return "<redacted>"
+        if len(secret) >= _MIN_SECRET_SUBSTRING_CHARS:
+            redacted = redacted.replace(secret, "<redacted>")
     return redacted
 
 
-def _redact_config_value(value: Any, server: DynamicMCPServer) -> Any:
+def _redact_config_value(value: Any, server: DynamicMCPServer, *, key: str | None = None) -> Any:
     if isinstance(value, str):
+        if key == "type":
+            return value
         return _redact_config_secrets(value, server)
     if isinstance(value, list):
         return [_redact_config_value(item, server) for item in value]
     if isinstance(value, dict):
-        return {str(key): _redact_config_value(item, server) for key, item in value.items()}
+        return {
+            str(child_key): _redact_config_value(item, server, key=str(child_key))
+            for child_key, item in value.items()
+        }
     return value
 
 

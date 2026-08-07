@@ -219,6 +219,38 @@ async def test_http_transport_pagination_call_and_tool_limit(tmp_path, monkeypat
         await manager.refresh("web")
 
 
+def test_config_redaction_only_treats_secret_like_values_as_substrings():
+    server = dynamic_mcp.DynamicMCPServer(
+        name="demo",
+        transport="stdio",
+        env={
+            "FLAG": "1",
+            "MODE": "on",
+            "TOKEN": "token-12345",
+            "SHORT_TOKEN": "abc",
+        },
+        headers={"Authorization": "Bearer hidden"},
+    )
+    payload = {
+        "content": [
+            {
+                "type": "text",
+                "text": "version 1 is on; token-12345; Bearer hidden; abc suffix",
+            }
+        ],
+        "structuredContent": {"type": "abc", "mode": "on", "flag": "1", "token": "abc"},
+    }
+
+    redacted = dynamic_mcp._redact_config_value(payload, server)
+
+    assert redacted["content"][0]["type"] == "text"
+    assert redacted["content"][0]["text"] == "version 1 is on; <redacted>; <redacted>; abc suffix"
+    assert redacted["structuredContent"]["type"] == "abc"
+    assert redacted["structuredContent"]["mode"] == "on"
+    assert redacted["structuredContent"]["flag"] == "1"
+    assert redacted["structuredContent"]["token"] == "<redacted>"
+
+
 @pytest.mark.asyncio
 async def test_tool_schema_cache_enforces_descriptor_and_total_byte_limits(tmp_path, monkeypatch):
     manager = DynamicMCPManager(tmp_path / ".state")
