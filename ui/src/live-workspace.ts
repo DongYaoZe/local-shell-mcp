@@ -618,7 +618,10 @@ async function selectFile(path: string): Promise<void> {
 }
 
 async function refreshFiles(): Promise<void> {
-  const payload = await api<{ entries: FileEntry[]; path: string; machine: string }>(`/api/ui/files?machine=${encodeURIComponent(fileMachine)}&path=${encodeURIComponent(filePath)}`)
+  const requestMachine = fileMachine
+  const requestPath = filePath
+  const payload = await api<{ entries: FileEntry[]; path: string; machine: string }>(`/api/ui/files?machine=${encodeURIComponent(requestMachine)}&path=${encodeURIComponent(requestPath)}`)
+  if (fileMachine !== requestMachine || filePath !== requestPath) return
   fileEntries = payload.entries || []
   filePath = payload.path || filePath
   if (!fileEntries.some((item) => item.path === selectedFile)) selectedFile = ""
@@ -807,7 +810,7 @@ async function askAboutAudit(id: string): Promise<void> {
 }
 
 async function refreshJobs(): Promise<void> {
-  dashboard = await api<Dashboard>("/api/ui/dashboard")
+  dashboard = await api<Dashboard>(`/api/ui/dashboard?machine=${encodeURIComponent(config?.machine || "local")}`)
   updateChrome()
   if (activeTab === "jobs") { renderJobs(); wireJobRows() }
 }
@@ -818,7 +821,7 @@ async function refreshAllCore(): Promise<void> {
   try {
     const [boot, dash] = await Promise.all([
       api<JsonRecord>("/api/ui/bootstrap"),
-      api<Dashboard>("/api/ui/dashboard"),
+      api<Dashboard>(`/api/ui/dashboard?machine=${encodeURIComponent(config.machine || "local")}`),
     ])
     bootstrap = boot
     dashboard = dash

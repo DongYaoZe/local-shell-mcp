@@ -18,6 +18,8 @@ from starlette.testclient import TestClient
 
 import local_shell_mcp.human_ui as ui
 from local_shell_mcp.auth import AuthMiddleware, Principal
+from local_shell_mcp.live_workspace import get_live_workspace_manager
+from local_shell_mcp.oauth import ALL_OAUTH_SCOPES
 from local_shell_mcp.settings import get_settings
 
 
@@ -1075,6 +1077,134 @@ async def test_native_shell_websocket_rejects_unauthorized_full_and_invalid_requ
     assert any(b"session_id is required" in data for data in invalid.sent)
     assert invalid.closed[-1][0] == 1011
     assert id(invalid) not in ui._ACTIVE_UI_TERMINALS
+
+
+@pytest.mark.asyncio
+async def test_native_shell_websocket_rejects_rotated_live_token(tmp_path, monkeypatch):
+    _configure(tmp_path, monkeypatch, auth="oauth")
+    manager = get_live_workspace_manager()
+    session_key = "mcp:websocket-rotation"
+    workspace, token = manager.open(
+        session_key=session_key,
+        subject="user",
+        scopes=tuple(ALL_OAUTH_SCOPES),
+    )
+    encoded = base64.urlsafe_b64encode(token.encode()).decode().rstrip("=")
+
+    class Process:
+        def __init__(self):
+            self.writes = []
+            self.closed = False
+
+        async def read(self):
+            await asyncio.sleep(0.2)
+            return b"late output"
+
+        async def write(self, data):
+            self.writes.append(data)
+
+        async def resize(self, cols, rows):  # noqa: ARG002
+            return None
+
+        async def exit_code(self):
+            return None
+
+        async def close(self):
+            self.closed = True
+
+    class Socket:
+        headers = {"sec-websocket-protocol": f"lsm-ui, bearer.{encoded}"}
+        query_params = {"machine": "local", "session_id": "demo"}
+
+        def __init__(self):
+            self.closed = []
+            self.sent = []
+            self.rotated = False
+
+        async def accept(self, subprotocol=None):  # noqa: ARG002
+            return None
+
+        async def close(self, code=1000, reason=""):
+            self.closed.append((code, reason))
+
+        async def send_bytes(self, data):
+            self.sent.append(data)
+
+        async def receive(self):
+            if not self.rotated:
+                self.rotated = True
+                same_workspace, replacement = manager.open(
+                    session_key=session_key,
+                    subject="user",
+                    scopes=tuple(ALL_OAUTH_SCOPES),
+                )
+                assert same_workspace is workspace
+                assert replacement != token
+            return {"type": "websocket.receive", "bytes": b"should-not-run"}
+
+    process = Process()
+
+    async def fake_spawn(*args):  # noqa: ARG001
+        return process
+
+    monkeypatch.setattr(ui, "_spawn_shell_process", fake_spawn)
+    ui._ACTIVE_UI_TERMINALS.clear()
+    socket = Socket()
+
+    await ui.ui_shell_websocket(socket)
+
+    assert any(code == 4401 and "rotated" in reason for code, reason in socket.closed)
+    assert process.writes == []
+    assert process.closed is True
+
+
+@pytest.mark.asyncio
+async def test_dashboard_dispatches_workloads_to_selected_remote(tmp_path, monkeypatch):
+    _configure(tmp_path, monkeypatch, remote=True, auth="none")
+    calls = []
+
+    async def fake_dispatch(machine, local_call, remote_tool, remote_args):  # noqa: ARG001
+        calls.append((machine, remote_tool, remote_args))
+        if remote_tool == "shell_list":
+            return {"sessions": [{"session_id": "remote-shell", "backend": "tmux"}]}
+        if remote_tool == "job_list":
+            return {
+                "jobs": [
+                    {
+                        "job_id": "remote-job",
+                        "session_id": "remote-job-shell",
+                        "status": "running",
+                    }
+                ],
+                "counts": {"running": 1},
+            }
+        raise AssertionError(remote_tool)
+
+    monkeypatch.setattr(ui, "_machine_dispatch", fake_dispatch)
+    monkeypatch.setattr(ui, "_machine_rows", lambda: {"machines": []})
+    monkeypatch.setattr(ui, "_local_system_snapshot", lambda: {})
+    monkeypatch.setattr(ui, "todo_read", lambda: {"revision": 0, "todos": []})
+    monkeypatch.setattr(
+        ui,
+        "query_audit",
+        lambda **kwargs: {"entries": [], "count": 0, "total_matched": 0},  # noqa: ARG005
+    )
+    monkeypatch.setattr(ui, "_dashboard_alerts", lambda *args: [])
+    monkeypatch.setattr(ui, "_dashboard_activity", lambda entries: [])
+    monkeypatch.setattr(ui, "version_info", lambda: {"version": "test"})
+
+    response = await ui.api_dashboard(
+        _request("/api/ui/dashboard", query=b"machine=worker")
+    )
+    payload = json.loads(response.body)["data"]
+
+    assert calls == [
+        ("worker", "shell_list", {}),
+        ("worker", "job_list", {"include_finished": True}),
+    ]
+    assert payload["selected_machine"] == "worker"
+    assert payload["jobs"][0]["machine"] == "worker"
+    assert payload["sessions"][0]["machine"] == "worker"
 
 
 def test_ui_routes_disabled(tmp_path, monkeypatch):

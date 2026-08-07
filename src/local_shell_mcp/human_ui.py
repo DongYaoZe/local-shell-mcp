@@ -747,8 +747,9 @@ async def api_bootstrap(request: Request) -> Response:
 
 async def api_dashboard(request: Request) -> Response:
     settings = get_settings()
+    machine = str(request.query_params.get("machine") or "local")
     required = ["shell:read"]
-    if settings.remote_enabled:
+    if settings.remote_enabled or machine != "local":
         required.append("remote:use")
     _require_ui_scopes(request, *required)
 
@@ -773,7 +774,7 @@ async def api_dashboard(request: Request) -> Response:
         )
     with suppress_audit():
         try:
-            terminals = await _machine_dispatch("local", list_shells, "shell_list", {})
+            terminals = await _machine_dispatch(machine, list_shells, "shell_list", {})
         except Exception as exc:
             _LOGGER.debug("Dashboard terminal snapshot failed", exc_info=True)
             terminals = {"sessions": []}
@@ -782,11 +783,16 @@ async def api_dashboard(request: Request) -> Response:
                     "severity": "warning",
                     "title": "Persistent sessions unavailable",
                     "detail": f"{type(exc).__name__}: {exc}",
-                    "node": "local",
+                    "node": machine,
                 }
             )
         try:
-            jobs_payload = await list_jobs(include_finished=True)
+            jobs_payload = await _machine_dispatch(
+                machine,
+                lambda: list_jobs(include_finished=True),
+                "job_list",
+                {"include_finished": True},
+            )
         except Exception as exc:
             _LOGGER.debug("Dashboard job snapshot failed", exc_info=True)
             jobs_payload = {"jobs": [], "counts": {}}
@@ -795,7 +801,7 @@ async def api_dashboard(request: Request) -> Response:
                     "severity": "warning",
                     "title": "Tracked jobs unavailable",
                     "detail": f"{type(exc).__name__}: {exc}",
-                    "node": "local",
+                    "node": machine,
                 }
             )
     try:
@@ -818,8 +824,14 @@ async def api_dashboard(request: Request) -> Response:
         )
 
     machine_rows = list(machines.get("machines") or [])
-    jobs = list(jobs_payload.get("jobs") or [])
-    sessions = list((terminals or {}).get("sessions") or [])
+    jobs = [
+        {**job, "machine": str(job.get("machine") or machine)}
+        for job in list(jobs_payload.get("jobs") or [])
+    ]
+    sessions = [
+        {**session, "machine": str(session.get("machine") or machine)}
+        for session in list((terminals or {}).get("sessions") or [])
+    ]
     audit_entries = list(audit_payload.get("entries") or [])
     version = version_info()
     current_version = str(version.get("version") or "unknown")
@@ -847,6 +859,7 @@ async def api_dashboard(request: Request) -> Response:
     return _json_ok(
         {
             "generated_at": time.time(),
+            "selected_machine": machine,
             "health": health,
             "version": version,
             "system": system,
@@ -1409,12 +1422,19 @@ def _authorize_websocket(websocket: WebSocket) -> bool:
     return _websocket_principal(websocket) is not None
 
 
-def _live_websocket_workspace_id(websocket: WebSocket) -> str | None:
+def _live_websocket_credentials(websocket: WebSocket) -> tuple[str, str] | None:
     token = _websocket_token(websocket)
     if not token:
         return None
     workspace = get_live_workspace_manager().authenticate(token)
-    return workspace.workspace_id if workspace is not None else None
+    if workspace is None:
+        return None
+    return workspace.workspace_id, token
+
+
+def _live_websocket_workspace_id(websocket: WebSocket) -> str | None:
+    credentials = _live_websocket_credentials(websocket)
+    return credentials[0] if credentials is not None else None
 
 
 def _tui_source_path() -> Path | None:
@@ -1989,7 +2009,9 @@ async def ui_shell_websocket(websocket: WebSocket) -> None:
 
     machine = str(websocket.query_params.get("machine") or "local")
     session_id = str(websocket.query_params.get("session_id") or "")
-    live_workspace_id = _live_websocket_workspace_id(websocket)
+    live_credentials = _live_websocket_credentials(websocket)
+    live_workspace_id = live_credentials[0] if live_credentials is not None else None
+    live_token = live_credentials[1] if live_credentials is not None else None
     try:
         if not session_id:
             raise ValueError("session_id is required")
@@ -2019,6 +2041,18 @@ async def ui_shell_websocket(websocket: WebSocket) -> None:
     loop = asyncio.get_running_loop()
     last_activity = loop.time()
 
+    def live_credential_valid() -> bool:
+        if not live_workspace_id or not live_token:
+            return True
+        workspace = get_live_workspace_manager().authenticate(live_token)
+        return workspace is not None and workspace.workspace_id == live_workspace_id
+
+    async def reject_invalid_live_credential() -> bool:
+        if live_credential_valid():
+            return False
+        await websocket.close(code=4401, reason="Live workspace credential expired or rotated")
+        return True
+
     async def sender() -> None:
         nonlocal last_activity
         while True:
@@ -2029,6 +2063,8 @@ async def ui_shell_websocket(websocket: WebSocket) -> None:
                         code=UI_SHELL_EXIT_CODE,
                         reason="Persistent terminal attachment exited",
                     )
+                return
+            if await reject_invalid_live_credential():
                 return
             last_activity = loop.time()
             await websocket.send_bytes(data)
@@ -2076,6 +2112,8 @@ async def ui_shell_websocket(websocket: WebSocket) -> None:
             last_activity = loop.time()
             if message["type"] == "websocket.disconnect":
                 return
+            if await reject_invalid_live_credential():
+                return
             if message.get("bytes") is not None:
                 data = message["bytes"]
                 if not await human_input_allowed():
@@ -2119,7 +2157,15 @@ async def ui_shell_websocket(websocket: WebSocket) -> None:
                 if asyncio.iscoroutine(resized):
                     await resized
 
+    async def credential_watcher() -> None:
+        while live_workspace_id and live_token:
+            await asyncio.sleep(5)
+            if await reject_invalid_live_credential():
+                return
+
     tasks = [asyncio.create_task(sender()), asyncio.create_task(receiver())]
+    if live_workspace_id and live_token:
+        tasks.append(asyncio.create_task(credential_watcher()))
     try:
         done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
         for task in pending:
