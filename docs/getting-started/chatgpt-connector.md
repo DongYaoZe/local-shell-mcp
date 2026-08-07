@@ -54,6 +54,40 @@ Access tokens do not expire by default because long coding sessions can exceed s
 4. Complete OAuth.
 5. Approve the tool surface.
 
+## Live Workspace MCP App
+
+ChatGPT clients with MCP Apps support can render `local-shell-mcp` as an interactive execution workspace inside the conversation. Ask ChatGPT to open the Live Workspace, or let it call `open_live_workspace` when real-time visibility or human collaboration would help.
+
+The Live Workspace is intentionally separate from the model's reasoning. It shows observable execution state and shared resources:
+
+- **Activity** shows MCP tool starts, completions, failures, and human actions.
+- **Terminal** attaches to the existing persistent shell backend with live PTY output.
+- **Files** browses, previews, edits, creates, and deletes local or remote workspace files.
+- **Diff** shows staged and unstaged Git changes and can send the current diff back to ChatGPT for review.
+- **Jobs** shows managed jobs and persistent sessions.
+- **Remotes** shows workers and provides invitation, rename, and revoke actions when remote support is enabled.
+- **Audit** exposes recent structured MCP audit records.
+
+The top-level control switch makes execution ownership explicit:
+
+| Mode | ChatGPT mutations | Human mutations in Live Workspace |
+|---|---:|---:|
+| **Observe** | allowed | read-only |
+| **Collaborate** | allowed | allowed |
+| **Take over** | blocked | allowed |
+
+Take over is enforced by the MCP execution layer, not only by the browser UI. Read-only MCP tools remain available so ChatGPT can inspect state and continue analysis while the human operates the workspace. Switching back to Collaborate or Observe releases the takeover.
+
+File, diff, audit, and activity views can send selected operational context to the next model turn through the MCP Apps bridge. This is explicit shared context; the UI does not expose or reconstruct private model reasoning.
+
+### Networking and security
+
+The rendered MCP App connects directly from its sandbox to the configured service origin for low-latency terminal and event traffic. Therefore `LOCAL_SHELL_MCP_PUBLIC_BASE_URL` must be the HTTPS origin that the ChatGPT browser can reach. The MCP endpoint itself remains `https://your-public-host.example.com/mcp`.
+
+Opening the workspace creates a random, short-lived Live Workspace bearer token. The token is returned only in MCP result metadata intended for the rendered app, is not included in model-visible structured content, and is accepted only by the human/live UI API surfaces. Reopening a workspace rotates the token. The embedded app does not use browser cookies or ambient credentials.
+
+Clients that do not implement MCP Apps can ignore the UI metadata. All normal MCP data tools remain available and keep the same behavior.
+
 ## First prompt
 
 ```text

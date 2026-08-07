@@ -18,7 +18,7 @@ Ta strona jest zlokalizowanym przeglądem narzędzi. Nazwy narzędzi i parametr�
 
 ### Filesystem
 
-`list_files`, `read_file`, `write_file`, `edit_file`, `delete_file_or_dir`, `transfer_path`, `tree_view`, `glob_search`, `grep_search`
+`list_files`, `read_file`, `write_file`, `edit_file`, `delete_file_or_dir`, `remote_transfer`, `tree_view`, `glob_search`, `grep_search`
 
 ### Shell and jobs
 
@@ -34,7 +34,7 @@ Ta strona jest zlokalizowanym przeglądem narzędzi. Nazwy narzędzi i parametr�
 
 ### Remote workers
 
-`remote_invite`, `remote_list_machines`, `remote_rename_machine`, `remote_revoke_machine`; normal tools use optional `machine`, and `transfer_path` handles transfers
+`remote_manage`; normal tools use optional `machine`, and `remote_transfer` handles transfers
 
 ## Zalecenia użycia
 

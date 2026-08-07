@@ -82,3 +82,21 @@ async def test_browser_tombstones_point_to_browser_run_script() -> None:
 
     renamed = await mcp.call_tool("playwright_run_script_tool", {})
     assert renamed["data"]["removed_in"] == "3.3.0"
+
+
+async def test_removed_remote_surface_points_to_consolidated_tools() -> None:
+    mcp = DeprecatedToolFastMCP("test")
+
+    for name in (
+        "remote_invite",
+        "remote_list_machines",
+        "remote_revoke_machine",
+        "remote_rename_machine",
+    ):
+        result = await mcp.call_tool(name, {})
+        assert result["data"]["replacement"] == "remote_manage"
+        assert result["data"]["removed_in"] == "3.3.0"
+
+    transfer = await mcp.call_tool("transfer_path", {})
+    assert transfer["data"]["replacement"] == "remote_transfer"
+    assert transfer["data"]["removed_in"] == "3.3.0"

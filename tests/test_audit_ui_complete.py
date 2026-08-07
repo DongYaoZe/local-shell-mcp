@@ -56,7 +56,7 @@ def test_audit_call_helpers_cover_legacy_unpaired_and_optional_fields():
     assert audit_module._operation_type({"tool": "mcp_tool_call"}) == "agent"
     assert audit_module._operation_type({"event": "download_created"}) == "files"
     assert audit_module._operation_type({"event": "transfer_completed"}) == "remote"
-    assert audit_module._operation_type({"tool": "transfer_path"}) == "remote"
+    assert audit_module._operation_type({"tool": "remote_transfer"}) == "remote"
     assert audit_module._call_input({"arguments": "invalid"}) is None
     assert audit_module._call_input({"arguments": {"positional_count": 2}}) == {
         "positional_count": 2

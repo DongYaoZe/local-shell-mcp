@@ -27,7 +27,7 @@
 | 查找代码 | `grep_search` | 盲目读取大量文件 |
 | 浏览器证据 | `browser_snapshot`、`browser_run_script` | 只根据页面名或路由猜测 |
 | 可下载产物 | `create_file_link` | 在聊天中粘贴大型二进制内容 |
-| 远程机器任务 | 普通工具加 `machine`，以及 `transfer_path` | 在出站 worker 模式足够时开放入站 SSH |
+| 远程机器任务 | 普通工具加 `machine`，以及 `remote_transfer` | 在出站 worker 模式足够时开放入站 SSH |
 
 ## 提示词模板
 
@@ -92,10 +92,10 @@
 
 推荐做法：
 
-- 用 `remote_invite` 或 `remote_rename_machine` 给机器取清晰名称。
+- 用 `remote_manage(action="invite", ...)` 创建机器，或用 `remote_manage(action="rename", ...)` 重命名。
 - 操作前检查 `environment_info`。
-- 用 `transfer_path` 处理控制端与 worker、或 worker 之间的文件和目录传输。
-- 任务结束后用 `remote_revoke_machine` 撤销 worker。
+- 用 `remote_transfer` 处理控制端与 worker、或 worker 之间的文件和目录传输。
+- 任务结束后用 `remote_manage(action="revoke", ...)` 撤销 worker。
 
 ## 反模式
 

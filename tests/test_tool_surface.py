@@ -6,6 +6,7 @@ from local_shell_mcp.tools import build_mcp
 CORE_TOOL_NAMES = {
     "search",
     "fetch",
+    "open_live_workspace",
     "environment_info",
     "skills_list",
     "skill_load",
@@ -50,11 +51,8 @@ CORE_TOOL_NAMES = {
 }
 
 REMOTE_DEPENDENT_TOOL_NAMES = {
-    "transfer_path",
-    "remote_invite",
-    "remote_list_machines",
-    "remote_revoke_machine",
-    "remote_rename_machine",
+    "remote_manage",
+    "remote_transfer",
 }
 
 REMOVED_TOOL_NAMES = {
@@ -76,6 +74,11 @@ REMOVED_TOOL_NAMES = {
     "browser_get_text_tool",
     "playwright_run_script_tool",
     "playwright_install_tool",
+    "transfer_path",
+    "remote_invite",
+    "remote_list_machines",
+    "remote_revoke_machine",
+    "remote_rename_machine",
 }
 
 
@@ -112,6 +115,7 @@ async def test_machine_capable_tools_use_optional_machine_arguments(tmp_path, mo
 
     tools = {tool.name: tool for tool in await build_mcp().list_tools()}
     machine_capable = {
+        "open_live_workspace",
         "environment_info",
         "run_shell_tool",
         "run_python_tool",
@@ -143,7 +147,7 @@ async def test_machine_capable_tools_use_optional_machine_arguments(tmp_path, mo
 
     for name in machine_capable:
         assert "machine" in tools[name].inputSchema["properties"], name
-    transfer_properties = tools["transfer_path"].inputSchema["properties"]
+    transfer_properties = tools["remote_transfer"].inputSchema["properties"]
     assert {"source_machine", "destination_machine"} <= set(transfer_properties)
 
     edit_schema = tools["edit_file"].inputSchema

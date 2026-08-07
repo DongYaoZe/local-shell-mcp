@@ -2,17 +2,18 @@
 
 This page is generated from the actual MCP tool schemas. Run `python scripts/generate-tools-reference.py` after changing the public tool surface.
 
-All tools except connector-style `search` and `fetch` return a structured `ToolResult` containing `ok`, `message`, and `data`. Most execution and file tools accept an optional `machine`; omit it for the controller workspace and provide it for a connected worker. Git operations intentionally use `run_shell_tool` or another shell tool rather than dedicated Git wrappers.
+Most tools return a structured `ToolResult` containing `ok`, `message`, and `data`. Connector-style `search` and `fetch` use connector-compatible results, while `open_live_workspace` returns the model-visible state used to render the MCP App. Most execution and file tools accept an optional `machine`; omit it for the controller workspace and provide it for a connected worker. Git operations intentionally use `run_shell_tool` or another shell tool rather than dedicated Git wrappers.
 
 ## Selection guide
 
 | Need | Preferred tools |
 |---|---|
+| Monitor or collaborate with execution in ChatGPT | `open_live_workspace` |
 | Inspect an environment | `environment_info`, `tree_view`, `read_file` |
 | Run a short command or Git operation | `run_shell_tool` |
 | Run an interactive or long task | `shell_start` or `job_start` |
 | Make exact file changes | `edit_file` or `apply_patch` |
-| Transfer a file or directory | `transfer_path` |
+| Transfer a file or directory | `remote_transfer` |
 | Discover an external MCP capability | `mcp_tool_search`, then `mcp_tool_inspect` |
 | Interact with a page | `browser_session`, `browser_snapshot`, then `browser_act` |
 | Run custom browser logic | `browser_run_script` |
@@ -39,6 +40,21 @@ Fetch a workspace file by id returned from search.
 | `id` | `string` | required |  |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+## Interactive workspace
+
+### `open_live_workspace`
+
+Open or reuse the interactive Live Workspace for real-time human monitoring and collaboration. Use it for tasks where terminal output, files/diffs, jobs, remotes, audit activity, or human takeover would materially improve the workflow.
+
+| Parameter | Type | Required/default | Description |
+|---|---|---|---|
+| `machine` | `string \| null` | `null` |  |
+| `cwd` | `string` | `"."` |  |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+When `machine` is supplied, the call additionally requires `remote:use` and runs through the remote worker protocol.
 
 ## Environment, skills, and task state
 
@@ -459,7 +475,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 
 When `machine` is supplied, the call additionally requires `remote:use` and runs through the remote worker protocol.
 
-### `transfer_path`
+### `remote_transfer`
 
 Start a tracked job that copies a file or directory between the controller and remote machines. Remote uploads use resumable raw-binary chunks; use job_list, job_tail, job_stop, and job_retry to manage the transfer.
 
@@ -648,44 +664,18 @@ When `machine` is supplied, the call additionally requires `remote:use` and runs
 
 ## Remote worker administration
 
-### `remote_invite`
+### `remote_manage`
 
-Create a one-time command for a remote machine to join this server.
+Manage remote workers with action=invite, list, revoke, or rename. invite accepts name/workdir/ttl_s; revoke requires machine; rename requires machine and new_name.
 
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
+| `action` | `string` | required |  |
 | `name` | `string \| null` | `null` |  |
 | `workdir` | `string \| null` | `null` |  |
 | `ttl_s` | `integer \| null` | `null` |  |
-
-OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
-
-### `remote_list_machines`
-
-List registered remote worker machines.
-
-OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
-
-### `remote_revoke_machine`
-
-Revoke and remove a remote worker machine.
-
-| Parameter | Type | Required/default | Description |
-|---|---|---|---|
-| `machine` | `string` | required |  |
-
-OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
-
-When `machine` is supplied, the call additionally requires `remote:use` and runs through the remote worker protocol.
-
-### `remote_rename_machine`
-
-Rename a remote worker machine.
-
-| Parameter | Type | Required/default | Description |
-|---|---|---|---|
-| `machine` | `string` | required |  |
-| `new_name` | `string` | required |  |
+| `machine` | `string \| null` | `null` |  |
+| `new_name` | `string \| null` | `null` |  |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 

@@ -127,13 +127,13 @@ def test_build_mcp_http_app_applies_timeout_and_middleware(monkeypatch):
 
     assert result is fake_app
     assert mcp._session_manager.session_idle_timeout == 9
-    assert len(fake_app.middleware) == 3
+    assert len(fake_app.middleware) == 4
 
     no_manager = SimpleNamespace(streamable_http_app=lambda: object())
     fake_app.middleware.clear()
     monkeypatch.setattr(settings_module, "get_settings", lambda: _settings(auth_mode="none"))
     main_module._build_mcp_http_app(no_manager)
-    assert len(fake_app.middleware) == 1
+    assert len(fake_app.middleware) == 2
 
 
 def test_run_http(monkeypatch):
