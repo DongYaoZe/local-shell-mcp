@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 from starlette.applications import Starlette
 from starlette.routing import Route
 
+from local_shell_mcp import __version__
 from local_shell_mcp.auth import (
     _CURRENT_PRINCIPAL,
     Principal,
@@ -91,6 +92,7 @@ async def test_mcp_metadata_for_chatgpt_developer_mode(tmp_path, monkeypatch):
 
     mcp = build_mcp()
     assert "local-shell-mcp.example.com" in mcp.settings.transport_security.allowed_hosts
+    assert mcp._mcp_server.create_initialization_options().server_version == __version__
 
     tools = {tool.name: tool for tool in await mcp.list_tools()}
     assert tools["search"].meta["securitySchemes"][0]["type"] == "noauth"
