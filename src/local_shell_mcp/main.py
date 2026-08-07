@@ -14,6 +14,7 @@ def _with_oauth_routes(inner_app):  # noqa: ANN001
 
     from .downloads import download_routes
     from .human_ui import ui_routes
+    from .live_workspace_routes import live_workspace_routes
     from .oauth import (
         oauth_authorize_get,
         oauth_authorize_post,
@@ -44,6 +45,7 @@ def _with_oauth_routes(inner_app):  # noqa: ANN001
     ]
     settings = get_settings()
     routes[2:2] = download_routes()
+    routes[2:2] = live_workspace_routes()
     routes[2:2] = ui_routes()
     if settings.remote_enabled:
         routes[2:2] = remote_routes()
@@ -54,7 +56,12 @@ def _with_oauth_routes(inner_app):  # noqa: ANN001
 
 
 def _build_mcp_http_app(mcp):  # noqa: ANN001
-    from .auth import AuthMiddleware, McpSessionLimitMiddleware, RequestBodyLimitMiddleware
+    from .auth import (
+        AuthMiddleware,
+        EmbeddedUiCorsMiddleware,
+        McpSessionLimitMiddleware,
+        RequestBodyLimitMiddleware,
+    )
     from .settings import get_settings
 
     settings = get_settings()
@@ -72,6 +79,9 @@ def _build_mcp_http_app(mcp):  # noqa: ANN001
     if settings.auth_mode != "none":
         app.add_middleware(AuthMiddleware)
     app.add_middleware(RequestBodyLimitMiddleware)
+    # Must be outermost so browser preflights from the MCP App sandbox do not
+    # reach OAuth middleware. Actual API requests still require bearer auth.
+    app.add_middleware(EmbeddedUiCorsMiddleware)
     return app
 
 

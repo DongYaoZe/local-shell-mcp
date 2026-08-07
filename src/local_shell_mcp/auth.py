@@ -18,6 +18,7 @@ from .ui_security import has_valid_ui_local_token, is_loopback_connection
 
 PUBLIC_PATHS = {"/healthz", "/readyz", "/docs", "/openapi.json", "/join", "/remote/worker-bundle.tgz", "/remote/register", "/remote/resume", "/remote/poll", "/remote/heartbeat", "/remote/result"}
 HUMAN_UI_API_PREFIX = "/api/ui/"
+LIVE_UI_API_PREFIX = "/api/live/"
 _REQUEST_BODY_SCOPE_KEY = "local_shell_mcp.request_body"
 _REMOTE_TRANSFER_PREFIX = "/remote/transfer/"
 
@@ -236,6 +237,22 @@ def verify_request(request: Request) -> Principal:
         and has_valid_ui_local_token(request)
     ):
         return Principal(email="localhost", subject="native-tui", claims={"auth": "native-tui"})
+    if path.startswith((HUMAN_UI_API_PREFIX, LIVE_UI_API_PREFIX)):
+        token = _extract_token(request)
+        if token:
+            from .live_workspace import get_live_workspace_manager
+
+            workspace = get_live_workspace_manager().authenticate(token)
+            if workspace is not None:
+                return Principal(
+                    email=None,
+                    subject=workspace.subject,
+                    claims={
+                        "auth": "live-workspace",
+                        "scope": " ".join(workspace.scopes),
+                        "live_workspace_id": workspace.workspace_id,
+                    },
+                )
     if (
         settings.auth_bypass_localhost
         and settings.mode == "http"
@@ -428,6 +445,59 @@ class AuthMiddleware:
             await self.app(scope, downstream_receive, send)
         finally:
             _CURRENT_PRINCIPAL.reset(token)
+
+
+class EmbeddedUiCorsMiddleware:
+    """Allow sandboxed MCP Apps to call authenticated human/live UI APIs.
+
+    The embedded app never uses browser cookies or ambient credentials. In OAuth
+    mode a bearer token is still required, so allowing the sandbox origin does not
+    bypass endpoint authentication.
+    """
+
+    def __init__(self, app: ASGIApp):
+        self.app = app
+
+    @staticmethod
+    def _eligible(scope: Scope) -> bool:
+        path = str(scope.get("path") or "")
+        return path.startswith(HUMAN_UI_API_PREFIX) or path.startswith(LIVE_UI_API_PREFIX)
+
+    @staticmethod
+    def _headers() -> list[tuple[bytes, bytes]]:
+        return [
+            (b"access-control-allow-origin", b"*"),
+            (b"access-control-allow-methods", b"GET, POST, PUT, DELETE, OPTIONS"),
+            (b"access-control-allow-headers", b"Authorization, Content-Type"),
+            (b"access-control-max-age", b"600"),
+        ]
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope.get("type") != "http" or not self._eligible(scope):
+            await self.app(scope, receive, send)
+            return
+        headers = {key.lower(): value for key, value in scope.get("headers", [])}
+        if scope.get("method", "").upper() == "OPTIONS" and b"origin" in headers:
+            response = JSONResponse({}, status_code=204, headers={
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+                "Access-Control-Allow-Headers": "Authorization, Content-Type",
+                "Access-Control-Max-Age": "600",
+            })
+            await response(scope, receive, send)
+            return
+
+        async def send_with_cors(message: Message) -> None:
+            if message.get("type") == "http.response.start" and b"origin" in headers:
+                mutable = list(message.get("headers", []))
+                existing = {key.lower() for key, _ in mutable}
+                for key, value in self._headers():
+                    if key not in existing:
+                        mutable.append((key, value))
+                message["headers"] = mutable
+            await send(message)
+
+        await self.app(scope, receive, send_with_cors)
 
 
 class RequestBodyLimitMiddleware:

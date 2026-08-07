@@ -6,6 +6,7 @@ from local_shell_mcp.tools import build_mcp
 CORE_TOOL_NAMES = {
     "search",
     "fetch",
+    "open_live_workspace",
     "environment_info",
     "skills_list",
     "skill_load",
@@ -111,6 +112,7 @@ async def test_machine_capable_tools_use_optional_machine_arguments(tmp_path, mo
 
     tools = {tool.name: tool for tool in await build_mcp().list_tools()}
     machine_capable = {
+        "open_live_workspace",
         "environment_info",
         "run_shell_tool",
         "run_python_tool",

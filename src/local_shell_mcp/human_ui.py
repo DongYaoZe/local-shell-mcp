@@ -39,6 +39,11 @@ from .fs_ops import (
 )
 from .image_ops import ImageFile, assert_view_image_size, detect_image_type, make_image_preview
 from .jobs import list_jobs
+from .live_workspace import (
+    HumanCollaborationRequiredError,
+    get_live_workspace_manager,
+    workspace_id_from_claims,
+)
 from .oauth import ALL_OAUTH_SCOPES
 from .remote import remote_manager
 from .settings import get_settings
@@ -323,6 +328,39 @@ def _require_ui_scopes(
     if machine and machine != "local":
         required.append("remote:use")
     require_scopes(_request_principal(request), required)
+
+
+def _live_workspace_id(request: Request) -> str | None:
+    principal = _request_principal(request)
+    if principal.claims.get("auth") != "live-workspace":
+        return None
+    return workspace_id_from_claims(principal.claims)
+
+
+def _require_live_human_mutation(request: Request) -> str | None:
+    workspace_id = _live_workspace_id(request)
+    if not workspace_id:
+        return None
+    try:
+        get_live_workspace_manager().require_human_mutation_allowed(workspace_id)
+    except HumanCollaborationRequiredError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return workspace_id
+
+
+def _record_live_human_action(
+    workspace_id: str | None,
+    action: str,
+    **data: Any,
+) -> None:
+    if not workspace_id:
+        return
+    get_live_workspace_manager().publish_workspace(
+        workspace_id,
+        "human.action",
+        actor="human",
+        data={"action": action, **data},
+    )
 
 
 _AUDIT_FILE_WRITE_TOOLS = frozenset(
@@ -994,6 +1032,7 @@ async def api_file_action(request: Request) -> Response:
         body = await request.json()
         machine = str(body.get("machine") or "local")
         _require_ui_scopes(request, "shell:read", "shell:write", machine=machine)
+        workspace_id = _require_live_human_mutation(request)
         path = str(body.get("path") or "")
         if not path:
             raise ValueError("path is required")
@@ -1005,6 +1044,7 @@ async def api_file_action(request: Request) -> Response:
                 "delete_file_or_dir",
                 {"path": path, "recursive": bool(body.get("recursive", False))},
             )
+            _record_live_human_action(workspace_id, "file.delete", machine=machine, path=path)
             return _json_ok(result)
         if action == "write":
             expected_sha256 = str(body.get("expected_sha256") or "") or None
@@ -1024,6 +1064,7 @@ async def api_file_action(request: Request) -> Response:
                     "expected_sha256": expected_sha256,
                 },
             )
+            _record_live_human_action(workspace_id, "file.write", machine=machine, path=path)
             return _json_ok(result)
         if action not in {"mkdir", "touch", "rename", "copy", "move"}:
             raise ValueError(f"Unsupported file action: {action}")
@@ -1039,6 +1080,13 @@ async def api_file_action(request: Request) -> Response:
             lambda: perform_file_action(**args),
             "human_file_action",
             args,
+        )
+        _record_live_human_action(
+            workspace_id,
+            f"file.{action}",
+            machine=machine,
+            path=path,
+            destination=args.get("destination"),
         )
         return _json_ok(result)
     except FileConflictError as exc:
@@ -1088,6 +1136,7 @@ async def api_terminal_action(request: Request) -> Response:
         body = await request.json()
         machine = str(body.get("machine") or "local")
         _require_ui_scopes(request, "shell:read", "shell:execute", machine=machine)
+        workspace_id = None if action == "resize" else _require_live_human_mutation(request)
         if action == "start":
             args = {
                 "cwd": str(body.get("cwd") or "."),
@@ -1155,6 +1204,14 @@ async def api_terminal_action(request: Request) -> Response:
             )
         else:
             raise ValueError(f"Unsupported terminal action: {action}")
+        if action != "resize":
+            result_session_id = result.get("session_id") if isinstance(result, dict) else None
+            _record_live_human_action(
+                workspace_id,
+                f"terminal.{action}",
+                machine=machine,
+                session_id=str(body.get("session_id") or result_session_id or ""),
+            )
         return _json_ok(result)
     except Exception as exc:
         return _json_error(exc)
@@ -1166,6 +1223,7 @@ async def api_todos(request: Request) -> Response:
             _require_ui_scopes(request, "shell:read")
             return _json_ok(await asyncio.to_thread(todo_read))
         _require_ui_scopes(request, "shell:read", "shell:write")
+        workspace_id = _require_live_human_mutation(request)
         body = await request.json()
         expected_revision = body.get("expected_revision")
         with suppress_audit():
@@ -1174,6 +1232,7 @@ async def api_todos(request: Request) -> Response:
                 list(body.get("todos") or []),
                 int(expected_revision) if expected_revision is not None else None,
             )
+        _record_live_human_action(workspace_id, "todo.write")
         return _json_ok(result)
     except TodoConflictError as exc:
         return _json_error(exc, status_code=409)
@@ -1259,6 +1318,7 @@ async def api_remotes(request: Request) -> Response:
             raise RuntimeError("Remote worker support is disabled")
         if request.method == "GET":
             return _json_ok(remote_manager().list_machines())
+        workspace_id = _require_live_human_mutation(request)
         body = await request.json()
         from .oauth import public_base_url
 
@@ -1268,6 +1328,7 @@ async def api_remotes(request: Request) -> Response:
             body.get("ttl_s"),
             base_url=public_base_url(request),
         )
+        _record_live_human_action(workspace_id, "remote.invite", name=body.get("name"))
         return _json_ok(result)
     except Exception as exc:
         return _json_error(exc)
@@ -1279,6 +1340,7 @@ async def api_remote_action(request: Request) -> Response:
         _require_ui_scopes(request, "remote:use")
         if not get_settings().remote_enabled:
             raise RuntimeError("Remote worker support is disabled")
+        workspace_id = _require_live_human_mutation(request)
         body = await request.json()
         machine = str(body.get("machine") or "")
         if not machine:
@@ -1289,6 +1351,7 @@ async def api_remote_action(request: Request) -> Response:
             result = remote_manager().revoke(machine)
         else:
             raise ValueError(f"Unsupported remote action: {action}")
+        _record_live_human_action(workspace_id, f"remote.{action}", machine=machine)
         return _json_ok(result)
     except Exception as exc:
         return _json_error(exc)
@@ -1308,24 +1371,50 @@ def _websocket_token(websocket: WebSocket) -> str | None:
     return None
 
 
-def _authorize_websocket(websocket: WebSocket) -> bool:
+def _websocket_principal(websocket: WebSocket) -> Principal | None:
     settings = get_settings()
     if settings.auth_mode == "none":
-        return True
+        return Principal(email=None, subject="anonymous", claims={"auth": "none"})
     token = _websocket_token(websocket)
     if not token:
-        return False
+        return None
+    workspace = get_live_workspace_manager().authenticate(token)
+    if workspace is not None:
+        principal = Principal(
+            email=None,
+            subject=workspace.subject,
+            claims={
+                "auth": "live-workspace",
+                "scope": " ".join(workspace.scopes),
+                "live_workspace_id": workspace.workspace_id,
+            },
+        )
+        try:
+            require_scopes(principal, UI_FULL_SCOPES)
+        except Exception:
+            return None
+        return principal
     try:
         from .oauth import validate_bearer_token
 
         claims = validate_bearer_token(token, websocket)  # type: ignore[arg-type]
-        require_scopes(
-            Principal(email=None, subject=claims.get("sub"), claims=claims),
-            UI_FULL_SCOPES,
-        )
+        principal = Principal(email=None, subject=claims.get("sub"), claims=claims)
+        require_scopes(principal, UI_FULL_SCOPES)
     except Exception:
-        return False
-    return True
+        return None
+    return principal
+
+
+def _authorize_websocket(websocket: WebSocket) -> bool:
+    return _websocket_principal(websocket) is not None
+
+
+def _live_websocket_workspace_id(websocket: WebSocket) -> str | None:
+    token = _websocket_token(websocket)
+    if not token:
+        return None
+    workspace = get_live_workspace_manager().authenticate(token)
+    return workspace.workspace_id if workspace is not None else None
 
 
 def _tui_source_path() -> Path | None:
@@ -1727,6 +1816,12 @@ async def ui_terminal_websocket(websocket: WebSocket) -> None:
     if not _authorize_websocket(websocket):
         await websocket.close(code=4401, reason="OAuth authentication required")
         return
+    if _live_websocket_workspace_id(websocket):
+        await websocket.close(
+            code=4403,
+            reason="The embedded live workspace uses persistent shell sessions, not the TUI bridge",
+        )
+        return
 
     settings = get_settings()
     marker = id(websocket)
@@ -1894,6 +1989,7 @@ async def ui_shell_websocket(websocket: WebSocket) -> None:
 
     machine = str(websocket.query_params.get("machine") or "local")
     session_id = str(websocket.query_params.get("session_id") or "")
+    live_workspace_id = _live_websocket_workspace_id(websocket)
     try:
         if not session_id:
             raise ValueError("session_id is required")
@@ -1940,6 +2036,28 @@ async def ui_shell_websocket(websocket: WebSocket) -> None:
     async def receiver() -> None:
         nonlocal cols, rows, last_activity
         idle_timeout = max(0, settings.ui_terminal_idle_timeout_s)
+
+        async def human_input_allowed() -> bool:
+            if not live_workspace_id:
+                return True
+            try:
+                get_live_workspace_manager().require_human_mutation_allowed(live_workspace_id)
+            except HumanCollaborationRequiredError:
+                await websocket.send_bytes(
+                    b"\r\n\x1b[33mObserve mode: switch to Collaborate or Take over to send terminal input.\x1b[0m\r\n"
+                )
+                return False
+            return True
+
+        def record_terminal_input(byte_count: int) -> None:
+            _record_live_human_action(
+                live_workspace_id,
+                "terminal.input",
+                machine=machine,
+                session_id=session_id,
+                bytes=byte_count,
+            )
+
         while True:
             if idle_timeout:
                 remaining = _idle_timeout_remaining(last_activity, idle_timeout, loop.time())
@@ -1959,7 +2077,11 @@ async def ui_shell_websocket(websocket: WebSocket) -> None:
             if message["type"] == "websocket.disconnect":
                 return
             if message.get("bytes") is not None:
-                await process.write(message["bytes"])
+                data = message["bytes"]
+                if not await human_input_allowed():
+                    continue
+                await process.write(data)
+                record_terminal_input(len(data))
                 continue
             text = message.get("text")
             if not text:
@@ -1967,7 +2089,10 @@ async def ui_shell_websocket(websocket: WebSocket) -> None:
             try:
                 control = json.loads(text)
             except json.JSONDecodeError:
+                if not await human_input_allowed():
+                    continue
                 await process.write(text.encode())
+                record_terminal_input(len(text.encode()))
                 continue
             if not isinstance(control, dict):
                 continue
