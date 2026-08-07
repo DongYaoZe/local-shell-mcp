@@ -13,7 +13,9 @@ All tools except connector-style `search` and `fetch` return a structured `ToolR
 | Run an interactive or long task | `shell_start` or `job_start` |
 | Make exact file changes | `edit_file` or `apply_patch` |
 | Transfer a file or directory | `transfer_path` |
-| Capture a page | `browser_get_text_tool` or `browser_capture_tool` |
+| Discover an external MCP capability | `mcp_tool_search`, then `mcp_tool_inspect` |
+| Interact with a page | `browser_session`, `browser_snapshot`, then `browser_act` |
+| Capture a one-shot page | `browser_get_text_tool` or `browser_capture_tool` |
 | Work on a remote machine | use the same tool with `machine`; use `remote_*` only for worker administration |
 
 ## Connector and discovery
@@ -26,7 +28,7 @@ Search workspace files and return ChatGPT connector-compatible results.
 |---|---|---|---|
 | `query` | `string` | required |  |
 
-OAuth scopes: `shell:read`.
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
 ### `fetch`
 
@@ -36,7 +38,7 @@ Fetch a workspace file by id returned from search.
 |---|---|---|---|
 | `id` | `string` | required |  |
 
-OAuth scopes: `shell:read`.
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
 ## Environment, skills, and task state
 
@@ -48,7 +50,7 @@ Return version, workspace, auth, policy, and environment information locally or 
 |---|---|---|---|
 | `machine` | `string \| null` | `null` |  |
 
-OAuth scopes: `shell:read`.
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
 When `machine` is supplied, the call additionally requires `remote:use` and runs through the remote worker protocol.
 
@@ -56,7 +58,7 @@ When `machine` is supplied, the call additionally requires `remote:use` and runs
 
 List installed agent skills without loading their instructions. The MCP tool surface stays fixed; adding or removing skill directories is reflected on the next call.
 
-OAuth scopes: `shell:read`.
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
 ### `skill_load`
 
@@ -66,7 +68,7 @@ Load one installed agent skill by the exact name returned from skills_list. Retu
 |---|---|---|---|
 | `name` | `string` | required |  |
 
-OAuth scopes: `shell:read`.
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
 ### `skill_read_file`
 
@@ -77,7 +79,7 @@ Read one related text file from an installed Skill.
 | `name` | `string` | required |  |
 | `path` | `string` | required |  |
 
-OAuth scopes: `shell:read`.
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
 ### `secret_scan`
 
@@ -89,13 +91,13 @@ Scan local workspace text files for common secrets before commit or push.
 | `glob` | `string \| null` | `null` |  |
 | `max_results` | `integer` | `200` |  |
 
-OAuth scopes: `shell:read`.
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
 ### `todo_read_tool`
 
 Read the local agent todo list.
 
-OAuth scopes: `shell:read`.
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
 ### `todo_write_tool`
 
@@ -105,7 +107,7 @@ Write the local agent todo list.
 |---|---|---|---|
 | `todos` | `array[object]` | required |  |
 
-OAuth scopes: `shell:read, shell:write`.
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
 ### `audit_tail`
 
@@ -115,7 +117,7 @@ Read recent local audit log entries.
 |---|---|---|---|
 | `lines` | `integer` | `100` |  |
 
-OAuth scopes: `shell:read`.
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
 ## Shells and jobs
 
@@ -133,7 +135,7 @@ Run one non-interactive shell command locally or on a remote machine. Use for bu
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
 
-OAuth scopes: `shell:read, shell:execute`.
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
 When `machine` is supplied, the call additionally requires `remote:use` and runs through the remote worker protocol.
 
@@ -150,7 +152,7 @@ Write and run a short Python script locally or on a remote machine.
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
 
-OAuth scopes: `shell:read, shell:execute`.
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
 When `machine` is supplied, the call additionally requires `remote:use` and runs through the remote worker protocol.
 
@@ -167,7 +169,7 @@ Start a persistent interactive shell locally or on a remote machine.
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
 
-OAuth scopes: `shell:read, shell:execute`.
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
 When `machine` is supplied, the call additionally requires `remote:use` and runs through the remote worker protocol.
 
@@ -182,7 +184,7 @@ Send input to a persistent local or remote shell session.
 | `enter` | `boolean` | `true` |  |
 | `machine` | `string \| null` | `null` |  |
 
-OAuth scopes: `shell:read, shell:execute`.
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
 When `machine` is supplied, the call additionally requires `remote:use` and runs through the remote worker protocol.
 
@@ -196,7 +198,7 @@ Read recent output from a persistent local or remote shell session.
 | `lines` | `integer` | `200` |  |
 | `machine` | `string \| null` | `null` |  |
 
-OAuth scopes: `shell:read`.
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
 When `machine` is supplied, the call additionally requires `remote:use` and runs through the remote worker protocol.
 
@@ -209,7 +211,7 @@ Terminate a persistent local or remote shell session.
 | `session_id` | `string` | required |  |
 | `machine` | `string \| null` | `null` |  |
 
-OAuth scopes: `shell:read, shell:execute`.
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
 When `machine` is supplied, the call additionally requires `remote:use` and runs through the remote worker protocol.
 
@@ -221,7 +223,7 @@ List persistent shell sessions locally or on a remote machine.
 |---|---|---|---|
 | `machine` | `string \| null` | `null` |  |
 
-OAuth scopes: `shell:read`.
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
 When `machine` is supplied, the call additionally requires `remote:use` and runs through the remote worker protocol.
 
@@ -238,7 +240,7 @@ Start a tracked long-running job locally or on a remote machine.
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
 
-OAuth scopes: `shell:read, shell:execute`.
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
 When `machine` is supplied, the call additionally requires `remote:use` and runs through the remote worker protocol.
 
@@ -251,7 +253,7 @@ List tracked jobs locally or on a remote machine.
 | `include_finished` | `boolean` | `true` |  |
 | `machine` | `string \| null` | `null` |  |
 
-OAuth scopes: `shell:read`.
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
 When `machine` is supplied, the call additionally requires `remote:use` and runs through the remote worker protocol.
 
@@ -265,7 +267,7 @@ Read recent output for a tracked local or remote job.
 | `lines` | `integer` | `200` |  |
 | `machine` | `string \| null` | `null` |  |
 
-OAuth scopes: `shell:read`.
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
 When `machine` is supplied, the call additionally requires `remote:use` and runs through the remote worker protocol.
 
@@ -278,7 +280,7 @@ Stop a tracked local or remote job.
 | `job_id` | `string` | required |  |
 | `machine` | `string \| null` | `null` |  |
 
-OAuth scopes: `shell:read, shell:execute`.
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
 When `machine` is supplied, the call additionally requires `remote:use` and runs through the remote worker protocol.
 
@@ -293,7 +295,7 @@ Restart a stopped or exited tracked local or remote job.
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
 
-OAuth scopes: `shell:read, shell:execute`.
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
 When `machine` is supplied, the call additionally requires `remote:use` and runs through the remote worker protocol.
 
@@ -310,7 +312,7 @@ List files and directories locally or on a remote machine.
 | `max_entries` | `integer` | `500` |  |
 | `machine` | `string \| null` | `null` |  |
 
-OAuth scopes: `shell:read`.
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
 When `machine` is supplied, the call additionally requires `remote:use` and runs through the remote worker protocol.
 
@@ -325,7 +327,7 @@ Return a compact directory tree locally or on a remote machine.
 | `max_entries` | `integer` | `500` |  |
 | `machine` | `string \| null` | `null` |  |
 
-OAuth scopes: `shell:read`.
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
 When `machine` is supplied, the call additionally requires `remote:use` and runs through the remote worker protocol.
 
@@ -340,7 +342,7 @@ Find paths by glob locally or on a remote machine.
 | `max_results` | `integer` | `500` |  |
 | `machine` | `string \| null` | `null` |  |
 
-OAuth scopes: `shell:read`.
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
 When `machine` is supplied, the call additionally requires `remote:use` and runs through the remote worker protocol.
 
@@ -358,7 +360,7 @@ Search file contents locally or on a remote machine.
 | `max_results` | `integer \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
 
-OAuth scopes: `shell:read`.
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
 When `machine` is supplied, the call additionally requires `remote:use` and runs through the remote worker protocol.
 
@@ -375,7 +377,7 @@ Read one file or a list of files locally or on a remote machine.
 | `binary_preview_bytes` | `integer` | `256` |  |
 | `machine` | `string \| null` | `null` |  |
 
-OAuth scopes: `shell:read`.
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
 When `machine` is supplied, the call additionally requires `remote:use` and runs through the remote worker protocol.
 
@@ -388,7 +390,7 @@ View a PNG, JPEG, GIF, or WebP file as native MCP image content locally or on a 
 | `path` | `string` | required |  |
 | `machine` | `string \| null` | `null` |  |
 
-OAuth scopes: `shell:read`.
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
 When `machine` is supplied, the call additionally requires `remote:use` and runs through the remote worker protocol.
 
@@ -405,7 +407,7 @@ Write a UTF-8 text file locally or on a remote machine.
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
 
-OAuth scopes: `shell:read, shell:write`.
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
 When `machine` is supplied, the call additionally requires `remote:use` and runs through the remote worker protocol.
 
@@ -421,7 +423,7 @@ Apply one or more exact-text edits to one local or remote file. Each edits entry
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
 
-OAuth scopes: `shell:read, shell:write`.
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
 When `machine` is supplied, the call additionally requires `remote:use` and runs through the remote worker protocol.
 
@@ -437,13 +439,13 @@ Delete a local or remote file or directory. recursive=false deletes files or emp
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
 
-OAuth scopes: `shell:read, shell:write`.
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
 When `machine` is supplied, the call additionally requires `remote:use` and runs through the remote worker protocol.
 
 ### `apply_patch`
 
-Check and apply a standard unified diff or a `*** Begin Patch` envelope locally or on a remote machine.
+Check and apply a unified diff or an apply_patch envelope locally or remotely.
 
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
@@ -453,13 +455,13 @@ Check and apply a standard unified diff or a `*** Begin Patch` envelope locally 
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
 
-OAuth scopes: `shell:read, shell:write`.
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
 When `machine` is supplied, the call additionally requires `remote:use` and runs through the remote worker protocol.
 
 ### `transfer_path`
 
-Start a tracked job that copies a file or directory between the controller and remote machines. A missing machine denotes the controller; at least one endpoint must be remote. The call returns immediately with a job record; use `job_list`, `job_tail`, `job_stop`, and `job_retry` to follow or control it.
+Start a tracked job that copies a file or directory between the controller and remote machines. Remote uploads use resumable raw-binary chunks; use job_list, job_tail, job_stop, and job_retry to manage the transfer.
 
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
@@ -468,13 +470,13 @@ Start a tracked job that copies a file or directory between the controller and r
 | `source_machine` | `string \| null` | `null` |  |
 | `destination_machine` | `string \| null` | `null` |  |
 | `overwrite` | `boolean` | `false` |  |
-| `chunk_size` | `integer \| null` | `null` | Raw-binary chunk size for worker-to-controller upload legs. Defaults to 1 MiB and is capped at 4 MiB. |
+| `chunk_size` | `integer \| null` | `null` |  |
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 
-OAuth scopes: `remote:use, shell:read, shell:write`.
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
-At least one of `source_machine` and `destination_machine` must be supplied. Omitted endpoints refer to the controller workspace; the source may be either a file or a directory. Worker-to-controller upload legs use transactional, resumable raw-binary chunks with per-chunk and final SHA-256 validation.
+At least one of `source_machine` and `destination_machine` must be supplied. Omitted endpoints refer to the controller workspace; the source may be either a file or a directory.
 
 ### `create_file_link`
 
@@ -488,7 +490,7 @@ Create a temporary browser-accessible URL for a local file. By default the respo
 | `max_downloads` | `integer \| null` | `null` |  |
 | `inline` | `boolean` | `false` |  |
 
-OAuth scopes: `shell:read, file:share`.
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
 ### `list_file_links`
 
@@ -498,7 +500,7 @@ List generated local file download URLs.
 |---|---|---|---|
 | `include_expired` | `boolean` | `false` |  |
 
-OAuth scopes: `shell:read, file:share`.
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
 ### `revoke_file_link`
 
@@ -508,9 +510,126 @@ Revoke a generated local file download URL.
 |---|---|---|---|
 | `token` | `string` | required |  |
 
-OAuth scopes: `shell:read, file:share`.
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+## Dynamic MCP gateway
+
+### `mcp_manage`
+
+Register, list, get, enable, disable, refresh, remove, or update the isolated environment/headers of dynamic MCP servers. Use transport=stdio with command/args/cwd, or transport=streamable_http with url. Secret env/header values are persisted privately and are never returned.
+
+| Parameter | Type | Required/default | Description |
+|---|---|---|---|
+| `action` | `string` | required |  |
+| `name` | `string \| null` | `null` |  |
+| `transport` | `string \| null` | `null` |  |
+| `command` | `string \| null` | `null` |  |
+| `args` | `array[string] \| null` | `null` |  |
+| `cwd` | `string \| null` | `null` |  |
+| `url` | `string \| null` | `null` |  |
+| `env` | `object \| null` | `null` |  |
+| `headers` | `object \| null` | `null` |  |
+| `enabled` | `boolean` | `true` |  |
+| `overwrite` | `boolean` | `false` |  |
+| `refresh` | `boolean` | `true` |  |
+| `key` | `string \| null` | `null` |  |
+| `value` | `string \| null` | `null` |  |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+### `mcp_tool_search`
+
+Search cached lightweight tool summaries from enabled dynamic MCP servers. Dynamic tools stay out of this server's tools/list; use the returned <server>:<tool> name with mcp_tool_inspect before calling it.
+
+| Parameter | Type | Required/default | Description |
+|---|---|---|---|
+| `query` | `string` | `""` |  |
+| `server` | `string \| null` | `null` |  |
+| `limit` | `integer` | `20` |  |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+### `mcp_tool_inspect`
+
+Return the full cached schema for one dynamic MCP tool named <server>:<tool>. Refresh the server with mcp_manage if its cached schema is stale.
+
+| Parameter | Type | Required/default | Description |
+|---|---|---|---|
+| `name` | `string` | required |  |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+### `mcp_tool_call`
+
+Call one cached dynamic MCP tool named <server>:<tool>. Discover it with mcp_tool_search and inspect its schema with mcp_tool_inspect first. External MCP connections are opened only for the duration of this call.
+
+| Parameter | Type | Required/default | Description |
+|---|---|---|---|
+| `name` | `string` | required |  |
+| `arguments` | `object \| null` | `null` |  |
+| `timeout_s` | `integer \| null` | `null` |  |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
 ## Browser automation
+
+### `browser_session`
+
+Start, list, close, or clean up persistent high-level browser sessions locally or remotely. start can open a URL, reuse a persistent profile_id, or load storage_state_path; close can save storage state.
+
+| Parameter | Type | Required/default | Description |
+|---|---|---|---|
+| `action` | `string` | required |  |
+| `session_id` | `string \| null` | `null` |  |
+| `browser` | `string` | `"chromium"` |  |
+| `headless` | `boolean` | `true` |  |
+| `width` | `integer` | `1440` |  |
+| `height` | `integer` | `1000` |  |
+| `url` | `string \| null` | `null` |  |
+| `wait_until` | `string` | `"domcontentloaded"` |  |
+| `profile_id` | `string \| null` | `null` |  |
+| `storage_state_path` | `string \| null` | `null` |  |
+| `save_storage_state_path` | `string \| null` | `null` |  |
+| `machine` | `string \| null` | `null` |  |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+When `machine` is supplied, the call additionally requires `remote:use` and runs through the remote worker protocol.
+
+### `browser_snapshot`
+
+Capture a persistent browser page: title, URL, bounded visible text, interactive elements with stable short refs such as e1, recent page/network errors, and an optional screenshot path. Use refs directly as browser_act targets until the page navigates or a new snapshot is taken.
+
+| Parameter | Type | Required/default | Description |
+|---|---|---|---|
+| `session_id` | `string` | required |  |
+| `page_id` | `string \| null` | `null` |  |
+| `include_text` | `boolean` | `true` |  |
+| `screenshot` | `boolean` | `true` |  |
+| `full_page` | `boolean` | `false` |  |
+| `max_text_chars` | `integer` | `100000` |  |
+| `max_elements` | `integer` | `100` |  |
+| `machine` | `string \| null` | `null` |  |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+When `machine` is supplied, the call additionally requires `remote:use` and runs through the remote worker protocol.
+
+### `browser_act`
+
+Run structured actions in a persistent browser session. Supports navigate, new_page, close_page, click, fill, type, select, press, check, uncheck, hover, wait, wait_for_text, and wait_for_url. target may be a browser_snapshot ref such as e1 or a CSS selector. Use playwright_run_script_tool only when these high-level actions are insufficient.
+
+| Parameter | Type | Required/default | Description |
+|---|---|---|---|
+| `session_id` | `string` | required |  |
+| `actions` | `array[object]` | required |  |
+| `page_id` | `string \| null` | `null` |  |
+| `timeout_ms` | `integer` | `30000` |  |
+| `machine` | `string \| null` | `null` |  |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+When `machine` is supplied, the call additionally requires `remote:use` and runs through the remote worker protocol.
 
 ### `browser_capture_tool`
 
@@ -528,7 +647,7 @@ Open a URL and save a PNG screenshot or PDF locally or on a remote machine.
 | `wait_until` | `string` | `"networkidle"` |  |
 | `machine` | `string \| null` | `null` |  |
 
-OAuth scopes: `browser:use, shell:write`.
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
 When `machine` is supplied, the call additionally requires `remote:use` and runs through the remote worker protocol.
 
@@ -544,7 +663,7 @@ Open a URL and return visible text locally or on a remote machine.
 | `selector` | `string` | `"body"` |  |
 | `machine` | `string \| null` | `null` |  |
 
-OAuth scopes: `browser:use`.
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
 When `machine` is supplied, the call additionally requires `remote:use` and runs through the remote worker protocol.
 
@@ -559,7 +678,7 @@ Run a full Python Playwright script locally or on a remote machine.
 | `timeout_s` | `integer` | `60` |  |
 | `machine` | `string \| null` | `null` |  |
 
-OAuth scopes: `browser:use, shell:execute`.
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
 When `machine` is supplied, the call additionally requires `remote:use` and runs through the remote worker protocol.
 
@@ -575,13 +694,13 @@ Create a one-time command for a remote machine to join this server.
 | `workdir` | `string \| null` | `null` |  |
 | `ttl_s` | `integer \| null` | `null` |  |
 
-OAuth scopes: `remote:use`.
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
 ### `remote_list_machines`
 
 List registered remote worker machines.
 
-OAuth scopes: `remote:use`.
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
 ### `remote_revoke_machine`
 
@@ -591,7 +710,7 @@ Revoke and remove a remote worker machine.
 |---|---|---|---|
 | `machine` | `string` | required |  |
 
-OAuth scopes: `remote:use`.
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
 When `machine` is supplied, the call additionally requires `remote:use` and runs through the remote worker protocol.
 
@@ -604,6 +723,6 @@ Rename a remote worker machine.
 | `machine` | `string` | required |  |
 | `new_name` | `string` | required |  |
 
-OAuth scopes: `remote:use`.
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
 When `machine` is supplied, the call additionally requires `remote:use` and runs through the remote worker protocol.

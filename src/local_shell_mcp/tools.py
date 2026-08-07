@@ -21,7 +21,9 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .audit import audit, audit_call_context, audit_result_ok
 from .auth import require_current_scopes
+from .browser_sessions import get_browser_session_manager
 from .downloads import create_share_link, list_share_links, revoke_share_link
+from .dynamic_mcp import DynamicMCPManager
 from .errors import (
     PathNotFoundError,
     ShellExecutableNotFoundError,
@@ -267,7 +269,9 @@ MCP_INSTRUCTIONS = (
     "to discover the exact Skill name and description. Before following a Skill's "
     "workflow, call skill_load with that exact name. Call skill_read_file only when "
     "a related file returned by skill_load is needed. Skills use this fixed tool "
-    "surface; do not expect per-Skill MCP tools."
+    "surface; do not expect per-Skill MCP tools. When a registered external MCP may "
+    "provide a capability, use mcp_tool_search, then mcp_tool_inspect, then mcp_tool_call; "
+    "dynamic MCP tools never appear directly in tools/list."
 )
 
 
@@ -286,6 +290,7 @@ NON_CANCELLABLE_TOOL_NAMES = frozenset(
         "apply_patch",
         "transfer_path",
         "todo_write_tool",
+        "mcp_tool_call",
     }
 )
 
@@ -357,6 +362,40 @@ def _audit_tool_arguments(args: tuple[Any, ...], kwargs: dict[str, Any]) -> dict
     }
 
 
+def _safe_audit_call_arguments(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    if tool_name == "mcp_tool_call":
+        dynamic_arguments = arguments.get("arguments")
+        return {
+            "name": arguments.get("name"),
+            "argument_keys": sorted(dynamic_arguments) if isinstance(dynamic_arguments, dict) else [],
+            "timeout_s": arguments.get("timeout_s"),
+        }
+    if tool_name == "mcp_manage":
+        safe = dict(arguments)
+        for field_name in ("env", "headers"):
+            value = safe.get(field_name)
+            if isinstance(value, dict):
+                safe[field_name] = {str(key): "<redacted>" for key in value}
+        if str(safe.get("action") or "").lower() in {"env_set", "header_set"}:
+            safe["value"] = "<redacted>"
+        return safe
+    if tool_name == "browser_act":
+        safe = dict(arguments)
+        actions = safe.get("actions")
+        if isinstance(actions, list):
+            safe["actions"] = [
+                {
+                    str(key): "<redacted>" if key == "value" else value
+                    for key, value in action.items()
+                }
+                if isinstance(action, dict)
+                else action
+                for action in actions
+            ]
+        return safe
+    return arguments
+
+
 def _audit_tool_purpose(
     tool_name: str, purpose: str | None = None, explanation: str | None = None
 ) -> dict[str, str]:
@@ -423,9 +462,10 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
                 call_arguments = dict(kwargs)
             if any(call_arguments.get(name) for name in REMOTE_MACHINE_ARGUMENTS):
                 require_current_scopes(("remote:use",))
+            safe_call_arguments = _safe_audit_call_arguments(__tool_name, call_arguments)
             arguments = {
                 "positional_count": len(args),
-                "keyword_args": _serialize_audit_value(call_arguments),
+                "keyword_args": _serialize_audit_value(safe_call_arguments),
             }
             audit_context = {
                 name: call_arguments[name]
@@ -542,6 +582,9 @@ MACHINE_CAPABLE_TOOL_NAMES = {
     "edit_file",
     "delete_file_or_dir",
     "apply_patch",
+    "browser_session",
+    "browser_snapshot",
+    "browser_act",
     "browser_capture_tool",
     "browser_get_text_tool",
     "playwright_run_script_tool",
@@ -552,9 +595,12 @@ OPEN_WORLD_TOOL_NAMES = {
     "create_file_link",
     "revoke_file_link",
     "transfer_path",
+    "mcp_manage",
+    "mcp_tool_call",
 }
 
 READ_ONLY_OPEN_WORLD_TOOL_NAMES = {
+    "browser_snapshot",
     "browser_get_text_tool",
 }
 
@@ -2039,10 +2085,153 @@ def _register_maintenance_tools(mcp: FastMCP, read_only_tool: ToolAnnotations) -
         return await _tool_call(asyncio.to_thread, _read_audit_tail_entries, lines)
 
 
+def _register_dynamic_mcp_tools(
+    mcp: FastMCP, settings: Any, read_only_tool: ToolAnnotations
+) -> None:
+    manager = DynamicMCPManager(settings.state_dir, max_timeout_s=settings.max_timeout_s)
+    shell_read_meta = _oauth_meta(["shell:read"])
+    shell_execute_meta = _oauth_meta(["shell:read", "shell:execute"])
+
+    @mcp.tool(structured_output=True, meta=shell_execute_meta)
+    async def mcp_manage(
+        action: str,
+        name: str | None = None,
+        transport: str | None = None,
+        command: str | None = None,
+        args: list[str] | None = None,
+        cwd: str | None = None,
+        url: str | None = None,
+        env: dict[str, Any] | None = None,
+        headers: dict[str, Any] | None = None,
+        enabled: bool = True,
+        overwrite: bool = False,
+        refresh: bool = True,
+        key: str | None = None,
+        value: str | None = None,
+    ) -> ToolResult:
+        """Register, list, get, enable, disable, refresh, remove, or update the isolated environment/headers of dynamic MCP servers. Use transport=stdio with command/args/cwd, or transport=streamable_http with url. Secret env/header values are persisted privately and are never returned."""
+        return await _tool_call(
+            manager.manage,
+            action=action,
+            name=name,
+            transport=transport,
+            command=command,
+            args=args,
+            cwd=cwd,
+            url=url,
+            env=env,
+            headers=headers,
+            enabled=enabled,
+            overwrite=overwrite,
+            refresh=refresh,
+            key=key,
+            value=value,
+        )
+
+    @mcp.tool(structured_output=True, annotations=read_only_tool, meta=shell_read_meta)
+    async def mcp_tool_search(
+        query: str = "", server: str | None = None, limit: int = 20
+    ) -> ToolResult:
+        """Search cached lightweight tool summaries from enabled dynamic MCP servers. Dynamic tools stay out of this server's tools/list; use the returned <server>:<tool> name with mcp_tool_inspect before calling it."""
+        return await _tool_call(manager.search, query, server=server, limit=limit)
+
+    @mcp.tool(structured_output=True, annotations=read_only_tool, meta=shell_read_meta)
+    async def mcp_tool_inspect(name: str) -> ToolResult:
+        """Return the full cached schema for one dynamic MCP tool named <server>:<tool>. Refresh the server with mcp_manage if its cached schema is stale."""
+        return await _tool_call(manager.inspect, name)
+
+    @mcp.tool(structured_output=True, meta=shell_execute_meta)
+    async def mcp_tool_call(
+        name: str,
+        arguments: dict[str, Any] | None = None,
+        timeout_s: int | None = None,
+    ) -> ToolResult:
+        """Call one cached dynamic MCP tool named <server>:<tool>. Discover it with mcp_tool_search and inspect its schema with mcp_tool_inspect first. External MCP connections are opened only for the duration of this call."""
+        return await _tool_call(manager.call, name, arguments, timeout_s=timeout_s)
+
+
 def _register_browser_tools(mcp: FastMCP, settings: Any, read_only_tool: ToolAnnotations) -> None:
     browser_meta = _oauth_meta(["browser:use"])
     browser_write_meta = _oauth_meta(["browser:use", "shell:write"])
     browser_execute_meta = _oauth_meta(["browser:use", "shell:execute"])
+    session_manager = get_browser_session_manager(settings.state_dir)
+
+    @mcp.tool(structured_output=True, meta=browser_meta)
+    async def browser_session(
+        action: str,
+        session_id: str | None = None,
+        browser: str = "chromium",
+        headless: bool = True,
+        width: int = 1440,
+        height: int = 1000,
+        url: str | None = None,
+        wait_until: str = "domcontentloaded",
+        profile_id: str | None = None,
+        storage_state_path: str | None = None,
+        save_storage_state_path: str | None = None,
+        machine: str | None = None,
+    ) -> ToolResult:
+        """Start, list, close, or clean up persistent high-level browser sessions locally or remotely. start can open a URL, reuse a persistent profile_id, or load storage_state_path; close can save storage state."""
+        args = {
+            "action": action,
+            "session_id": session_id,
+            "browser": browser,
+            "headless": headless,
+            "width": width,
+            "height": height,
+            "url": url,
+            "wait_until": wait_until,
+            "profile_id": profile_id,
+            "storage_state_path": storage_state_path,
+            "save_storage_state_path": save_storage_state_path,
+        }
+        if machine:
+            return await _remote_call(settings, machine, "browser_session", args)
+        return await _tool_call(session_manager.manage, **args)
+
+    @mcp.tool(structured_output=True, annotations=read_only_tool, meta=browser_meta)
+    async def browser_snapshot(
+        session_id: str,
+        page_id: str | None = None,
+        include_text: bool = True,
+        screenshot: bool = True,
+        full_page: bool = False,
+        max_text_chars: int = 100_000,
+        max_elements: int = 100,
+        machine: str | None = None,
+    ) -> ToolResult:
+        """Capture a persistent browser page: title, URL, bounded visible text, interactive elements with stable short refs such as e1, recent page/network errors, and an optional screenshot path. Use refs directly as browser_act targets until the page navigates or a new snapshot is taken."""
+        args = {
+            "session_id": session_id,
+            "page_id": page_id,
+            "include_text": include_text,
+            "screenshot": screenshot,
+            "full_page": full_page,
+            "max_text_chars": max_text_chars,
+            "max_elements": max_elements,
+        }
+        if machine:
+            return await _remote_call(settings, machine, "browser_snapshot", args)
+        return await _tool_call(session_manager.snapshot, **args)
+
+    @mcp.tool(structured_output=True, meta=browser_meta)
+    async def browser_act(
+        session_id: str,
+        actions: list[dict[str, Any]],
+        page_id: str | None = None,
+        timeout_ms: int = 30_000,
+        machine: str | None = None,
+    ) -> ToolResult:
+        """Run structured actions in a persistent browser session. Supports navigate, new_page, close_page, click, fill, type, select, press, check, uncheck, hover, wait, wait_for_text, and wait_for_url. target may be a browser_snapshot ref such as e1 or a CSS selector. Use playwright_run_script_tool only when these high-level actions are insufficient."""
+        args = {
+            "session_id": session_id,
+            "actions": actions,
+            "page_id": page_id,
+            "timeout_ms": timeout_ms,
+        }
+        if machine:
+            return await _remote_call(settings, machine, "browser_act", args)
+        return await _tool_call(session_manager.act, **args)
 
     @mcp.tool(structured_output=True, meta=browser_write_meta)
     async def browser_capture_tool(
@@ -2160,6 +2349,7 @@ def build_mcp() -> FastMCP:
     _register_download_tools(mcp, read_only_tool)
     _register_workspace_write_tools(mcp, settings)
     _register_maintenance_tools(mcp, read_only_tool)
+    _register_dynamic_mcp_tools(mcp, settings, read_only_tool)
     _register_browser_tools(mcp, settings, read_only_tool)
     _register_remote_admin_tools(mcp, read_only_tool)
 

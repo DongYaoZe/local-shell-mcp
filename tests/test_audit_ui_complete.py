@@ -46,6 +46,8 @@ def test_audit_call_helpers_cover_legacy_unpaired_and_optional_fields():
     assert audit_module._operation_type({"event": "run_shell_start"}) == "shell"
     assert audit_module._operation_type({"event": "job_started"}) == "jobs"
     assert audit_module._operation_type({"event": "browser_capture"}) == "browser"
+    assert audit_module._operation_type({"tool": "browser_snapshot"}) == "browser"
+    assert audit_module._operation_type({"tool": "mcp_tool_call"}) == "agent"
     assert audit_module._operation_type({"event": "download_created"}) == "files"
     assert audit_module._operation_type({"event": "transfer_completed"}) == "remote"
     assert audit_module._operation_type({"tool": "transfer_path"}) == "remote"

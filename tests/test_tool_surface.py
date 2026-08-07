@@ -38,6 +38,13 @@ CORE_TOOL_NAMES = {
     "secret_scan",
     "todo_read_tool",
     "todo_write_tool",
+    "mcp_manage",
+    "mcp_tool_search",
+    "mcp_tool_inspect",
+    "mcp_tool_call",
+    "browser_session",
+    "browser_snapshot",
+    "browser_act",
     "browser_capture_tool",
     "browser_get_text_tool",
     "playwright_run_script_tool",
@@ -127,6 +134,9 @@ async def test_machine_capable_tools_use_optional_machine_arguments(tmp_path, mo
         "edit_file",
         "delete_file_or_dir",
         "apply_patch",
+        "browser_session",
+        "browser_snapshot",
+        "browser_act",
         "browser_capture_tool",
         "browser_get_text_tool",
         "playwright_run_script_tool",
@@ -164,6 +174,10 @@ async def test_key_tool_descriptions_guide_tool_choice(tmp_path, monkeypatch):
     assert "existing file-transfer protocol" in tools["view_image"].description
     assert "tool surface stays fixed" in tools["skills_list"].description
     assert "exact name returned from skills_list" in tools["skill_load"].description
+    assert "tools/list" in tools["mcp_tool_search"].description
+    assert "mcp_tool_inspect" in tools["mcp_tool_search"].description
+    assert "stable short refs" in tools["browser_snapshot"].description
+    assert "playwright_run_script_tool" in tools["browser_act"].description
 
 
 @pytest.mark.asyncio
