@@ -130,6 +130,23 @@ async def test_browser_session_snapshot_refs_actions_and_storage_state(tmp_path,
     assert await original_page.locator("#check").is_checked() is False
     assert await original_page.locator("#status").inner_text() == "clicked"
 
+    await original_page.locator("#link").evaluate(
+        """
+element => {
+  element.setAttribute('name', 'n'.repeat(10000));
+  element.setAttribute('aria-label', 'a'.repeat(10000));
+  element.href = 'https://example.test/' + 'x'.repeat(10000);
+}
+"""
+    )
+    bounded_metadata = await manager.snapshot(
+        session_id, page_id=page_id, screenshot=False, include_text=False, max_elements=50
+    )
+    link = next(item for item in bounded_metadata["interactive_elements"] if item["tag"] == "a")
+    assert len(link["name"]) == browser_sessions._MAX_ELEMENT_METADATA_CHARS
+    assert len(link["href"]) == browser_sessions._MAX_ELEMENT_METADATA_CHARS
+    assert len(link["text"]) <= 500
+
     new_page = await manager.act(
         session_id,
         [
@@ -426,6 +443,56 @@ async def test_close_releases_browser_when_storage_state_save_fails(tmp_path):
         await manager.close("session", save_storage_state_path="state.json")
     assert manager._sessions == {}
     assert closed == {"context": True, "browser": True, "playwright": True}
+
+
+@pytest.mark.asyncio
+async def test_cleanup_attempts_all_sessions_and_retains_failed_one(tmp_path):
+    manager = BrowserSessionManager(tmp_path / ".state")
+    calls: list[str] = []
+
+    class Context:
+        def __init__(self, name: str, *, fail: bool = False):
+            self.name = name
+            self.fail = fail
+
+        async def close(self):
+            calls.append(f"context:{self.name}")
+            if self.fail:
+                raise RuntimeError("first close failed")
+
+    class Browser:
+        def __init__(self, name: str):
+            self.name = name
+
+        async def close(self):
+            calls.append(f"browser:{self.name}")
+
+    class Playwright:
+        def __init__(self, name: str):
+            self.name = name
+
+        async def stop(self):
+            calls.append(f"playwright:{self.name}")
+
+    def session(name: str, *, fail: bool = False) -> BrowserSessionState:
+        return BrowserSessionState(
+            session_id=name,
+            playwright=Playwright(name),
+            context=Context(name, fail=fail),
+            browser=Browser(name),
+            browser_name="chromium",
+            profile_id=None,
+            created_at=0,
+            last_used_at=0,
+        )
+
+    manager._sessions = {"first": session("first", fail=True), "second": session("second")}
+    with pytest.raises(RuntimeError, match="first close failed"):
+        await manager._cleanup_idle(force=True)
+    assert "context:second" in calls
+    assert "browser:second" in calls
+    assert "playwright:second" in calls
+    assert list(manager._sessions) == ["first"]
 
 
 @pytest.mark.asyncio

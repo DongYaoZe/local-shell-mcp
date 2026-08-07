@@ -17,6 +17,7 @@ _IDLE_TIMEOUT_S = 3600
 _MAX_ACTIONS = 50
 _MAX_SNAPSHOT_ELEMENTS = 200
 _MAX_SNAPSHOT_TEXT_CHARS = 100_000
+_MAX_ELEMENT_METADATA_CHARS = 2_000
 _MAX_BROWSER_ARTIFACT_FILES = 100
 _MAX_BROWSER_ARTIFACT_BYTES = 512 * 1024 * 1024
 _PROFILE_RE = re.compile(r"^[A-Za-z0-9._-]{1,80}$")
@@ -408,7 +409,8 @@ class BrowserSessionManager:
         ).evaluate_all(
             """
 (elements, payload) => {
-  const [attribute, token, maxElements] = payload;
+  const [attribute, token, maxElements, maxMetadataChars] = payload;
+  const clip = (value) => typeof value === 'string' ? value.slice(0, maxMetadataChars) : null;
   const visible = elements.filter((element) => {
     const style = window.getComputedStyle(element);
     const rect = element.getBoundingClientRect();
@@ -423,18 +425,18 @@ class BrowserSessionManager:
       ref,
       marker,
       tag: element.tagName.toLowerCase(),
-      role: element.getAttribute('role'),
-      type: element.getAttribute('type'),
+      role: clip(element.getAttribute('role')),
+      type: clip(element.getAttribute('type')),
       text,
-      name: element.getAttribute('name'),
-      placeholder: element.getAttribute('placeholder'),
-      href: element.href || null,
+      name: clip(element.getAttribute('name')),
+      placeholder: clip(element.getAttribute('placeholder')),
+      href: clip(element.href || null),
       disabled: Boolean(element.disabled),
     };
   });
 }
 """,
-            [_REF_ATTRIBUTE, token, max_elements],
+            [_REF_ATTRIBUTE, token, max_elements, _MAX_ELEMENT_METADATA_CHARS],
         )
         page_state.refs = {
             str(item["ref"]): f'[{_REF_ATTRIBUTE}="{item.pop("marker")}"]' for item in raw
@@ -567,8 +569,22 @@ class BrowserSessionManager:
                 if force or state.last_used_at < cutoff
             ]
             stale = [self._sessions.pop(session_id) for session_id in stale_ids]
-        for session in stale:
-            await self._close_state(session)
+        failed: list[tuple[BrowserSessionState, Exception]] = []
+        for index, session in enumerate(stale):
+            try:
+                await self._close_state(session)
+            except asyncio.CancelledError:
+                async with self._lock:
+                    for remaining in stale[index:]:
+                        self._sessions.setdefault(remaining.session_id, remaining)
+                raise
+            except Exception as exc:
+                failed.append((session, exc))
+        if failed:
+            async with self._lock:
+                for session, _ in failed:
+                    self._sessions.setdefault(session.session_id, session)
+            raise failed[0][1]
         return len(stale)
 
     @staticmethod
