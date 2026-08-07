@@ -345,9 +345,14 @@ def _live_workspace_api_base() -> str:
 def _live_workspace_resource_meta() -> dict[str, Any]:
     parsed = urlparse(_live_workspace_api_base())
     origin = f"{parsed.scheme}://{parsed.netloc}" if parsed.scheme and parsed.netloc else ""
+    websocket_origin = ""
+    if origin:
+        websocket_scheme = "wss" if parsed.scheme == "https" else "ws"
+        websocket_origin = f"{websocket_scheme}://{parsed.netloc}"
+    connect_domains = [value for value in (origin, websocket_origin) if value]
     return {
         "ui": {
-            "csp": {"connectDomains": [origin] if origin else []},
+            "csp": {"connectDomains": connect_domains},
             "permissions": {"clipboardWrite": {}},
             "prefersBorder": False,
         },

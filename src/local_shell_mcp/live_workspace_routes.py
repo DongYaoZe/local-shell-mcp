@@ -169,6 +169,11 @@ async def live_git(request: Request) -> Response:
             status_task, diff_task, staged_diff_task
         )
         diff_data = diff.model_dump()
+        combined_stdout = diff.stdout
+        if staged_diff.stdout:
+            if combined_stdout and not combined_stdout.endswith("\n"):
+                combined_stdout += "\n"
+            combined_stdout += f"--- STAGED ---\n{staged_diff.stdout}"
         diff_data.update(
             {
                 "ok": diff.ok and staged_diff.ok,
@@ -176,7 +181,7 @@ async def live_git(request: Request) -> Response:
                 "timed_out": diff.timed_out or staged_diff.timed_out,
                 "duration_ms": diff.duration_ms + staged_diff.duration_ms,
                 "command": "git diff --no-ext-diff --unified=3; git diff --cached --no-ext-diff --unified=3",
-                "stdout": f"{diff.stdout}\n--- STAGED ---\n{staged_diff.stdout}",
+                "stdout": combined_stdout,
                 "stderr": "\n".join(
                     part for part in (diff.stderr, staged_diff.stderr) if part
                 ),

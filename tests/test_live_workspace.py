@@ -203,7 +203,10 @@ async def test_mcp_app_resource_and_render_result_hide_live_token(tmp_path, monk
     resources = {str(resource.uri): resource for resource in await mcp.list_resources()}
     resource = resources[LIVE_RESOURCE_URI]
     assert resource.mimeType == LIVE_RESOURCE_MIME
-    assert resource.meta["ui"]["csp"]["connectDomains"] == ["https://lsm.example.test"]
+    assert resource.meta["ui"]["csp"]["connectDomains"] == [
+        "https://lsm.example.test",
+        "wss://lsm.example.test",
+    ]
     assert resource.meta["ui"]["permissions"] == {"clipboardWrite": {}}
 
     result = await mcp.call_tool("open_live_workspace", {"machine": "local", "cwd": "."})
@@ -327,6 +330,20 @@ def test_live_http_token_cors_and_human_mutation_modes(tmp_path, monkeypatch):
         subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
         (tmp_path / "tracked.txt").write_text("before\n", encoding="utf-8")
         subprocess.run(["git", "add", "tracked.txt"], cwd=tmp_path, check=True)
+        subprocess.run(
+            [
+                "git",
+                "-c",
+                "user.name=Live Workspace Test",
+                "-c",
+                "user.email=live-workspace@example.invalid",
+                "commit",
+                "-qm",
+                "seed",
+            ],
+            cwd=tmp_path,
+            check=True,
+        )
         (tmp_path / "tracked.txt").write_text("after\n", encoding="utf-8")
         git = client.get("/api/live/git?cwd=.", headers=headers)
         assert git.status_code == 200
@@ -336,6 +353,11 @@ def test_live_http_token_cors_and_human_mutation_modes(tmp_path, monkeypatch):
         assert any(
             event["type"] == "human.inspected_diff" for event in workspace.events
         )
+
+        subprocess.run(["git", "checkout", "--", "tracked.txt"], cwd=tmp_path, check=True)
+        clean_git = client.get("/api/live/git?cwd=.", headers=headers)
+        assert clean_git.status_code == 200
+        assert clean_git.json()["data"]["diff"]["stdout"] == ""
 
         # A live token is deliberately not valid for the MCP transport itself.
         mcp_attempt = client.post(

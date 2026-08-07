@@ -52,6 +52,8 @@ export function parentPath(path: string): string {
   if (!path || path === ".") return "."
   const driveRoot = path.match(/^([A-Za-z]:)([\\/]+)$/)
   if (driveRoot) return `${driveRoot[1]}${driveRoot[2][0]}`
+  const uncShareRoot = /^(?:\\\\|\/\/)[^\\/]+[\\/][^\\/]+[\\/]?$/
+  if (uncShareRoot.test(path)) return path
   const windows = path.includes("\\") && !path.includes("/")
   const separator = windows ? "\\" : "/"
   const normalized = path.replace(/[\\/]+$/, "")

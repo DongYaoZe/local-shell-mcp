@@ -771,24 +771,43 @@ async function createRemoteInvite(): Promise<void> {
   await refreshRemotes()
 }
 
-function replaceMachineSelection(machine: string, replacement: string): void {
+function resetFileTarget(machine: string, path: string): void {
+  fileMachine = machine
+  filePath = path
+  fileEntries = []
+  selectedFile = ""
+  filePreview = null
+  fileEditing = false
+  fileEditContent = ""
+  fileEditSha = ""
+}
+
+function resetTerminalTarget(machine: string): void {
+  terminalMachine = machine
+  terminalSessions = []
+  selectedSession = ""
+  terminalSocket?.close()
+  terminalSocket = null
+}
+
+function resetWorkspaceTarget(machine: string, cwd: string): void {
+  gitSnapshot = null
+  dashboard = null
+  resetFileTarget(machine, cwd)
+  resetTerminalTarget(machine)
+}
+
+function replaceMachineSelection(machine: string, replacement: string, replacementCwd?: string): void {
   if (config?.machine === machine) {
-    config = { ...config, machine: replacement }
+    config = { ...config, machine: replacement, cwd: replacementCwd ?? config.cwd }
     gitSnapshot = null
+    dashboard = null
   }
   if (fileMachine === machine) {
-    fileMachine = replacement
-    fileEntries = []
-    selectedFile = ""
-    filePreview = null
-    fileEditing = false
+    resetFileTarget(replacement, replacementCwd ?? filePath)
   }
   if (terminalMachine === machine) {
-    terminalMachine = replacement
-    terminalSessions = []
-    selectedSession = ""
-    terminalSocket?.close()
-    terminalSocket = null
+    resetTerminalTarget(replacement)
   }
 }
 
@@ -808,7 +827,7 @@ async function revokeRemote(machine: string): Promise<void> {
   const confirmation = await promptValue("Revoke remote", `Type ${machine} to confirm`, "", "The worker will need a new invitation to reconnect.")
   if (confirmation !== machine) return
   await api("/api/ui/remotes/revoke", { method: "POST", body: JSON.stringify({ machine }) })
-  replaceMachineSelection(machine, "local")
+  replaceMachineSelection(machine, "local", ".")
   await refreshAllCore()
   await refreshRemotes()
 }
@@ -850,21 +869,41 @@ async function refreshJobs(): Promise<void> {
 async function refreshAllCore(): Promise<void> {
   if (!config || passiveRefreshing) return
   passiveRefreshing = true
+  let selectionChanged = false
   try {
-    const [boot, dash] = await Promise.all([
-      api<JsonRecord>("/api/ui/bootstrap"),
-      api<Dashboard>(`/api/ui/dashboard?machine=${encodeURIComponent(config.machine || "local")}`),
-    ])
+    const boot = await api<JsonRecord>("/api/ui/bootstrap")
     bootstrap = boot
-    dashboard = dash
     const nested = boot.machines as JsonRecord | undefined
     machines = (nested?.machines as Machine[] | undefined) || []
-    if (!machines.some((item) => item.name === terminalMachine)) terminalMachine = machines.some((item) => item.name === "local") ? "local" : machines[0]?.name || "local"
-    if (!machines.some((item) => item.name === fileMachine)) fileMachine = terminalMachine
+    const available = new Set(machines.map((item) => item.name))
+    const fallback = available.has("local") ? "local" : machines[0]?.name || "local"
+    if (!available.has(config.machine)) {
+      const missing = config.machine
+      replaceMachineSelection(missing, fallback, ".")
+      selectionChanged = true
+    }
+    const preferred = available.has(config.machine) ? config.machine : fallback
+    if (!available.has(fileMachine)) {
+      resetFileTarget(preferred, config.machine === preferred ? config.cwd : ".")
+      selectionChanged = true
+    }
+    if (!available.has(terminalMachine)) {
+      resetTerminalTarget(preferred)
+      selectionChanged = true
+    }
+    if (selectionChanged) renderCurrentTab()
+    const dash = await api<Dashboard>(`/api/ui/dashboard?machine=${encodeURIComponent(config.machine || "local")}`)
+    dashboard = dash
     lastPassiveRefresh = Date.now()
     updateChrome()
   } finally {
     passiveRefreshing = false
+  }
+  if (selectionChanged) {
+    if (activeTab === "files") await refreshFiles()
+    else if (activeTab === "terminal") await refreshTerminals()
+    else if (activeTab === "diff") await refreshDiff()
+    else if (activeTab === "jobs") { renderJobs(); wireJobRows() }
   }
 }
 
@@ -949,7 +988,7 @@ function configureFromToolResult(result: unknown): void {
     renderCurrentTab()
     return
   }
-  config = {
+  const nextConfig: LiveConfig = {
     token,
     apiBase,
     uiPath: String(hidden?.uiPath || structured.ui_path || "/ui"),
@@ -957,9 +996,9 @@ function configureFromToolResult(result: unknown): void {
     machine: String(structured.machine || "local"),
     cwd: String(structured.cwd || "."),
   }
-  terminalMachine = config.machine
-  fileMachine = config.machine
-  filePath = config.cwd
+  const targetChanged = !config || config.machine !== nextConfig.machine || config.cwd !== nextConfig.cwd
+  if (targetChanged) resetWorkspaceTarget(nextConfig.machine, nextConfig.cwd)
+  config = nextConfig
   pollGeneration += 1
   const generation = pollGeneration
   connectionMessage = "Connecting"
@@ -993,11 +1032,6 @@ function applyHostContext(context: unknown): void {
 }
 
 app.ontoolresult = (result) => configureFromToolResult(result)
-app.ontoolinput = (input) => {
-  const args = input.arguments || {}
-  if (typeof args.machine === "string") terminalMachine = fileMachine = args.machine
-  if (typeof args.cwd === "string") filePath = args.cwd
-}
 app.onhostcontextchanged = (context) => applyHostContext(context)
 
 shell()
