@@ -64,9 +64,17 @@ async def test_browser_tombstones_point_to_browser_run_script() -> None:
     mcp = DeprecatedToolFastMCP("test")
 
     for name in (
+        "browser_screenshot_tool",
+        "browser_eval_tool",
+        "browser_pdf_tool",
         "browser_capture_tool",
         "browser_get_text_tool",
         "playwright_run_script_tool",
+        "remote_browser_screenshot_tool",
+        "remote_browser_get_text_tool",
+        "remote_browser_eval_tool",
+        "remote_browser_pdf_tool",
+        "remote_playwright_run_script_tool",
     ):
         result = await mcp.call_tool(name, {})
         assert result["data"]["status"] == "stale_tool_snapshot"
