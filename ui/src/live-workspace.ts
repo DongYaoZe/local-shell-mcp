@@ -73,6 +73,7 @@ let dashboard: Dashboard | null = null
 let machines: Machine[] = []
 let lastPassiveRefresh = 0
 let passiveRefreshing = false
+let coreRefreshQueued = false
 
 let terminal: Terminal | null = null
 let fitAddon: FitAddon | null = null
@@ -523,14 +524,20 @@ async function newTerminal(): Promise<void> {
   if (control === "agent") return
   const name = await promptValue("New terminal", "Optional name", "", `Create a persistent shell on ${terminalMachine}.`)
   if (name === null) return
-  const result = await api<JsonRecord>("/api/ui/terminals/start", { method: "POST", body: JSON.stringify({ machine: terminalMachine, cwd: config?.cwd || ".", name: name || null }) })
+  const requestMachine = terminalMachine
+  const requestCwd = config?.cwd || "."
+  const result = await api<JsonRecord>("/api/ui/terminals/start", { method: "POST", body: JSON.stringify({ machine: requestMachine, cwd: requestCwd, name: name || null }) })
+  if (terminalMachine !== requestMachine) return
   selectedSession = String(result.session_id || "")
   await refreshTerminals()
 }
 
 async function killTerminal(): Promise<void> {
   if (control === "agent" || !selectedSession) return
-  await api("/api/ui/terminals/kill", { method: "POST", body: JSON.stringify({ machine: terminalMachine, session_id: selectedSession }) })
+  const requestMachine = terminalMachine
+  const requestSession = selectedSession
+  await api("/api/ui/terminals/kill", { method: "POST", body: JSON.stringify({ machine: requestMachine, session_id: requestSession }) })
+  if (terminalMachine !== requestMachine || selectedSession !== requestSession) return
   selectedSession = ""
   await refreshTerminals()
 }
@@ -636,18 +643,24 @@ async function createFile(directory: boolean): Promise<void> {
   if (control === "agent") return
   const name = await promptValue(directory ? "New folder" : "New file", "Name", "", `Create inside ${filePath}.`)
   if (!name?.trim()) return
-  const path = joinPath(filePath, name.trim())
-  await api(`/api/ui/files/${directory ? "mkdir" : "touch"}`, { method: "POST", body: JSON.stringify({ machine: fileMachine, path }) })
+  const requestMachine = fileMachine
+  const requestParent = filePath
+  const path = joinPath(requestParent, name.trim())
+  await api(`/api/ui/files/${directory ? "mkdir" : "touch"}`, { method: "POST", body: JSON.stringify({ machine: requestMachine, path }) })
+  if (fileMachine !== requestMachine || filePath !== requestParent) return
   selectedFile = path
   await refreshFiles()
 }
 
 async function deleteSelectedFile(): Promise<void> {
   if (control === "agent" || !selectedFile) return
-  const entry = fileEntries.find((item) => item.path === selectedFile)
-  const confirmation = await promptValue("Delete entry", `Type ${basename(selectedFile)} to confirm`, "", "This action cannot be undone by the Live Workspace.")
-  if (confirmation !== basename(selectedFile)) return
-  await api("/api/ui/files/delete", { method: "POST", body: JSON.stringify({ machine: fileMachine, path: selectedFile, recursive: entry?.type === "dir" }) })
+  const requestMachine = fileMachine
+  const requestPath = selectedFile
+  const entry = fileEntries.find((item) => item.path === requestPath)
+  const confirmation = await promptValue("Delete entry", `Type ${basename(requestPath)} to confirm`, "", "This action cannot be undone by the Live Workspace.")
+  if (confirmation !== basename(requestPath)) return
+  await api("/api/ui/files/delete", { method: "POST", body: JSON.stringify({ machine: requestMachine, path: requestPath, recursive: entry?.type === "dir" }) })
+  if (fileMachine !== requestMachine || selectedFile !== requestPath) return
   selectedFile = ""
   await refreshFiles()
 }
@@ -668,10 +681,14 @@ async function saveFileEdit(): Promise<void> {
   if (control === "agent" || !selectedFile) return
   const editor = qs<HTMLTextAreaElement>("[data-role=file-editor]")
   if (!editor) return
-  await api("/api/ui/files/write", { method: "POST", body: JSON.stringify({ machine: fileMachine, path: selectedFile, content: editor.value, overwrite: true, expected_sha256: fileEditSha || null }) })
+  const requestMachine = fileMachine
+  const requestPath = selectedFile
+  const requestSha = fileEditSha
+  await api("/api/ui/files/write", { method: "POST", body: JSON.stringify({ machine: requestMachine, path: requestPath, content: editor.value, overwrite: true, expected_sha256: requestSha || null }) })
+  if (fileMachine !== requestMachine || selectedFile !== requestPath) return
   fileEditing = false
   filePreview = null
-  await selectFile(selectedFile)
+  await selectFile(requestPath)
   notify("File saved", "success")
 }
 
@@ -697,7 +714,13 @@ function renderDiff(): void {
 }
 
 async function refreshDiff(): Promise<void> {
-  gitSnapshot = await api(`/api/live/git?machine=${encodeURIComponent(config?.machine || "local")}&cwd=${encodeURIComponent(config?.cwd || ".")}`)
+  if (!config) return
+  const requestWorkspace = config.workspaceId
+  const requestMachine = config.machine
+  const requestCwd = config.cwd
+  const snapshot = await api<{ machine?: string; cwd: string; status: JsonRecord; diff: JsonRecord }>(`/api/live/git?machine=${encodeURIComponent(requestMachine)}&cwd=${encodeURIComponent(requestCwd)}`)
+  if (!config || config.workspaceId !== requestWorkspace || config.machine !== requestMachine || config.cwd !== requestCwd) return
+  gitSnapshot = snapshot
   if (activeTab === "diff") renderDiff()
 }
 
@@ -861,17 +884,32 @@ async function askAboutAudit(id: string): Promise<void> {
 }
 
 async function refreshJobs(): Promise<void> {
-  dashboard = await api<Dashboard>(`/api/ui/dashboard?machine=${encodeURIComponent(config?.machine || "local")}`)
+  if (!config) return
+  const requestWorkspace = config.workspaceId
+  const requestMachine = config.machine
+  const result = await api<Dashboard>(`/api/ui/dashboard?machine=${encodeURIComponent(requestMachine)}`)
+  if (!config || config.workspaceId !== requestWorkspace || config.machine !== requestMachine) return
+  dashboard = result
   updateChrome()
   if (activeTab === "jobs") { renderJobs(); wireJobRows() }
 }
 
 async function refreshAllCore(): Promise<void> {
-  if (!config || passiveRefreshing) return
+  if (!config) return
+  if (passiveRefreshing) {
+    coreRefreshQueued = true
+    return
+  }
   passiveRefreshing = true
+  const requestWorkspace = config.workspaceId
+  const requestApiBase = config.apiBase
   let selectionChanged = false
   try {
     const boot = await api<JsonRecord>("/api/ui/bootstrap")
+    if (!config || config.workspaceId !== requestWorkspace || config.apiBase !== requestApiBase) {
+      coreRefreshQueued = true
+      return
+    }
     bootstrap = boot
     const nested = boot.machines as JsonRecord | undefined
     machines = (nested?.machines as Machine[] | undefined) || []
@@ -892,12 +930,21 @@ async function refreshAllCore(): Promise<void> {
       selectionChanged = true
     }
     if (selectionChanged) renderCurrentTab()
-    const dash = await api<Dashboard>(`/api/ui/dashboard?machine=${encodeURIComponent(config.machine || "local")}`)
+    const dashboardMachine = config.machine
+    const dash = await api<Dashboard>(`/api/ui/dashboard?machine=${encodeURIComponent(dashboardMachine || "local")}`)
+    if (!config || config.workspaceId !== requestWorkspace || config.apiBase !== requestApiBase || config.machine !== dashboardMachine) {
+      coreRefreshQueued = true
+      return
+    }
     dashboard = dash
     lastPassiveRefresh = Date.now()
     updateChrome()
   } finally {
     passiveRefreshing = false
+    if (coreRefreshQueued) {
+      coreRefreshQueued = false
+      queueMicrotask(() => void refreshAllCore())
+    }
   }
   if (selectionChanged) {
     if (activeTab === "files") await refreshFiles()
@@ -944,8 +991,9 @@ function mergeEvents(incoming: LiveEvent[]): void {
   if (activeTab === "activity") renderActivity()
 }
 
-async function loadSnapshot(): Promise<void> {
+async function loadSnapshot(generation: number): Promise<boolean> {
   const payload = await api<{ workspace: JsonRecord; events: LiveEvent[] }>("/api/live/snapshot")
+  if (generation !== pollGeneration) return false
   control = String(payload.workspace.control || "agent") as ControlMode
   events = payload.events || []
   cursor = Number(payload.workspace.seq || events.at(-1)?.seq || 0)
@@ -953,6 +1001,7 @@ async function loadSnapshot(): Promise<void> {
   connectionMessage = "Live"
   updateChrome()
   renderCurrentTab()
+  return true
 }
 
 async function pollEvents(generation: number): Promise<void> {
@@ -1005,9 +1054,11 @@ function configureFromToolResult(result: unknown): void {
   renderCurrentTab()
   void (async () => {
     try {
-      await loadSnapshot()
+      if (!await loadSnapshot(generation)) return
       await refreshAllCore()
+      if (generation !== pollGeneration) return
       await refreshCurrent(false)
+      if (generation !== pollGeneration) return
       void pollEvents(generation)
     } catch (error) {
       connected = false
