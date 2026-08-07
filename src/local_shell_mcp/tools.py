@@ -309,7 +309,7 @@ NON_CANCELLABLE_TOOL_NAMES = frozenset(
         "edit_file",
         "delete_file_or_dir",
         "apply_patch",
-        "transfer_path",
+        "remote_transfer",
         "todo_write_tool",
         "mcp_tool_call",
     }
@@ -745,7 +745,7 @@ def _remove_remote_tools_when_disabled(mcp: FastMCP) -> None:
         return
     tools = mcp._tool_manager._tools  # noqa: SLF001
     for name in list(tools):
-        if name.startswith("remote_") or name == "transfer_path":
+        if name.startswith("remote_"):
             tools.pop(name, None)
 
 
@@ -785,7 +785,7 @@ OPEN_WORLD_TOOL_NAMES = {
     *MACHINE_CAPABLE_TOOL_NAMES,
     "create_file_link",
     "revoke_file_link",
-    "transfer_path",
+    "remote_transfer",
     "mcp_manage",
     "mcp_tool_call",
 }
@@ -798,7 +798,6 @@ READ_ONLY_OPEN_WORLD_TOOL_NAMES = {
 NON_DESTRUCTIVE_MUTATION_TOOL_NAMES = {
     "create_file_link",
     "open_live_workspace",
-    "remote_invite",
 }
 
 
@@ -2225,7 +2224,7 @@ def _register_workspace_write_tools(mcp: FastMCP, settings: Any) -> None:
         return await _tool_call(_apply_patch_text, patch, cwd)
 
     @mcp.tool(structured_output=True, meta=transfer_meta)
-    async def transfer_path(
+    async def remote_transfer(
         source_path: str,
         destination_path: str,
         source_machine: str | None = None,
@@ -2236,7 +2235,7 @@ def _register_workspace_write_tools(mcp: FastMCP, settings: Any) -> None:
         explanation: str | None = None,
     ) -> ToolResult:
         """Start a tracked job that copies a file or directory between the controller and remote machines. Remote uploads use resumable raw-binary chunks; use job_list, job_tail, job_stop, and job_retry to manage the transfer."""
-        _audit_tool_purpose("transfer_path", purpose, explanation)
+        _audit_tool_purpose("remote_transfer", purpose, explanation)
         return await _tool_call(
             _start_transfer_job,
             source_path,
@@ -2490,32 +2489,40 @@ def _register_browser_tools(mcp: FastMCP, settings: Any, read_only_tool: ToolAnn
         return await _tool_call(playwright_run_script, script, cwd, timeout_s)
 
 
-def _register_remote_admin_tools(mcp: FastMCP, read_only_tool: ToolAnnotations) -> None:
+def _register_remote_admin_tools(mcp: FastMCP) -> None:
     remote_meta = _oauth_meta(["remote:use"])
 
     @mcp.tool(structured_output=True, meta=remote_meta)
-    async def remote_invite(
+    async def remote_manage(
+        action: str,
         name: str | None = None,
         workdir: str | None = None,
         ttl_s: int | None = None,
+        machine: str | None = None,
+        new_name: str | None = None,
     ) -> ToolResult:
-        """Create a one-time command for a remote machine to join this server."""
-        return await _tool_call(lambda: remote_manager().create_invite(name, workdir, ttl_s))
+        """Manage remote workers with action=invite, list, revoke, or rename. invite accepts name/workdir/ttl_s; revoke requires machine; rename requires machine and new_name."""
 
-    @mcp.tool(structured_output=True, annotations=read_only_tool, meta=remote_meta)
-    async def remote_list_machines() -> ToolResult:
-        """List registered remote worker machines."""
-        return await _tool_call(lambda: remote_manager().list_machines())
+        async def run() -> Any:
+            manager = remote_manager()
+            normalized = action.strip().lower()
+            if normalized == "invite":
+                return await manager.create_invite(name, workdir, ttl_s)
+            if normalized == "list":
+                return manager.list_machines()
+            if normalized == "revoke":
+                if not machine:
+                    raise ValueError("machine is required for action=revoke")
+                return manager.revoke(machine)
+            if normalized == "rename":
+                if not machine:
+                    raise ValueError("machine is required for action=rename")
+                if not new_name:
+                    raise ValueError("new_name is required for action=rename")
+                return manager.rename(machine, new_name)
+            raise ValueError("action must be one of: invite, list, revoke, rename")
 
-    @mcp.tool(structured_output=True, meta=remote_meta)
-    async def remote_revoke_machine(machine: str) -> ToolResult:
-        """Revoke and remove a remote worker machine."""
-        return await _tool_call(lambda: remote_manager().revoke(machine))
-
-    @mcp.tool(structured_output=True, meta=remote_meta)
-    async def remote_rename_machine(machine: str, new_name: str) -> ToolResult:
-        """Rename a remote worker machine."""
-        return await _tool_call(lambda: remote_manager().rename(machine, new_name))
+        return await _tool_call(run)
 
 
 def _register_live_workspace_tools(
@@ -2636,7 +2643,7 @@ def build_mcp() -> FastMCP:
     _register_maintenance_tools(mcp, read_only_tool)
     _register_dynamic_mcp_tools(mcp, settings, read_only_tool)
     _register_browser_tools(mcp, settings, read_only_tool)
-    _register_remote_admin_tools(mcp, read_only_tool)
+    _register_remote_admin_tools(mcp)
 
     _remove_remote_tools_when_disabled(mcp)
     _install_tool_annotations(mcp)

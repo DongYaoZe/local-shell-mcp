@@ -70,7 +70,7 @@ Docker、VS Code 擴展、二進制、Python 和 stdio 是運行時；ChatGPT �
 | Git | `run_shell_tool`, `run_shell_tool`, `run_shell_tool`, `run_shell_tool` | 可審查的源碼管理流程 |
 | 瀏覽器 | `browser_session`, `browser_snapshot`, `browser_act`、一次性截圖/文字工具、`playwright_run_script_tool` | 持久互動、UI 檢查、截圖、渲染文檔、頁面文字 |
 | 文件鏈接 | `create_file_link`, `revoke_file_link` | 從聊天中下載生成產物 |
-| 遠程節點 | `remote_invite`, `run_shell_tool`, `transfer_path` | NAT、防火牆或集羣登錄流程後的機器 |
+| 遠程節點 | `remote_manage`, `run_shell_tool`, `remote_transfer` | NAT、防火牆或集羣登錄流程後的機器 |
 
 ## 典型工作流
 
@@ -87,7 +87,7 @@ Docker、VS Code 擴展、二進制、Python 和 stdio 是運行時；ChatGPT �
 
 1. 創建一次性遠程節點邀請。
 2. 在遠程主機上粘貼生成的命令。
-3. 通過普通工具的 `machine` 參數操作遠程節點；Git 使用 `run_shell_tool`，路徑傳輸使用 `transfer_path`。
+3. 通過普通工具的 `machine` 參數操作遠程節點；Git 使用 `run_shell_tool`，路徑傳輸使用 `remote_transfer`。
 4. 任務結束後撤銷該節點。
 
 ### 產物生成

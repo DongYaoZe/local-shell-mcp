@@ -494,11 +494,8 @@ _TOOL_OPERATION_GROUPS: dict[str, frozenset[str]] = {
     ),
     "remote": frozenset(
         {
-            "remote_invite",
-            "remote_list_machines",
-            "remote_revoke_machine",
-            "remote_rename_machine",
-            "transfer_path",
+            "remote_manage",
+            "remote_transfer",
         }
     ),
     "agent": frozenset(
