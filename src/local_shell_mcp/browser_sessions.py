@@ -17,6 +17,8 @@ _IDLE_TIMEOUT_S = 3600
 _MAX_ACTIONS = 50
 _MAX_SNAPSHOT_ELEMENTS = 200
 _MAX_SNAPSHOT_TEXT_CHARS = 100_000
+_MAX_BROWSER_ARTIFACT_FILES = 100
+_MAX_BROWSER_ARTIFACT_BYTES = 512 * 1024 * 1024
 _PROFILE_RE = re.compile(r"^[A-Za-z0-9._-]{1,80}$")
 _REF_ATTRIBUTE = "data-local-shell-mcp-ref"
 
@@ -54,7 +56,9 @@ class BrowserSessionManager:
     def __init__(self, state_dir: Path) -> None:
         self._state_dir = Path(state_dir)
         self._sessions: dict[str, BrowserSessionState] = {}
+        self._starting_sessions = 0
         self._lock = asyncio.Lock()
+        self._artifact_lock = asyncio.Lock()
 
     async def manage(
         self,
@@ -114,28 +118,35 @@ class BrowserSessionManager:
             raise ValueError("invalid wait_until")
         width = max(320, min(int(width), 7680))
         height = max(240, min(int(height), 4320))
-        if profile_id and not _PROFILE_RE.fullmatch(profile_id):
+        if profile_id and (
+            profile_id in {".", ".."} or not _PROFILE_RE.fullmatch(profile_id)
+        ):
             raise ValueError("profile_id must match [A-Za-z0-9._-] and be at most 80 characters")
         if profile_id and storage_state_path:
             raise ValueError("profile_id and storage_state_path cannot be combined")
 
         await self._cleanup_idle()
         async with self._lock:
-            if len(self._sessions) >= _MAX_SESSIONS:
+            if len(self._sessions) + self._starting_sessions >= _MAX_SESSIONS:
                 raise ValueError(f"at most {_MAX_SESSIONS} browser sessions may be active")
+            self._starting_sessions += 1
+        slot_reserved = True
 
-        try:
-            from playwright.async_api import async_playwright
-        except ImportError as exc:  # pragma: no cover - depends on worker environment.
-            raise RuntimeError(
-                "Playwright is not installed in this environment; install the local-shell-mcp browser dependency first"
-            ) from exc
-
-        playwright = await async_playwright().start()
-        browser_type = getattr(playwright, browser)
+        playwright = None
         browser_handle = None
         context = None
+        session = None
+        inserted = False
         try:
+            try:
+                from playwright.async_api import async_playwright
+            except ImportError as exc:  # pragma: no cover - depends on worker environment.
+                raise RuntimeError(
+                    "Playwright is not installed in this environment; install the local-shell-mcp browser dependency first"
+                ) from exc
+
+            playwright = await async_playwright().start()
+            browser_type = getattr(playwright, browser)
             viewport = {"width": width, "height": height}
             if profile_id:
                 profile_dir = self._state_dir / "browser-profiles" / profile_id
@@ -166,16 +177,32 @@ class BrowserSessionManager:
                 await page_state.page.goto(url, wait_until=wait_until, timeout=60_000)
             async with self._lock:
                 self._sessions[session.session_id] = session
+                self._starting_sessions -= 1
+                slot_reserved = False
+                inserted = True
             return await self._session_summary(session, current_page_id=page_state.page_id)
-        except Exception:
-            if context is not None:
+        except (Exception, asyncio.CancelledError):
+            if inserted and session is not None:
+                async with self._lock:
+                    self._sessions.pop(session.session_id, None)
+            if session is not None:
                 with contextlib.suppress(Exception):
-                    await context.close()
-            if browser_handle is not None:
-                with contextlib.suppress(Exception):
-                    await browser_handle.close()
-            await playwright.stop()
+                    await self._close_state(session)
+            else:
+                if context is not None:
+                    with contextlib.suppress(Exception):
+                        await context.close()
+                if browser_handle is not None:
+                    with contextlib.suppress(Exception):
+                        await browser_handle.close()
+                if playwright is not None:
+                    with contextlib.suppress(Exception):
+                        await playwright.stop()
             raise
+        finally:
+            if slot_reserved:
+                async with self._lock:
+                    self._starting_sessions -= 1
 
     async def close(
         self, session_id: str, *, save_storage_state_path: str | None = None
@@ -184,11 +211,13 @@ class BrowserSessionManager:
             session = self._sessions.pop(session_id, None)
         if session is None:
             raise ValueError(f"unknown browser session: {session_id}")
-        if save_storage_state_path:
-            target = resolve_path(save_storage_state_path)
-            target.parent.mkdir(parents=True, exist_ok=True)
-            await session.context.storage_state(path=str(target))
-        await self._close_state(session)
+        try:
+            if save_storage_state_path:
+                target = resolve_path(save_storage_state_path)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                await session.context.storage_state(path=str(target))
+        finally:
+            await self._close_state(session)
         result: dict[str, Any] = {"session_id": session_id, "closed": True}
         if save_storage_state_path:
             result["storage_state_path"] = relative_display(resolve_path(save_storage_state_path))
@@ -216,16 +245,25 @@ class BrowserSessionManager:
             text = ""
             truncated = False
             if include_text:
-                text = await page.locator("body").inner_text(timeout=10_000)
-                if len(text) > max_text_chars:
-                    text = text[:max_text_chars]
-                    truncated = True
+                bounded_text = await page.locator("body").evaluate(
+                    """
+(element, limit) => {
+  const text = element.innerText || '';
+  return {text: text.slice(0, limit), truncated: text.length > limit};
+}
+""",
+                    max_text_chars,
+                )
+                text = str(bounded_text["text"])
+                truncated = bool(bounded_text["truncated"])
             screenshot_path = None
             if screenshot:
                 artifacts = self._state_dir / "browser-artifacts"
                 artifacts.mkdir(parents=True, exist_ok=True)
                 target = artifacts / f"{session_id[:12]}-{page_state.page_id}-{uuid.uuid4().hex[:8]}.png"
                 await page.screenshot(path=str(target), full_page=bool(full_page))
+                async with self._artifact_lock:
+                    await asyncio.to_thread(self._prune_artifacts, artifacts, target)
                 screenshot_path = str(target)
             await self._sync_pages(session)
             return {
@@ -543,6 +581,34 @@ class BrowserSessionManager:
                     await session.browser.close()
             finally:
                 await session.playwright.stop()
+
+    @staticmethod
+    def _prune_artifacts(directory: Path, current: Path) -> None:
+        current_size = current.stat().st_size
+        if current_size > _MAX_BROWSER_ARTIFACT_BYTES:
+            current.unlink(missing_ok=True)
+            raise ValueError("browser screenshot exceeds the artifact retention byte limit")
+
+        others = sorted(
+            (path for path in directory.glob("*.png") if path != current),
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
+        kept_files = 1
+        kept_bytes = current_size
+        for path in others:
+            try:
+                size = path.stat().st_size
+            except FileNotFoundError:
+                continue
+            if (
+                kept_files < _MAX_BROWSER_ARTIFACT_FILES
+                and kept_bytes + size <= _MAX_BROWSER_ARTIFACT_BYTES
+            ):
+                kept_files += 1
+                kept_bytes += size
+                continue
+            path.unlink(missing_ok=True)
 
 
 _BROWSER_MANAGERS: dict[str, BrowserSessionManager] = {}

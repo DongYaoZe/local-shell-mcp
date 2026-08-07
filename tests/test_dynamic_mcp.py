@@ -91,6 +91,8 @@ async def test_stdio_gateway_round_trip_persists_cache_and_redacts_config(tmp_pa
     assert changed["server"]["header_keys"] == ["Authorization", "X-Test"]
     await reloaded.manage(action="env_unset", name="demo", key="EXTRA")
     await reloaded.manage(action="header_unset", name="demo", key="X-Test")
+    assert (await reloaded.search(server="demo"))["unrefreshed_servers"] == ["demo"]
+    await reloaded.manage(action="refresh", name="demo")
 
     await reloaded.manage(action="disable", name="demo")
     assert (await reloaded.search("echo"))["tools"] == []
@@ -122,7 +124,7 @@ async def test_register_without_refresh_and_refresh_failure_are_recoverable(tmp_
     assert search["unrefreshed_servers"] == ["cold"]
 
     async def fail_refresh(_server):
-        raise RuntimeError("offline")
+        raise RuntimeError("offline env-secret header-secret")
 
     monkeypatch.setattr(manager, "_fetch_tools", fail_refresh)
     failed = await manager.manage(
@@ -130,9 +132,13 @@ async def test_register_without_refresh_and_refresh_failure_are_recoverable(tmp_
         name="broken",
         command=sys.executable,
         args=[str(script)],
+        env={"TOKEN": "env-secret"},
+        headers={"Authorization": "header-secret"},
     )
     assert failed["refreshed"] is False
-    assert failed["refresh_error"] == "offline"
+    assert failed["refresh_error"] == "offline <redacted> <redacted>"
+    assert "env-secret" not in repr(failed)
+    assert "header-secret" not in repr(failed)
     assert {row["name"] for row in (await manager.manage(action="list"))["servers"]} == {
         "broken",
         "cold",
@@ -321,3 +327,20 @@ async def test_refresh_detects_removal_race(tmp_path, monkeypatch):
     monkeypatch.setattr(manager, "_fetch_tools", remove_during_fetch)
     with pytest.raises(ValueError, match="removed while refreshing"):
         await manager.refresh("demo")
+
+
+@pytest.mark.asyncio
+async def test_refresh_discards_tools_when_configuration_changes(tmp_path, monkeypatch):
+    manager = DynamicMCPManager(tmp_path / ".state")
+    await manager.manage(action="register", name="demo", command=sys.executable, refresh=False)
+
+    async def reconfigure_during_fetch(_server):
+        await manager.manage(action="env_set", name="demo", key="TOKEN", value="new-value")
+        return [Tool(name="stale", inputSchema={})]
+
+    monkeypatch.setattr(manager, "_fetch_tools", reconfigure_during_fetch)
+    with pytest.raises(RuntimeError, match="configuration changed while refreshing"):
+        await manager.refresh("demo")
+    searched = await manager.search(server="demo")
+    assert searched["tools"] == []
+    assert searched["unrefreshed_servers"] == ["demo"]

@@ -65,6 +65,30 @@ def _tool_json(tool: Any) -> dict[str, Any]:
     raise TypeError(f"unsupported MCP tool descriptor: {type(tool).__name__}")
 
 
+def _config_key(server: DynamicMCPServer) -> tuple[Any, ...]:
+    return (
+        server.transport,
+        server.command,
+        tuple(server.args),
+        server.cwd,
+        server.url,
+        tuple(sorted(server.env.items())),
+        tuple(sorted(server.headers.items())),
+    )
+
+
+def _redact_config_secrets(message: str, server: DynamicMCPServer) -> str:
+    redacted = message
+    secrets = sorted(
+        {value for value in (*server.env.values(), *server.headers.values()) if value},
+        key=len,
+        reverse=True,
+    )
+    for secret in secrets:
+        redacted = redacted.replace(secret, "<redacted>")
+    return redacted
+
+
 @dataclass(slots=True)
 class DynamicMCPServer:
     name: str
@@ -311,7 +335,9 @@ class DynamicMCPManager:
                     "action": action,
                     "server": server.public(),
                     "refreshed": False,
-                    "refresh_error": str(exc) or type(exc).__name__,
+                    "refresh_error": _redact_config_secrets(
+                        str(exc) or type(exc).__name__, server
+                    ),
                 }
             return {"action": action, **refreshed}
 
@@ -343,6 +369,8 @@ class DynamicMCPManager:
                     target[clean_key] = value
                 else:
                     target.pop(clean_key, None)
+                server.tools = []
+                server.refreshed_at = None
             else:
                 raise ValueError(
                     "action must be register, list, get, enable, disable, remove, refresh, "
@@ -359,12 +387,17 @@ class DynamicMCPManager:
             if server is None:
                 raise ValueError(f"unknown dynamic MCP server: {name}")
             config = DynamicMCPServer.from_json(server.to_json())
+            config_key = _config_key(config)
         tools = await self._fetch_tools(config)
         async with self._lock:
             servers = self._load()
             current = servers.get(name)
             if current is None:
                 raise ValueError(f"dynamic MCP server was removed while refreshing: {name}")
+            if _config_key(current) != config_key:
+                raise RuntimeError(
+                    f"dynamic MCP server configuration changed while refreshing: {name}"
+                )
             current.tools = tools
             current.refreshed_at = _now_iso()
             current.updated_at = current.refreshed_at

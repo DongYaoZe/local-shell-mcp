@@ -1,13 +1,33 @@
 from __future__ import annotations
 
+import asyncio
 import time
 from pathlib import Path
 
 import pytest
 
 from local_shell_mcp import browser_sessions
-from local_shell_mcp.browser_sessions import BrowserSessionManager, get_browser_session_manager
+from local_shell_mcp.browser_sessions import (
+    BrowserSessionManager,
+    BrowserSessionState,
+    get_browser_session_manager,
+)
 from local_shell_mcp.settings import get_settings
+
+
+def _chromium_installed() -> bool:
+    try:
+        from playwright.sync_api import sync_playwright
+
+        with sync_playwright() as playwright:
+            return Path(playwright.chromium.executable_path).is_file()
+    except Exception:
+        return False
+
+
+requires_chromium = pytest.mark.skipif(
+    not _chromium_installed(), reason="Playwright Chromium is not installed in this test environment"
+)
 
 
 @pytest.fixture(autouse=True)
@@ -51,8 +71,9 @@ def _pages(tmp_path: Path) -> tuple[str, str]:
     return first.as_uri(), second.as_uri()
 
 
+@requires_chromium
 @pytest.mark.asyncio
-async def test_browser_session_snapshot_refs_actions_and_storage_state(tmp_path):
+async def test_browser_session_snapshot_refs_actions_and_storage_state(tmp_path, monkeypatch):
     first_url, second_url = _pages(tmp_path)
     manager = BrowserSessionManager(tmp_path / ".state")
 
@@ -77,6 +98,11 @@ async def test_browser_session_snapshot_refs_actions_and_storage_state(tmp_path)
     ]
     assert any(item["kind"] == "console" for item in snapshot["errors"])
     assert any(item["kind"] in {"pageerror", "requestfailed"} for item in snapshot["errors"])
+
+    monkeypatch.setattr(browser_sessions, "_MAX_BROWSER_ARTIFACT_FILES", 2)
+    for _ in range(3):
+        await manager.snapshot(session_id, page_id=page_id, screenshot=True, include_text=False)
+    assert len(list((tmp_path / ".state" / "browser-artifacts").glob("*.png"))) == 2
 
     acted = await manager.act(
         session_id,
@@ -153,6 +179,7 @@ async def test_browser_session_snapshot_refs_actions_and_storage_state(tmp_path)
     await manager.close(restored["session_id"])
 
 
+@requires_chromium
 @pytest.mark.asyncio
 async def test_profiles_lists_cleanup_limits_and_singleton(tmp_path, monkeypatch):
     first_url, _ = _pages(tmp_path)
@@ -182,6 +209,7 @@ async def test_profiles_lists_cleanup_limits_and_singleton(tmp_path, monkeypatch
         await manager.close(one["session_id"])
 
 
+@requires_chromium
 @pytest.mark.asyncio
 async def test_browser_validation_and_action_errors(tmp_path, monkeypatch):
     first_url, _ = _pages(tmp_path)
@@ -238,6 +266,166 @@ async def test_browser_validation_and_action_errors(tmp_path, monkeypatch):
         timeout_ms=999999,
     )
     await manager.close(session_id)
+
+
+@pytest.mark.asyncio
+async def test_profile_dot_segments_are_rejected_without_starting_browser(tmp_path):
+    manager = BrowserSessionManager(tmp_path / ".state")
+    for profile_id in (".", ".."):
+        with pytest.raises(ValueError, match="profile_id"):
+            await manager.start(profile_id=profile_id)
+
+
+@pytest.mark.asyncio
+async def test_start_reserves_slot_during_launch_and_releases_it_on_cancel(tmp_path, monkeypatch):
+    manager = BrowserSessionManager(tmp_path / ".state")
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    stopped = {"value": False}
+
+    class BlockingBrowserType:
+        async def launch(self, **_kwargs):
+            entered.set()
+            await release.wait()
+            raise AssertionError("cancelled launch should not resume")
+
+    class FakePlaywright:
+        chromium = BlockingBrowserType()
+        firefox = BlockingBrowserType()
+        webkit = BlockingBrowserType()
+
+        async def stop(self):
+            stopped["value"] = True
+
+    class Starter:
+        async def start(self):
+            return FakePlaywright()
+
+    monkeypatch.setattr(browser_sessions, "_MAX_SESSIONS", 1)
+    monkeypatch.setattr("playwright.async_api.async_playwright", lambda: Starter())
+    task = asyncio.create_task(manager.start())
+    await entered.wait()
+    with pytest.raises(ValueError, match="at most 1 browser sessions"):
+        await manager.start()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert manager._starting_sessions == 0
+    assert stopped["value"] is True
+
+
+@pytest.mark.asyncio
+async def test_start_cancellation_after_registration_removes_and_closes_session(
+    tmp_path, monkeypatch
+):
+    manager = BrowserSessionManager(tmp_path / ".state")
+    summary_entered = asyncio.Event()
+    context_closed = {"value": False}
+    browser_closed = {"value": False}
+    playwright_stopped = {"value": False}
+
+    class FakePage:
+        url = "about:blank"
+
+        def is_closed(self):
+            return False
+
+        def on(self, *_args):
+            return None
+
+        async def title(self):
+            return ""
+
+    class FakeContext:
+        def __init__(self):
+            self.pages = []
+
+        async def new_page(self):
+            page = FakePage()
+            self.pages.append(page)
+            return page
+
+        async def close(self):
+            context_closed["value"] = True
+
+    context = FakeContext()
+
+    class FakeBrowser:
+        async def new_context(self, **_kwargs):
+            return context
+
+        async def close(self):
+            browser_closed["value"] = True
+
+    class FakeBrowserType:
+        async def launch(self, **_kwargs):
+            return FakeBrowser()
+
+    class FakePlaywright:
+        chromium = FakeBrowserType()
+        firefox = FakeBrowserType()
+        webkit = FakeBrowserType()
+
+        async def stop(self):
+            playwright_stopped["value"] = True
+
+    class Starter:
+        async def start(self):
+            return FakePlaywright()
+
+    async def blocked_summary(_session, **_kwargs):
+        summary_entered.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr("playwright.async_api.async_playwright", lambda: Starter())
+    monkeypatch.setattr(manager, "_session_summary", blocked_summary)
+    task = asyncio.create_task(manager.start())
+    await summary_entered.wait()
+    assert len(manager._sessions) == 1
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert manager._sessions == {}
+    assert context_closed["value"] is True
+    assert browser_closed["value"] is True
+    assert playwright_stopped["value"] is True
+
+
+@pytest.mark.asyncio
+async def test_close_releases_browser_when_storage_state_save_fails(tmp_path):
+    manager = BrowserSessionManager(tmp_path / ".state")
+    closed = {"context": False, "browser": False, "playwright": False}
+
+    class Context:
+        async def storage_state(self, **_kwargs):
+            raise RuntimeError("save failed")
+
+        async def close(self):
+            closed["context"] = True
+
+    class Browser:
+        async def close(self):
+            closed["browser"] = True
+
+    class Playwright:
+        async def stop(self):
+            closed["playwright"] = True
+
+    session = BrowserSessionState(
+        session_id="session",
+        playwright=Playwright(),
+        context=Context(),
+        browser=Browser(),
+        browser_name="chromium",
+        profile_id=None,
+        created_at=time.time(),
+        last_used_at=time.time(),
+    )
+    manager._sessions[session.session_id] = session
+    with pytest.raises(RuntimeError, match="save failed"):
+        await manager.close("session", save_storage_state_path="state.json")
+    assert manager._sessions == {}
+    assert closed == {"context": True, "browser": True, "playwright": True}
 
 
 @pytest.mark.asyncio
