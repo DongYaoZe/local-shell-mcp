@@ -353,6 +353,7 @@ def _live_workspace_resource_meta() -> dict[str, Any]:
     connect_domains = [value for value in (origin, websocket_origin) if value]
     return {
         "ui": {
+            "domain": origin,
             "csp": {"connectDomains": connect_domains},
             "permissions": {"clipboardWrite": {}},
             "prefersBorder": False,
@@ -361,6 +362,7 @@ def _live_workspace_resource_meta() -> dict[str, Any]:
             "A live local-shell-mcp execution workspace with activity, terminal, files, "
             "diffs, jobs, remotes, audit, and human/agent collaboration controls."
         ),
+        "openai/widgetDomain": origin,
         "openai/widgetPrefersBorder": False,
     }
 
