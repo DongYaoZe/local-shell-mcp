@@ -179,6 +179,13 @@ async def test_all_public_tool_wrappers_local_and_remote(tmp_path, monkeypatch):
         "secret_scan": {},
         "todo_read_tool": {},
         "todo_write_tool": {"todos": []},
+        "mcp_manage": {"action": "list"},
+        "mcp_tool_search": {},
+        "mcp_tool_inspect": {"name": "missing:tool"},
+        "mcp_tool_call": {"name": "missing:tool"},
+        "browser_session": {"action": "list"},
+        "browser_snapshot": {"session_id": "missing"},
+        "browser_act": {"session_id": "missing", "actions": [{"action": "wait"}]},
         "browser_capture_tool": {"url": "https://example.test"},
         "browser_get_text_tool": {"url": "https://example.test"},
         "playwright_run_script_tool": {"script": "print(1)"},
@@ -221,6 +228,9 @@ async def test_all_public_tool_wrappers_local_and_remote(tmp_path, monkeypatch):
         "edit_file": {"path": "x", "edits": []},
         "delete_file_or_dir": {"path": "x"},
         "apply_patch": {"patch": "diff"},
+        "browser_session": {"action": "list"},
+        "browser_snapshot": {"session_id": "s"},
+        "browser_act": {"session_id": "s", "actions": [{"action": "wait"}]},
         "browser_capture_tool": {"url": "https://x"},
         "browser_get_text_tool": {"url": "https://x"},
         "playwright_run_script_tool": {"script": "x"},
@@ -347,6 +357,32 @@ def test_tool_helpers_audit_serialization_timeout_and_tail(tmp_path, monkeypatch
     assert len(serialized["items"]) == 30
     assert "object at" in serialized["object"]
     assert tools._audit_tool_arguments((1, 2), {"password": "x"})["positional_count"] == 2
+
+    managed = tools._safe_audit_call_arguments(
+        "mcp_manage",
+        {
+            "action": "env_set",
+            "name": "demo",
+            "env": {"TOKEN": "secret"},
+            "headers": {"Authorization": "Bearer secret"},
+            "value": "secret",
+        },
+    )
+    assert managed["env"] == {"TOKEN": "<redacted>"}
+    assert managed["headers"] == {"Authorization": "<redacted>"}
+    assert managed["value"] == "<redacted>"
+    dynamic_call = tools._safe_audit_call_arguments(
+        "mcp_tool_call", {"name": "demo:tool", "arguments": {"token": "secret"}, "timeout_s": 5}
+    )
+    assert dynamic_call == {"name": "demo:tool", "argument_keys": ["token"], "timeout_s": 5}
+    browser_call = tools._safe_audit_call_arguments(
+        "browser_act",
+        {
+            "session_id": "s",
+            "actions": [{"action": "fill", "target": "e1", "value": "secret"}],
+        },
+    )
+    assert browser_call["actions"][0]["value"] == "<redacted>"
 
     assert tools._audit_tool_purpose("x", "  purpose ", " explanation ") == {
         "purpose": "purpose",

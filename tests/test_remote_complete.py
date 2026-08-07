@@ -248,9 +248,17 @@ async def test_every_worker_tool_dispatch_branch(monkeypatch, tmp_path):
     def sync_value(*args, **kwargs):
         return {"args": list(args), "kwargs": kwargs}
 
+    class FakeBrowserSessions:
+        manage = staticmethod(async_value)
+        snapshot = staticmethod(async_value)
+        act = staticmethod(async_value)
+
     monkeypatch.setattr(remote, "run_shell", lambda *args, **kwargs: asyncio.sleep(0, result=command_result))
     monkeypatch.setattr(remote, "public_run_shell", lambda *args, **kwargs: asyncio.sleep(0, result=command_result))
     monkeypatch.setattr(remote, "_run_python", async_value)
+    monkeypatch.setattr(
+        remote, "get_browser_session_manager", lambda _state_dir: FakeBrowserSessions()
+    )
     for name in (
         "start_shell",
         "send_shell",
@@ -329,6 +337,9 @@ async def test_every_worker_tool_dispatch_branch(monkeypatch, tmp_path):
         "transfer_upload_url": {"path": "x", "url": "http://x", "expected_bytes": 0, "expected_sha256": "d"},
         "transfer_download_url": {"url": "http://x", "path": "x", "expected_bytes": 0, "expected_sha256": "d"},
         "apply_patch": {"patch": "diff"},
+        "browser_session": {"action": "list"},
+        "browser_snapshot": {"session_id": "s"},
+        "browser_act": {"session_id": "s", "actions": [{"action": "wait"}]},
         "browser_capture_tool": {"url": "https://x"},
         "browser_get_text_tool": {"url": "https://x"},
         "playwright_run_script_tool": {"script": "print(1)"},

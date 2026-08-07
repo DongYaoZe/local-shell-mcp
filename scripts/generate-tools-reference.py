@@ -66,8 +66,20 @@ GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
         ),
     ),
     (
+        "Dynamic MCP gateway",
+        (
+            "mcp_manage",
+            "mcp_tool_search",
+            "mcp_tool_inspect",
+            "mcp_tool_call",
+        ),
+    ),
+    (
         "Browser automation",
         (
+            "browser_session",
+            "browser_snapshot",
+            "browser_act",
             "browser_capture_tool",
             "browser_get_text_tool",
             "playwright_run_script_tool",
@@ -139,7 +151,9 @@ async def generate() -> str:
         "| Run an interactive or long task | `shell_start` or `job_start` |",
         "| Make exact file changes | `edit_file` or `apply_patch` |",
         "| Transfer a file or directory | `transfer_path` |",
-        "| Capture a page | `browser_get_text_tool` or `browser_capture_tool` |",
+        "| Discover an external MCP capability | `mcp_tool_search`, then `mcp_tool_inspect` |",
+        "| Interact with a page | `browser_session`, `browser_snapshot`, then `browser_act` |",
+        "| Capture a one-shot page | `browser_get_text_tool` or `browser_capture_tool` |",
         "| Work on a remote machine | use the same tool with `machine`; use `remote_*` only for worker administration |",
         "",
     ]

@@ -29,6 +29,7 @@ from typing import Any
 
 from . import __version__
 from .audit import audit, suppress_audit
+from .browser_sessions import get_browser_session_manager
 from .errors import (
     PathNotFoundError,
     ShellExecutableNotFoundError,
@@ -1127,6 +1128,9 @@ WORKER_TRANSFER_TOOLS = frozenset(
 )
 WORKER_BROWSER_TOOLS = frozenset(
     {
+        "browser_session",
+        "browser_snapshot",
+        "browser_act",
         "browser_capture_tool",
         "browser_get_text_tool",
         "playwright_run_script_tool",
@@ -1557,6 +1561,41 @@ async def _execute_transfer_worker_tool(tool: str, args: dict[str, Any]) -> Any:
 
 
 async def _execute_browser_worker_tool(tool: str, args: dict[str, Any]) -> Any:
+    session_manager = get_browser_session_manager(get_settings().state_dir)
+    if tool == "browser_session":
+        return await session_manager.manage(
+            action=args["action"],
+            session_id=args.get("session_id"),
+            browser=args.get("browser", "chromium"),
+            headless=args.get("headless", True),
+            width=args.get("width", 1440),
+            height=args.get("height", 1000),
+            url=args.get("url"),
+            wait_until=args.get("wait_until", "domcontentloaded"),
+            profile_id=args.get("profile_id"),
+            storage_state_path=args.get("storage_state_path"),
+            save_storage_state_path=args.get("save_storage_state_path"),
+        )
+
+    if tool == "browser_snapshot":
+        return await session_manager.snapshot(
+            args["session_id"],
+            page_id=args.get("page_id"),
+            include_text=args.get("include_text", True),
+            screenshot=args.get("screenshot", True),
+            full_page=args.get("full_page", False),
+            max_text_chars=args.get("max_text_chars", 100_000),
+            max_elements=args.get("max_elements", 100),
+        )
+
+    if tool == "browser_act":
+        return await session_manager.act(
+            args["session_id"],
+            args["actions"],
+            page_id=args.get("page_id"),
+            timeout_ms=args.get("timeout_ms", 30_000),
+        )
+
     if tool == "browser_capture_tool":
         return await browser_capture(
             args["url"],
@@ -1612,6 +1651,7 @@ def worker_capabilities() -> list[str]:
         "search",
         "python",
         "playwright",
+        "browser_sessions",
     ]
 
 

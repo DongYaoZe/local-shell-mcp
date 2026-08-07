@@ -483,7 +483,14 @@ _TOOL_OPERATION_GROUPS: dict[str, frozenset[str]] = {
     ),
     "jobs": frozenset({"job_start", "job_list", "job_tail", "job_stop", "job_retry"}),
     "browser": frozenset(
-        {"browser_capture_tool", "browser_get_text_tool", "playwright_run_script_tool"}
+        {
+            "browser_session",
+            "browser_snapshot",
+            "browser_act",
+            "browser_capture_tool",
+            "browser_get_text_tool",
+            "playwright_run_script_tool",
+        }
     ),
     "remote": frozenset(
         {
@@ -500,6 +507,10 @@ _TOOL_OPERATION_GROUPS: dict[str, frozenset[str]] = {
             "skills_list",
             "skill_load",
             "skill_read_file",
+            "mcp_manage",
+            "mcp_tool_search",
+            "mcp_tool_inspect",
+            "mcp_tool_call",
             "todo_read_tool",
             "todo_write_tool",
             "audit_tail",

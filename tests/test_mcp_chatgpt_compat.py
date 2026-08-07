@@ -196,6 +196,20 @@ async def test_tool_annotations_are_conservative_and_mode_independent(
     assert tools["create_file_link"].annotations.openWorldHint is True
     assert tools["browser_get_text_tool"].annotations.readOnlyHint is True
     assert tools["browser_get_text_tool"].annotations.openWorldHint is True
+    assert tools["browser_snapshot"].annotations.readOnlyHint is True
+    assert tools["browser_snapshot"].annotations.openWorldHint is True
+    assert tools["browser_session"].annotations.destructiveHint is True
+    assert tools["browser_session"].annotations.openWorldHint is True
+    assert tools["browser_act"].annotations.destructiveHint is True
+    assert tools["browser_act"].annotations.openWorldHint is True
+    assert tools["mcp_tool_search"].annotations.readOnlyHint is True
+    assert tools["mcp_tool_search"].annotations.openWorldHint is False
+    assert tools["mcp_tool_inspect"].annotations.readOnlyHint is True
+    assert tools["mcp_tool_inspect"].annotations.openWorldHint is False
+    assert tools["mcp_manage"].annotations.destructiveHint is True
+    assert tools["mcp_manage"].annotations.openWorldHint is True
+    assert tools["mcp_tool_call"].annotations.destructiveHint is True
+    assert tools["mcp_tool_call"].annotations.openWorldHint is True
     assert tools["read_file"].annotations.readOnlyHint is True
     assert tools["read_file"].annotations.openWorldHint is True
     assert tools["view_image"].annotations.readOnlyHint is True
