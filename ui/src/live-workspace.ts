@@ -511,7 +511,9 @@ function sendTerminal(data: string): void {
 
 async function refreshTerminals(): Promise<void> {
   if (!config) return
-  const payload = await api<{ machine: string; sessions: TerminalSession[] }>(`/api/ui/terminals?machine=${encodeURIComponent(terminalMachine)}`)
+  const requestMachine = terminalMachine
+  const payload = await api<{ machine: string; sessions: TerminalSession[] }>(`/api/ui/terminals?machine=${encodeURIComponent(requestMachine)}`)
+  if (terminalMachine !== requestMachine) return
   terminalSessions = payload.sessions || []
   if (!terminalSessions.some((item) => item.session_id === selectedSession)) selectedSession = terminalSessions[0]?.session_id || ""
   if (activeTab === "terminal") renderTerminal()
@@ -652,7 +654,10 @@ async function deleteSelectedFile(): Promise<void> {
 
 async function beginFileEdit(): Promise<void> {
   if (control === "agent" || !selectedFile) return
-  const content = await api<JsonRecord>(`/api/ui/files/content?machine=${encodeURIComponent(fileMachine)}&path=${encodeURIComponent(selectedFile)}`)
+  const requestMachine = fileMachine
+  const requestPath = selectedFile
+  const content = await api<JsonRecord>(`/api/ui/files/content?machine=${encodeURIComponent(requestMachine)}&path=${encodeURIComponent(requestPath)}`)
+  if (fileMachine !== requestMachine || selectedFile !== requestPath) return
   fileEditContent = String(content.content || "")
   fileEditSha = String(content.sha256 || "")
   fileEditing = true

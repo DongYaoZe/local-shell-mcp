@@ -251,6 +251,8 @@ def verify_request(request: Request) -> Principal:
                         "live_workspace_id": workspace.workspace_id,
                     },
                 )
+            if settings.auth_mode == "none":
+                raise HTTPException(status_code=401, detail="Invalid live workspace credential")
     if settings.auth_mode == "none":
         return Principal(email=None, subject="anonymous", claims={"auth": "none"})
     if (

@@ -353,8 +353,56 @@ def test_live_http_token_authenticates_when_global_auth_is_disabled(tmp_path, mo
             "/api/live/snapshot",
             headers={"Authorization": f"Bearer {token}", "Origin": "https://chatgpt.com"},
         )
+        _, replacement = manager.open(
+            session_key="mcp:no-auth-http",
+            subject="user",
+            scopes=tuple(ALL_OAUTH_SCOPES),
+        )
+        stale_ui = client.get(
+            "/api/ui/files?machine=local&path=.",
+            headers={"Authorization": f"Bearer {token}", "Origin": "https://chatgpt.com"},
+        )
+        current_ui = client.get(
+            "/api/ui/files?machine=local&path=.",
+            headers={"Authorization": f"Bearer {replacement}", "Origin": "https://chatgpt.com"},
+        )
     assert snapshot.status_code == 200
     assert snapshot.json()["data"]["workspace"]["workspace_id"] == workspace.workspace_id
+    assert stale_ui.status_code == 401
+    assert current_ui.status_code == 200
+
+
+def test_live_events_empty_batch_does_not_advance_cursor(tmp_path, monkeypatch):
+    _configure(tmp_path, monkeypatch, auth="none")
+    manager = live_module.get_live_workspace_manager()
+    _, token = manager.open(
+        session_key="mcp:cursor-race",
+        subject="user",
+        scopes=tuple(ALL_OAUTH_SCOPES),
+    )
+
+    async def empty_wait(workspace, after, timeout_s):  # noqa: ARG001
+        manager.publish_workspace(
+            workspace.workspace_id,
+            "tool.completed",
+            actor="agent",
+            data={"tool": "late"},
+        )
+        return []
+
+    monkeypatch.setattr(manager, "wait_events", empty_wait)
+    app = _build_mcp_http_app(build_mcp())
+    with TestClient(app, base_url="http://testserver") as client:
+        response = client.get(
+            "/api/live/events?after=0&timeout=1",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["events"] == []
+    assert data["cursor"] == 0
+    assert manager.events_since(manager.authenticate(token), 0)[-1]["data"]["tool"] == "late"
 
 
 def test_live_workspace_is_hidden_when_ui_is_disabled(tmp_path, monkeypatch):
@@ -375,6 +423,22 @@ def test_live_workspace_is_hidden_when_ui_is_disabled(tmp_path, monkeypatch):
     app = _build_mcp_http_app(mcp)
     with TestClient(app, base_url="http://testserver") as client:
         assert client.get("/api/live/snapshot").status_code == 404
+
+
+def test_live_workspace_is_hidden_in_stdio_mode(tmp_path, monkeypatch):
+    _configure(tmp_path, monkeypatch, auth="none")
+    monkeypatch.setenv("LOCAL_SHELL_MCP_MODE", "stdio")
+    get_settings.cache_clear()
+    mcp = build_mcp()
+
+    async def inspect_surface():
+        tools = {tool.name for tool in await mcp.list_tools()}
+        resources = {str(resource.uri) for resource in await mcp.list_resources()}
+        return tools, resources
+
+    tools, resources = asyncio.run(inspect_surface())
+    assert "open_live_workspace" not in tools
+    assert LIVE_RESOURCE_URI not in resources
 
 
 def test_live_git_routes_remote_inspection_to_selected_machine(tmp_path, monkeypatch):

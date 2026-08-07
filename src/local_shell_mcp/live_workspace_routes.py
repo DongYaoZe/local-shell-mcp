@@ -119,7 +119,7 @@ async def live_events(request: Request) -> Response:
         return _ok(
             {
                 "events": events,
-                "cursor": events[-1]["seq"] if events else max(after, workspace.seq),
+                "cursor": events[-1]["seq"] if events else after,
                 "control": workspace.control,
             }
         )

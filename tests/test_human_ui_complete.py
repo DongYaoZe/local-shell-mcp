@@ -1158,6 +1158,32 @@ async def test_native_shell_websocket_rejects_rotated_live_token(tmp_path, monke
     assert process.closed is True
 
 
+def test_websocket_auth_none_rejects_rotated_live_bearer(tmp_path, monkeypatch):
+    _configure(tmp_path, monkeypatch, auth="none")
+    manager = get_live_workspace_manager()
+    session_key = "mcp:websocket-auth-none"
+    _, token = manager.open(
+        session_key=session_key,
+        subject="user",
+        scopes=tuple(ALL_OAUTH_SCOPES),
+    )
+    manager.open(
+        session_key=session_key,
+        subject="user",
+        scopes=tuple(ALL_OAUTH_SCOPES),
+    )
+    encoded = base64.urlsafe_b64encode(token.encode()).decode().rstrip("=")
+
+    class StaleSocket:
+        headers = {"sec-websocket-protocol": f"lsm-ui, bearer.{encoded}"}
+
+    class AnonymousSocket:
+        headers = {"sec-websocket-protocol": "lsm-ui"}
+
+    assert ui._authorize_websocket(StaleSocket()) is False
+    assert ui._authorize_websocket(AnonymousSocket()) is True
+
+
 @pytest.mark.asyncio
 async def test_dashboard_dispatches_workloads_to_selected_remote(tmp_path, monkeypatch):
     _configure(tmp_path, monkeypatch, remote=True, auth="none")

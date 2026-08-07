@@ -1386,27 +1386,30 @@ def _websocket_token(websocket: WebSocket) -> str | None:
 
 def _websocket_principal(websocket: WebSocket) -> Principal | None:
     settings = get_settings()
-    if settings.auth_mode == "none":
-        return Principal(email=None, subject="anonymous", claims={"auth": "none"})
     token = _websocket_token(websocket)
-    if not token:
-        return None
-    workspace = get_live_workspace_manager().authenticate(token)
-    if workspace is not None:
-        principal = Principal(
-            email=None,
-            subject=workspace.subject,
-            claims={
-                "auth": "live-workspace",
-                "scope": " ".join(workspace.scopes),
-                "live_workspace_id": workspace.workspace_id,
-            },
-        )
-        try:
-            require_scopes(principal, UI_FULL_SCOPES)
-        except Exception:
+    if token:
+        workspace = get_live_workspace_manager().authenticate(token)
+        if workspace is not None:
+            principal = Principal(
+                email=None,
+                subject=workspace.subject,
+                claims={
+                    "auth": "live-workspace",
+                    "scope": " ".join(workspace.scopes),
+                    "live_workspace_id": workspace.workspace_id,
+                },
+            )
+            try:
+                require_scopes(principal, UI_FULL_SCOPES)
+            except Exception:
+                return None
+            return principal
+        if settings.auth_mode == "none":
             return None
-        return principal
+    elif settings.auth_mode == "none":
+        return Principal(email=None, subject="anonymous", claims={"auth": "none"})
+    else:
+        return None
     try:
         from .oauth import validate_bearer_token
 

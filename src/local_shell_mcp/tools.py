@@ -2614,7 +2614,7 @@ def build_mcp() -> FastMCP:
     )
 
     _register_connector_tools(mcp, read_only_tool)
-    if settings.ui_enabled:
+    if settings.ui_enabled and settings.mode != "stdio":
         _register_live_workspace_tools(mcp, settings, read_only_tool)
     _register_environment_tools(mcp, settings, read_only_tool)
     _register_command_tools(mcp, settings)
