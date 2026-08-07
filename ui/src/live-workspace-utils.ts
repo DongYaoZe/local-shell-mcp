@@ -50,6 +50,8 @@ export function formatBytes(bytes: unknown): string {
 
 export function parentPath(path: string): string {
   if (!path || path === ".") return "."
+  const driveRoot = path.match(/^([A-Za-z]:)([\\/]+)$/)
+  if (driveRoot) return `${driveRoot[1]}${driveRoot[2][0]}`
   const windows = path.includes("\\") && !path.includes("/")
   const separator = windows ? "\\" : "/"
   const normalized = path.replace(/[\\/]+$/, "")
@@ -57,7 +59,7 @@ export function parentPath(path: string): string {
   const index = Math.max(normalized.lastIndexOf("/"), normalized.lastIndexOf("\\"))
   if (index < 0) return "."
   if (index === 0) return separator
-  if (windows && index === 2 && normalized[1] === ":") return normalized.slice(0, 3)
+  if (index === 2 && normalized[1] === ":") return `${normalized.slice(0, 2)}${separator}`
   return normalized.slice(0, index)
 }
 

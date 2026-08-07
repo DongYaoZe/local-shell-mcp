@@ -792,6 +792,7 @@ READ_ONLY_OPEN_WORLD_TOOL_NAMES = {
 
 NON_DESTRUCTIVE_MUTATION_TOOL_NAMES = {
     "create_file_link",
+    "open_live_workspace",
     "remote_invite",
 }
 
@@ -2515,7 +2516,6 @@ def _register_remote_admin_tools(mcp: FastMCP, read_only_tool: ToolAnnotations) 
 def _register_live_workspace_tools(
     mcp: FastMCP,
     settings: Any,
-    read_only_tool: ToolAnnotations,
 ) -> None:
     @mcp.resource(
         LIVE_RESOURCE_URI,
@@ -2541,7 +2541,12 @@ def _register_live_workspace_tools(
 
     @mcp.tool(
         structured_output=True,
-        annotations=read_only_tool,
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=False,
+            openWorldHint=False,
+        ),
         meta=tool_meta,
     )
     async def open_live_workspace(
@@ -2615,7 +2620,7 @@ def build_mcp() -> FastMCP:
 
     _register_connector_tools(mcp, read_only_tool)
     if settings.ui_enabled and settings.mode != "stdio":
-        _register_live_workspace_tools(mcp, settings, read_only_tool)
+        _register_live_workspace_tools(mcp, settings)
     _register_environment_tools(mcp, settings, read_only_tool)
     _register_command_tools(mcp, settings)
     _register_shell_tools(mcp, settings, read_only_tool)

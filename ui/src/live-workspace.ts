@@ -771,30 +771,34 @@ async function createRemoteInvite(): Promise<void> {
   await refreshRemotes()
 }
 
-async function renameRemote(machine: string): Promise<void> {
-  if (control === "agent" || !machine) return
-  const name = await promptValue("Rename remote", "New name", machine)
-  if (!name?.trim() || name === machine) return
-  const newName = name.trim()
-  await api("/api/ui/remotes/rename", { method: "POST", body: JSON.stringify({ machine, new_name: newName }) })
+function replaceMachineSelection(machine: string, replacement: string): void {
   if (config?.machine === machine) {
-    config = { ...config, machine: newName }
+    config = { ...config, machine: replacement }
     gitSnapshot = null
   }
   if (fileMachine === machine) {
-    fileMachine = newName
+    fileMachine = replacement
     fileEntries = []
     selectedFile = ""
     filePreview = null
     fileEditing = false
   }
   if (terminalMachine === machine) {
-    terminalMachine = newName
+    terminalMachine = replacement
     terminalSessions = []
     selectedSession = ""
     terminalSocket?.close()
     terminalSocket = null
   }
+}
+
+async function renameRemote(machine: string): Promise<void> {
+  if (control === "agent" || !machine) return
+  const name = await promptValue("Rename remote", "New name", machine)
+  if (!name?.trim() || name === machine) return
+  const newName = name.trim()
+  await api("/api/ui/remotes/rename", { method: "POST", body: JSON.stringify({ machine, new_name: newName }) })
+  replaceMachineSelection(machine, newName)
   await refreshAllCore()
   await refreshRemotes()
 }
@@ -804,6 +808,7 @@ async function revokeRemote(machine: string): Promise<void> {
   const confirmation = await promptValue("Revoke remote", `Type ${machine} to confirm`, "", "The worker will need a new invitation to reconnect.")
   if (confirmation !== machine) return
   await api("/api/ui/remotes/revoke", { method: "POST", body: JSON.stringify({ machine }) })
+  replaceMachineSelection(machine, "local")
   await refreshAllCore()
   await refreshRemotes()
 }
