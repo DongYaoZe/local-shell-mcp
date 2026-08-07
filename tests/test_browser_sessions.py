@@ -442,7 +442,47 @@ async def test_close_releases_browser_when_storage_state_save_fails(tmp_path):
     with pytest.raises(RuntimeError, match="save failed"):
         await manager.close("session", save_storage_state_path="state.json")
     assert manager._sessions == {}
+    assert manager._closing_sessions == {}
     assert closed == {"context": True, "browser": True, "playwright": True}
+
+
+@pytest.mark.asyncio
+async def test_explicit_close_stays_within_capacity_while_inflight(tmp_path, monkeypatch):
+    manager = BrowserSessionManager(tmp_path / ".state")
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    session = BrowserSessionState(
+        session_id="session",
+        playwright=object(),
+        context=object(),
+        browser=None,
+        browser_name="chromium",
+        profile_id=None,
+        created_at=0,
+        last_used_at=0,
+    )
+    manager._cleanup_pending[session.session_id] = session
+
+    async def blocking_close(_session):
+        entered.set()
+        await release.wait()
+        raise RuntimeError("close failed")
+
+    monkeypatch.setattr(manager, "_close_state", blocking_close)
+    close = asyncio.create_task(manager.close("session"))
+    await entered.wait()
+    assert manager._cleanup_pending == {}
+    assert list(manager._closing_sessions) == ["session"]
+
+    monkeypatch.setattr(browser_sessions, "_MAX_SESSIONS", 1)
+    with pytest.raises(ValueError, match="at most 1 browser sessions"):
+        await manager.start()
+
+    release.set()
+    with pytest.raises(RuntimeError, match="close failed"):
+        await close
+    assert manager._closing_sessions == {}
+    assert list(manager._cleanup_pending) == ["session"]
 
 
 @pytest.mark.asyncio

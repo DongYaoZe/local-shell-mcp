@@ -224,6 +224,8 @@ class BrowserSessionManager:
             session = self._sessions.pop(session_id, None)
             if session is None:
                 session = self._cleanup_pending.pop(session_id, None)
+            if session is not None:
+                self._closing_sessions[session.session_id] = session
         if session is None:
             raise ValueError(f"unknown browser session: {session_id}")
         save_error: BaseException | None = None
@@ -238,8 +240,11 @@ class BrowserSessionManager:
             await self._close_state(session)
         except (Exception, asyncio.CancelledError):
             async with self._lock:
+                self._closing_sessions.pop(session.session_id, None)
                 self._cleanup_pending.setdefault(session.session_id, session)
             raise
+        async with self._lock:
+            self._closing_sessions.pop(session.session_id, None)
         if save_error is not None:
             raise save_error
         result: dict[str, Any] = {"session_id": session_id, "closed": True}
