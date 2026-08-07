@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import sys
 from contextlib import asynccontextmanager
@@ -226,6 +227,7 @@ def test_config_redaction_only_treats_secret_like_values_as_substrings():
         env={
             "FLAG": "1",
             "MODE": "on",
+            "TYPE_TOKEN": "text",
             "TOKEN": "token-12345",
             "SHORT_TOKEN": "abc",
         },
@@ -238,17 +240,69 @@ def test_config_redaction_only_treats_secret_like_values_as_substrings():
                 "text": "version 1 is on; token-12345; Bearer hidden; abc suffix",
             }
         ],
-        "structuredContent": {"type": "abc", "mode": "on", "flag": "1", "token": "abc"},
+        "structuredContent": {
+            "type": "abc",
+            "mode": "on",
+            "flag": "1",
+            "token": "abc",
+        },
     }
 
     redacted = dynamic_mcp._redact_config_value(payload, server)
 
     assert redacted["content"][0]["type"] == "text"
     assert redacted["content"][0]["text"] == "version 1 is on; <redacted>; <redacted>; abc suffix"
-    assert redacted["structuredContent"]["type"] == "abc"
+    assert redacted["structuredContent"]["type"] == "<redacted>"
     assert redacted["structuredContent"]["mode"] == "on"
     assert redacted["structuredContent"]["flag"] == "1"
     assert redacted["structuredContent"]["token"] == "<redacted>"
+
+
+@pytest.mark.asyncio
+async def test_legacy_stdio_registry_without_cwd_uses_workspace(tmp_path):
+    state_dir = tmp_path / ".state"
+    state_dir.mkdir()
+    registry = state_dir / "dynamic-mcp.json"
+    registry.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "servers": [
+                    {
+                        "name": "legacy",
+                        "transport": "stdio",
+                        "enabled": True,
+                        "command": sys.executable,
+                        "args": [],
+                        "cwd": None,
+                        "env": {},
+                        "headers": {},
+                        "tools": [],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manager = DynamicMCPManager(state_dir)
+    server = (await manager.manage(action="get", name="legacy"))["server"]
+    assert server["cwd"] == str(tmp_path.resolve())
+
+
+@pytest.mark.asyncio
+async def test_registry_uses_same_compact_encoding_as_schema_limits(tmp_path):
+    state_dir = tmp_path / ".state"
+    manager = DynamicMCPManager(state_dir)
+    await manager.manage(
+        action="register",
+        name="compact",
+        command=sys.executable,
+        refresh=False,
+    )
+    raw = (state_dir / "dynamic-mcp.json").read_text(encoding="utf-8")
+    assert "\n  " not in raw
+    assert json.loads(raw)["servers"][0]["name"] == "compact"
 
 
 @pytest.mark.asyncio

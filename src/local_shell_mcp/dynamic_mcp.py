@@ -104,16 +104,35 @@ def _redact_config_secrets(message: str, server: DynamicMCPServer) -> str:
     return redacted
 
 
-def _redact_config_value(value: Any, server: DynamicMCPServer, *, key: str | None = None) -> Any:
+def _is_protocol_type_path(path: tuple[str | int, ...]) -> bool:
+    return (
+        len(path) == 3
+        and path[0] == "content"
+        and isinstance(path[1], int)
+        and path[2] == "type"
+    )
+
+
+def _redact_config_value(
+    value: Any,
+    server: DynamicMCPServer,
+    *,
+    path: tuple[str | int, ...] = (),
+) -> Any:
     if isinstance(value, str):
-        if key == "type":
+        if _is_protocol_type_path(path):
             return value
         return _redact_config_secrets(value, server)
     if isinstance(value, list):
-        return [_redact_config_value(item, server) for item in value]
+        return [
+            _redact_config_value(item, server, path=(*path, index))
+            for index, item in enumerate(value)
+        ]
     if isinstance(value, dict):
         return {
-            str(child_key): _redact_config_value(item, server, key=str(child_key))
+            str(child_key): _redact_config_value(
+                item, server, path=(*path, str(child_key))
+            )
             for child_key, item in value.items()
         }
     return value
@@ -217,6 +236,8 @@ class DynamicMCPManager:
             if not isinstance(item, dict):
                 continue
             server = DynamicMCPServer.from_json(item)
+            if server.transport == "stdio" and not server.cwd:
+                server.cwd = str(resolve_path("."))
             servers[server.name] = server
         return servers
 
@@ -228,7 +249,7 @@ class DynamicMCPManager:
                 "servers": [servers[name].to_json() for name in sorted(servers)],
             },
             ensure_ascii=False,
-            indent=2,
+            separators=(",", ":"),
             sort_keys=True,
         )
         fd, temporary_name = tempfile.mkstemp(
