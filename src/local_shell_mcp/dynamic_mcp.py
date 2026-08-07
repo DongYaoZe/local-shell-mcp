@@ -28,7 +28,8 @@ _MAX_TOOL_CACHE_BYTES_PER_SERVER = 4 * 1024 * 1024
 _SERVER_NAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 _SENSITIVE_CONFIG_KEY_RE = re.compile(
     r"(?:^|[_-])(?:auth(?:orization)?|api[_-]?key|access[_-]?key|credential|cookie|"
-    r"password|passwd|private[_-]?key|secret|session|token)(?:$|[_-])",
+    r"password|passwd|private[_-]?key|secret|session|token)(?:$|[_-])|"
+    r"(?:password|passwd)$|(?:^|[_-])pat$",
     re.IGNORECASE,
 )
 _MIN_SECRET_SUBSTRING_CHARS = 8
@@ -108,6 +109,10 @@ def _is_protocol_content_path(path: tuple[str | int, ...]) -> bool:
     return len(path) == 2 and path[0] == "content" and isinstance(path[1], int)
 
 
+def _is_protocol_result_key(path: tuple[str | int, ...], key: str) -> bool:
+    return not path and key in {"content", "structuredContent", "isError", "_meta"}
+
+
 def _is_protocol_type_path(path: tuple[str | int, ...]) -> bool:
     return (
         _is_protocol_content_path(path[:2])
@@ -135,7 +140,11 @@ def _redact_config_value(
         redacted: dict[str, Any] = {}
         for child_key, item in value.items():
             key = str(child_key)
-            output_key = key if _is_protocol_content_path(path) else _redact_config_secrets(key, server)
+            output_key = (
+                key
+                if _is_protocol_result_key(path, key) or _is_protocol_content_path(path)
+                else _redact_config_secrets(key, server)
+            )
             redacted[output_key] = _redact_config_value(
                 item, server, path=(*path, key)
             )

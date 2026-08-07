@@ -230,6 +230,8 @@ def test_config_redaction_only_treats_secret_like_values_as_substrings():
             "TYPE_TOKEN": "text",
             "TOKEN": "token-12345",
             "SHORT_TOKEN": "abc",
+            "GITHUB_PAT": "github-pat-secret",
+            "PGPASSWORD": "postgres-secret",
         },
         headers={"Authorization": "Bearer hidden"},
     )
@@ -237,7 +239,10 @@ def test_config_redaction_only_treats_secret_like_values_as_substrings():
         "content": [
             {
                 "type": "text",
-                "text": "version 1 is on; token-12345; Bearer hidden; abc suffix",
+                "text": (
+                    "version 1 is on; token-12345; Bearer hidden; abc suffix; "
+                    "github-pat-secret; postgres-secret"
+                ),
             }
         ],
         "structuredContent": {
@@ -253,7 +258,9 @@ def test_config_redaction_only_treats_secret_like_values_as_substrings():
     redacted = dynamic_mcp._redact_config_value(payload, server)
 
     assert redacted["content"][0]["type"] == "text"
-    assert redacted["content"][0]["text"] == "version 1 is on; <redacted>; <redacted>; abc suffix"
+    assert redacted["content"][0]["text"] == (
+        "version 1 is on; <redacted>; <redacted>; abc suffix; <redacted>; <redacted>"
+    )
     assert redacted["structuredContent"]["type"] == "<redacted>"
     assert redacted["structuredContent"]["mode"] == "on"
     assert redacted["structuredContent"]["flag"] == "1"
@@ -262,6 +269,34 @@ def test_config_redaction_only_treats_secret_like_values_as_substrings():
     assert redacted["structuredContent"]["prefix-<redacted>-suffix"] == "value"
     assert "Bearer hidden" not in repr(redacted)
     assert "token-12345" not in repr(redacted)
+    assert "github-pat-secret" not in repr(redacted)
+    assert "postgres-secret" not in repr(redacted)
+
+
+def test_config_redaction_preserves_call_tool_result_root_keys():
+    server = dynamic_mcp.DynamicMCPServer(
+        name="demo",
+        transport="stdio",
+        env={
+            "CONTENT_TOKEN": "content",
+            "ERROR_TOKEN": "isError",
+            "STRUCTURED_TOKEN": "structuredContent",
+            "META_TOKEN": "_meta",
+        },
+    )
+    payload = {
+        "content": [{"type": "text", "text": "ok"}],
+        "structuredContent": {"content": "content"},
+        "isError": True,
+        "_meta": {"isError": "isError"},
+    }
+
+    redacted = dynamic_mcp._redact_config_value(payload, server)
+
+    assert set(redacted) == {"content", "structuredContent", "isError", "_meta"}
+    assert redacted["isError"] is True
+    assert redacted["structuredContent"] == {"<redacted>": "<redacted>"}
+    assert redacted["_meta"] == {"<redacted>": "<redacted>"}
 
 
 @pytest.mark.asyncio
