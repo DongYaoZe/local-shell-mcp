@@ -104,11 +104,14 @@ def _redact_config_secrets(message: str, server: DynamicMCPServer) -> str:
     return redacted
 
 
+def _is_protocol_content_path(path: tuple[str | int, ...]) -> bool:
+    return len(path) == 2 and path[0] == "content" and isinstance(path[1], int)
+
+
 def _is_protocol_type_path(path: tuple[str | int, ...]) -> bool:
     return (
-        len(path) == 3
-        and path[0] == "content"
-        and isinstance(path[1], int)
+        _is_protocol_content_path(path[:2])
+        and len(path) == 3
         and path[2] == "type"
     )
 
@@ -129,12 +132,14 @@ def _redact_config_value(
             for index, item in enumerate(value)
         ]
     if isinstance(value, dict):
-        return {
-            str(child_key): _redact_config_value(
-                item, server, path=(*path, str(child_key))
+        redacted: dict[str, Any] = {}
+        for child_key, item in value.items():
+            key = str(child_key)
+            output_key = key if _is_protocol_content_path(path) else _redact_config_secrets(key, server)
+            redacted[output_key] = _redact_config_value(
+                item, server, path=(*path, key)
             )
-            for child_key, item in value.items()
-        }
+        return redacted
     return value
 
 

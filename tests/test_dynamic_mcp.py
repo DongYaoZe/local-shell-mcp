@@ -245,6 +245,8 @@ def test_config_redaction_only_treats_secret_like_values_as_substrings():
             "mode": "on",
             "flag": "1",
             "token": "abc",
+            "Bearer hidden": True,
+            "prefix-token-12345-suffix": "value",
         },
     }
 
@@ -256,6 +258,10 @@ def test_config_redaction_only_treats_secret_like_values_as_substrings():
     assert redacted["structuredContent"]["mode"] == "on"
     assert redacted["structuredContent"]["flag"] == "1"
     assert redacted["structuredContent"]["token"] == "<redacted>"
+    assert redacted["structuredContent"]["<redacted>"] is True
+    assert redacted["structuredContent"]["prefix-<redacted>-suffix"] == "value"
+    assert "Bearer hidden" not in repr(redacted)
+    assert "token-12345" not in repr(redacted)
 
 
 @pytest.mark.asyncio
