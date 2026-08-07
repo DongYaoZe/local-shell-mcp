@@ -58,6 +58,7 @@ class BrowserSessionManager:
         self._state_dir = Path(state_dir)
         self._sessions: dict[str, BrowserSessionState] = {}
         self._cleanup_pending: dict[str, BrowserSessionState] = {}
+        self._closing_sessions: dict[str, BrowserSessionState] = {}
         self._starting_sessions = 0
         self._lock = asyncio.Lock()
         self._artifact_lock = asyncio.Lock()
@@ -93,7 +94,7 @@ class BrowserSessionManager:
             await self._cleanup_idle()
             async with self._lock:
                 sessions = list(self._sessions.values())
-                cleanup_pending = sorted(self._cleanup_pending)
+                cleanup_pending = sorted(self._cleanup_pending.keys() | self._closing_sessions.keys())
             return {
                 "sessions": [await self._session_summary(item) for item in sessions],
                 "cleanup_pending": cleanup_pending,
@@ -136,6 +137,7 @@ class BrowserSessionManager:
             if (
                 len(self._sessions)
                 + len(self._cleanup_pending)
+                + len(self._closing_sessions)
                 + self._starting_sessions
                 >= _MAX_SESSIONS
             ):
@@ -595,28 +597,38 @@ class BrowserSessionManager:
                 self._cleanup_pending.clear()
         pending_ids = {session.session_id for session in pending}
         candidates = stale + [session for session in pending if session.session_id not in stale_ids]
-        failed: list[tuple[BrowserSessionState, Exception]] = []
+        async with self._lock:
+            for session in candidates:
+                self._closing_sessions[session.session_id] = session
+        closed = 0
+        first_error: Exception | None = None
         for index, session in enumerate(candidates):
             try:
                 await self._close_state(session)
             except asyncio.CancelledError:
                 async with self._lock:
+                    self._closing_sessions.pop(session.session_id, None)
                     self._cleanup_pending.setdefault(session.session_id, session)
                     for remaining in candidates[index + 1 :]:
+                        self._closing_sessions.pop(remaining.session_id, None)
                         if remaining.session_id in pending_ids:
                             self._cleanup_pending.setdefault(remaining.session_id, remaining)
                         else:
                             self._sessions.setdefault(remaining.session_id, remaining)
                 raise
             except Exception as exc:
-                failed.append((session, exc))
-        if failed:
-            async with self._lock:
-                for session, _ in failed:
+                async with self._lock:
+                    self._closing_sessions.pop(session.session_id, None)
                     self._cleanup_pending.setdefault(session.session_id, session)
-            if force:
-                raise failed[0][1]
-        return len(candidates) - len(failed)
+                if first_error is None:
+                    first_error = exc
+            else:
+                async with self._lock:
+                    self._closing_sessions.pop(session.session_id, None)
+                closed += 1
+        if force and first_error is not None:
+            raise first_error
+        return closed
 
     @staticmethod
     async def _close_state(session: BrowserSessionState) -> None:
