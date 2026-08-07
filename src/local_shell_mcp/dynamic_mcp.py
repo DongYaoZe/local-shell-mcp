@@ -29,7 +29,10 @@ _SERVER_NAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 _SENSITIVE_CONFIG_KEY_RE = re.compile(
     r"(?:^|[_-])(?:auth(?:orization)?|api[_-]?key|access[_-]?key|credential|cookie|"
     r"password|passwd|private[_-]?key|secret|session|token)(?:$|[_-])|"
-    r"(?:password|passwd)$|(?:^|[_-])pat$",
+    r"(?:password|passwd)$|(?:^|[_-])pat$|"
+    r"(?:^|[_-])(?:connection[_-]?string|dsn)(?:$|[_-])|"
+    r"(?:^|[_-])(?:database|db|postgres(?:ql)?|mysql|mariadb|mongo(?:db)?|redis|amqp|rabbitmq)"
+    r"[_-]?url(?:$|[_-])",
     re.IGNORECASE,
 )
 _MIN_SECRET_SUBSTRING_CHARS = 8

@@ -126,7 +126,11 @@ async def test_register_without_refresh_and_refresh_failure_are_recoverable(tmp_
     assert search["unrefreshed_servers"] == ["cold"]
 
     async def fail_refresh(_server):
-        raise RuntimeError("offline env-secret header-secret")
+        raise RuntimeError(
+            "offline env-secret header-secret "
+            "postgres://user:db-pass@db.example.test/app "
+            "DefaultEndpointsProtocol=https;AccountKey=storage-secret"
+        )
 
     monkeypatch.setattr(manager, "_fetch_tools", fail_refresh)
     failed = await manager.manage(
@@ -134,13 +138,23 @@ async def test_register_without_refresh_and_refresh_failure_are_recoverable(tmp_
         name="broken",
         command=sys.executable,
         args=[str(script)],
-        env={"TOKEN": "env-secret"},
+        env={
+            "TOKEN": "env-secret",
+            "DATABASE_URL": "postgres://user:db-pass@db.example.test/app",
+            "AZURE_STORAGE_CONNECTION_STRING": (
+                "DefaultEndpointsProtocol=https;AccountKey=storage-secret"
+            ),
+        },
         headers={"Authorization": "header-secret"},
     )
     assert failed["refreshed"] is False
-    assert failed["refresh_error"] == "offline <redacted> <redacted>"
+    assert failed["refresh_error"] == (
+        "offline <redacted> <redacted> <redacted> <redacted>"
+    )
     assert "env-secret" not in repr(failed)
     assert "header-secret" not in repr(failed)
+    assert "db-pass" not in repr(failed)
+    assert "storage-secret" not in repr(failed)
     assert {row["name"] for row in (await manager.manage(action="list"))["servers"]} == {
         "broken",
         "cold",
@@ -232,6 +246,10 @@ def test_config_redaction_only_treats_secret_like_values_as_substrings():
             "SHORT_TOKEN": "abc",
             "GITHUB_PAT": "github-pat-secret",
             "PGPASSWORD": "postgres-secret",
+            "DATABASE_URL": "postgres://user:db-pass@db.example.test/app",
+            "AZURE_STORAGE_CONNECTION_STRING": (
+                "DefaultEndpointsProtocol=https;AccountKey=storage-secret"
+            ),
         },
         headers={"Authorization": "Bearer hidden"},
     )
@@ -241,7 +259,9 @@ def test_config_redaction_only_treats_secret_like_values_as_substrings():
                 "type": "text",
                 "text": (
                     "version 1 is on; token-12345; Bearer hidden; abc suffix; "
-                    "github-pat-secret; postgres-secret"
+                    "github-pat-secret; postgres-secret; "
+                    "postgres://user:db-pass@db.example.test/app; "
+                    "DefaultEndpointsProtocol=https;AccountKey=storage-secret"
                 ),
             }
         ],
@@ -259,7 +279,8 @@ def test_config_redaction_only_treats_secret_like_values_as_substrings():
 
     assert redacted["content"][0]["type"] == "text"
     assert redacted["content"][0]["text"] == (
-        "version 1 is on; <redacted>; <redacted>; abc suffix; <redacted>; <redacted>"
+        "version 1 is on; <redacted>; <redacted>; abc suffix; <redacted>; <redacted>; "
+        "<redacted>; <redacted>"
     )
     assert redacted["structuredContent"]["type"] == "<redacted>"
     assert redacted["structuredContent"]["mode"] == "on"
@@ -271,6 +292,8 @@ def test_config_redaction_only_treats_secret_like_values_as_substrings():
     assert "token-12345" not in repr(redacted)
     assert "github-pat-secret" not in repr(redacted)
     assert "postgres-secret" not in repr(redacted)
+    assert "db-pass" not in repr(redacted)
+    assert "storage-secret" not in repr(redacted)
 
 
 def test_config_redaction_preserves_call_tool_result_root_keys():
