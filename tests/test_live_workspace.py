@@ -203,11 +203,13 @@ async def test_mcp_app_resource_and_render_result_hide_live_token(tmp_path, monk
     resources = {str(resource.uri): resource for resource in await mcp.list_resources()}
     resource = resources[LIVE_RESOURCE_URI]
     assert resource.mimeType == LIVE_RESOURCE_MIME
+    assert resource.meta["ui"]["domain"] == "https://lsm.example.test"
     assert resource.meta["ui"]["csp"]["connectDomains"] == [
         "https://lsm.example.test",
         "wss://lsm.example.test",
     ]
     assert resource.meta["ui"]["permissions"] == {"clipboardWrite": {}}
+    assert resource.meta["openai/widgetDomain"] == "https://lsm.example.test"
 
     result = await mcp.call_tool("open_live_workspace", {"machine": "local", "cwd": "."})
     assert isinstance(result, CallToolResult)
