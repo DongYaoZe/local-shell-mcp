@@ -598,11 +598,12 @@ class BrowserSessionManager:
             ]
             stale = [self._sessions.pop(session_id) for session_id in stale_ids]
             pending = list(self._cleanup_pending.values()) if force else []
+            pending_ids = {session.session_id for session in pending}
             if force:
                 self._cleanup_pending.clear()
-        pending_ids = {session.session_id for session in pending}
-        candidates = stale + [session for session in pending if session.session_id not in stale_ids]
-        async with self._lock:
+            candidates = stale + [
+                session for session in pending if session.session_id not in stale_ids
+            ]
             for session in candidates:
                 self._closing_sessions[session.session_id] = session
         closed = 0

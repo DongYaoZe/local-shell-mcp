@@ -586,6 +586,63 @@ async def test_cleanup_inflight_sessions_stay_within_capacity(tmp_path, monkeypa
 
 
 @pytest.mark.asyncio
+async def test_cleanup_moves_candidates_to_closing_without_capacity_gap(tmp_path):
+    manager = BrowserSessionManager(tmp_path / ".state")
+    gap = asyncio.Event()
+    probed = asyncio.Event()
+    observed_capacity = []
+
+    class InterleavingLock:
+        def __init__(self):
+            self._lock = asyncio.Lock()
+            self._exits = 0
+
+        async def __aenter__(self):
+            await self._lock.acquire()
+            return self
+
+        async def __aexit__(self, *_args):
+            self._lock.release()
+            self._exits += 1
+            if self._exits == 1:
+                gap.set()
+                await probed.wait()
+
+    session = BrowserSessionState(
+        session_id="stale",
+        playwright=object(),
+        context=object(),
+        browser=None,
+        browser_name="chromium",
+        profile_id=None,
+        created_at=0,
+        last_used_at=0,
+    )
+    manager._sessions[session.session_id] = session
+    manager._lock = InterleavingLock()
+
+    async def probe_capacity():
+        await gap.wait()
+        async with manager._lock:
+            observed_capacity.append(
+                len(manager._sessions)
+                + len(manager._cleanup_pending)
+                + len(manager._closing_sessions)
+                + manager._starting_sessions
+            )
+        probed.set()
+
+    async def close_state(_session):
+        return None
+
+    manager._close_state = close_state
+    probe = asyncio.create_task(probe_capacity())
+    assert await manager._cleanup_idle(force=True) == 1
+    await probe
+    assert observed_capacity == [1]
+
+
+@pytest.mark.asyncio
 async def test_cleanup_cancellation_retains_earlier_failures(tmp_path, monkeypatch):
     manager = BrowserSessionManager(tmp_path / ".state")
     second_entered = asyncio.Event()
