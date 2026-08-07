@@ -446,7 +446,7 @@ async def test_close_releases_browser_when_storage_state_save_fails(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_cleanup_attempts_all_sessions_and_retains_failed_one(tmp_path):
+async def test_cleanup_attempts_all_sessions_and_retains_failed_one(tmp_path, monkeypatch):
     manager = BrowserSessionManager(tmp_path / ".state")
     calls: list[str] = []
 
@@ -497,6 +497,10 @@ async def test_cleanup_attempts_all_sessions_and_retains_failed_one(tmp_path):
     # A quarantined cleanup failure must not block unrelated browser operations.
     listed = await manager.manage(action="list")
     assert listed == {"sessions": [], "cleanup_pending": ["first"]}
+
+    monkeypatch.setattr(browser_sessions, "_MAX_SESSIONS", 1)
+    with pytest.raises(ValueError, match="at most 1 browser sessions"):
+        await manager.start()
 
     with pytest.raises(RuntimeError, match="first close failed"):
         await manager._cleanup_idle(force=True)

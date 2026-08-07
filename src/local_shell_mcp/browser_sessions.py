@@ -133,7 +133,12 @@ class BrowserSessionManager:
 
         await self._cleanup_idle()
         async with self._lock:
-            if len(self._sessions) + self._starting_sessions >= _MAX_SESSIONS:
+            if (
+                len(self._sessions)
+                + len(self._cleanup_pending)
+                + self._starting_sessions
+                >= _MAX_SESSIONS
+            ):
                 raise ValueError(f"at most {_MAX_SESSIONS} browser sessions may be active")
             self._starting_sessions += 1
         slot_reserved = True
