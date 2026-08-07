@@ -2,12 +2,13 @@
 
 This page is generated from the actual MCP tool schemas. Run `python scripts/generate-tools-reference.py` after changing the public tool surface.
 
-All tools except connector-style `search` and `fetch` return a structured `ToolResult` containing `ok`, `message`, and `data`. Most execution and file tools accept an optional `machine`; omit it for the controller workspace and provide it for a connected worker. Git operations intentionally use `run_shell_tool` or another shell tool rather than dedicated Git wrappers.
+Most tools return a structured `ToolResult` containing `ok`, `message`, and `data`. Connector-style `search` and `fetch` use connector-compatible results, while `open_live_workspace` returns the model-visible state used to render the MCP App. Most execution and file tools accept an optional `machine`; omit it for the controller workspace and provide it for a connected worker. Git operations intentionally use `run_shell_tool` or another shell tool rather than dedicated Git wrappers.
 
 ## Selection guide
 
 | Need | Preferred tools |
 |---|---|
+| Monitor or collaborate with execution in ChatGPT | `open_live_workspace` |
 | Inspect an environment | `environment_info`, `tree_view`, `read_file` |
 | Run a short command or Git operation | `run_shell_tool` |
 | Run an interactive or long task | `shell_start` or `job_start` |
@@ -39,6 +40,21 @@ Fetch a workspace file by id returned from search.
 | `id` | `string` | required |  |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+## Interactive workspace
+
+### `open_live_workspace`
+
+Open or reuse the interactive Live Workspace for real-time human monitoring and collaboration. Use it for tasks where terminal output, files/diffs, jobs, remotes, audit activity, or human takeover would materially improve the workflow.
+
+| Parameter | Type | Required/default | Description |
+|---|---|---|---|
+| `machine` | `string \| null` | `null` |  |
+| `cwd` | `string` | `"."` |  |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+When `machine` is supplied, the call additionally requires `remote:use` and runs through the remote worker protocol.
 
 ## Environment, skills, and task state
 
