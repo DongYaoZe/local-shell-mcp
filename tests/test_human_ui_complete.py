@@ -1185,6 +1185,86 @@ def test_websocket_auth_none_rejects_rotated_live_bearer(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_shell_websocket_retains_live_identity_when_token_rotates_during_auth(
+    tmp_path, monkeypatch
+):
+    _configure(tmp_path, monkeypatch, auth="none")
+    manager = get_live_workspace_manager()
+    session_key = "mcp:websocket-auth-race"
+    _, token = manager.open(
+        session_key=session_key,
+        subject="user",
+        scopes=tuple(ALL_OAUTH_SCOPES),
+    )
+    encoded = base64.urlsafe_b64encode(token.encode()).decode().rstrip("=")
+
+    class Process:
+        def __init__(self):
+            self.writes = []
+            self.closed = False
+
+        async def read(self):
+            await asyncio.sleep(0.2)
+            return b"late"
+
+        async def write(self, data):
+            self.writes.append(data)
+
+        async def resize(self, cols, rows):  # noqa: ARG002
+            return None
+
+        async def exit_code(self):
+            return None
+
+        async def close(self):
+            self.closed = True
+
+    class Socket:
+        headers = {"sec-websocket-protocol": f"lsm-ui, bearer.{encoded}"}
+        query_params = {"machine": "local", "session_id": "demo"}
+
+        def __init__(self):
+            self.closed = []
+            self.sent = []
+
+        async def accept(self, subprotocol=None):  # noqa: ARG002
+            return None
+
+        async def close(self, code=1000, reason=""):
+            self.closed.append((code, reason))
+
+        async def send_bytes(self, data):
+            self.sent.append(data)
+
+        async def receive(self):
+            return {"type": "websocket.receive", "bytes": b"should-not-run"}
+
+    def rotate_during_authorization(websocket):  # noqa: ARG001
+        manager.open(
+            session_key=session_key,
+            subject="user",
+            scopes=tuple(ALL_OAUTH_SCOPES),
+        )
+        return True
+
+    process = Process()
+
+    async def fake_spawn(*args):  # noqa: ARG001
+        return process
+
+    monkeypatch.setattr(ui, "_authorize_websocket", rotate_during_authorization)
+    monkeypatch.setattr(ui, "_spawn_shell_process", fake_spawn)
+    ui._ACTIVE_UI_TERMINALS.clear()
+    socket = Socket()
+
+    await ui.ui_shell_websocket(socket)
+
+    assert any(code == 4401 and "rotated" in reason for code, reason in socket.closed)
+    assert process.writes == []
+    assert process.closed is True
+
+
+@pytest.mark.asyncio
 async def test_dashboard_dispatches_workloads_to_selected_remote(tmp_path, monkeypatch):
     _configure(tmp_path, monkeypatch, remote=True, auth="none")
     calls = []

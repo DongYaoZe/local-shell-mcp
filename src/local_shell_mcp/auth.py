@@ -202,6 +202,15 @@ def _extract_token(request: Request) -> str | None:
     return None
 
 
+def _is_cross_origin_request(request: Request) -> bool:
+    origin = request.headers.get("origin")
+    if not origin:
+        return False
+    host = request.headers.get("host") or request.url.netloc
+    expected = f"{request.url.scheme}://{host}".rstrip("/")
+    return origin.rstrip("/") != expected
+
+
 def _verify_oauth(request: Request, settings: Settings) -> Principal:
     from .oauth import ALL_OAUTH_SCOPES, protected_resource_metadata, validate_bearer_token
 
@@ -254,6 +263,13 @@ def verify_request(request: Request) -> Principal:
             if settings.auth_mode == "none":
                 raise HTTPException(status_code=401, detail="Invalid live workspace credential")
     if settings.auth_mode == "none":
+        if path.startswith((HUMAN_UI_API_PREFIX, LIVE_UI_API_PREFIX)) and _is_cross_origin_request(
+            request
+        ):
+            raise HTTPException(
+                status_code=401,
+                detail="A live workspace credential is required for cross-origin UI access",
+            )
         return Principal(email=None, subject="anonymous", claims={"auth": "none"})
     if (
         settings.auth_bypass_localhost

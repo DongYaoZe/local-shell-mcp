@@ -1435,11 +1435,6 @@ def _live_websocket_credentials(websocket: WebSocket) -> tuple[str, str] | None:
     return workspace.workspace_id, token
 
 
-def _live_websocket_workspace_id(websocket: WebSocket) -> str | None:
-    credentials = _live_websocket_credentials(websocket)
-    return credentials[0] if credentials is not None else None
-
-
 def _tui_source_path() -> Path | None:
     candidates = [
         Path(__file__).resolve().parents[2] / "ui" / "src" / "tui.tsx",
@@ -1836,10 +1831,11 @@ def _idle_timeout_remaining(
 
 
 async def ui_terminal_websocket(websocket: WebSocket) -> None:
+    initial_live_credentials = _live_websocket_credentials(websocket)
     if not _authorize_websocket(websocket):
         await websocket.close(code=4401, reason="OAuth authentication required")
         return
-    if _live_websocket_workspace_id(websocket):
+    if initial_live_credentials is not None:
         await websocket.close(
             code=4403,
             reason="The embedded live workspace uses persistent shell sessions, not the TUI bridge",
@@ -1991,6 +1987,7 @@ async def ui_terminal_websocket(websocket: WebSocket) -> None:
 
 
 async def ui_shell_websocket(websocket: WebSocket) -> None:
+    initial_live_credentials = _live_websocket_credentials(websocket)
     if not _authorize_websocket(websocket):
         await websocket.close(code=4401, reason="OAuth authentication required")
         return
@@ -2012,9 +2009,10 @@ async def ui_shell_websocket(websocket: WebSocket) -> None:
 
     machine = str(websocket.query_params.get("machine") or "local")
     session_id = str(websocket.query_params.get("session_id") or "")
-    live_credentials = _live_websocket_credentials(websocket)
-    live_workspace_id = live_credentials[0] if live_credentials is not None else None
-    live_token = live_credentials[1] if live_credentials is not None else None
+    live_workspace_id = (
+        initial_live_credentials[0] if initial_live_credentials is not None else None
+    )
+    live_token = initial_live_credentials[1] if initial_live_credentials is not None else None
     try:
         if not session_id:
             raise ValueError("session_id is required")

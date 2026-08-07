@@ -349,6 +349,14 @@ def test_live_http_token_authenticates_when_global_auth_is_disabled(tmp_path, mo
     )
     app = _build_mcp_http_app(build_mcp())
     with TestClient(app, base_url="http://testserver") as client:
+        same_origin = client.get(
+            "/api/ui/files?machine=local&path=.",
+            headers={"Origin": "http://testserver"},
+        )
+        anonymous_cross_origin = client.get(
+            "/api/ui/files?machine=local&path=.",
+            headers={"Origin": "https://malicious.example"},
+        )
         snapshot = client.get(
             "/api/live/snapshot",
             headers={"Authorization": f"Bearer {token}", "Origin": "https://chatgpt.com"},
@@ -366,6 +374,8 @@ def test_live_http_token_authenticates_when_global_auth_is_disabled(tmp_path, mo
             "/api/ui/files?machine=local&path=.",
             headers={"Authorization": f"Bearer {replacement}", "Origin": "https://chatgpt.com"},
         )
+    assert same_origin.status_code == 200
+    assert anonymous_cross_origin.status_code == 401
     assert snapshot.status_code == 200
     assert snapshot.json()["data"]["workspace"]["workspace_id"] == workspace.workspace_id
     assert stale_ui.status_code == 401

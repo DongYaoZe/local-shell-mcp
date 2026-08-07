@@ -677,11 +677,14 @@ async function saveFileEdit(): Promise<void> {
 
 async function shareSelectedFile(ask: boolean): Promise<void> {
   if (!selectedFile) return
-  const content = await api<JsonRecord>(`/api/ui/files/content?machine=${encodeURIComponent(fileMachine)}&path=${encodeURIComponent(selectedFile)}`)
+  const requestMachine = fileMachine
+  const requestPath = selectedFile
+  const content = await api<JsonRecord>(`/api/ui/files/content?machine=${encodeURIComponent(requestMachine)}&path=${encodeURIComponent(requestPath)}`)
+  if (fileMachine !== requestMachine || selectedFile !== requestPath) return
   const text = truncateContext(String(content.content || ""))
-  await app.updateModelContext({ content: [{ type: "text", text: `Selected file ${fileMachine}:${selectedFile}:\n\n${text}` }], structuredContent: { selectedFile: { machine: fileMachine, path: selectedFile, sha256: content.sha256 } } })
+  await app.updateModelContext({ content: [{ type: "text", text: `Selected file ${requestMachine}:${requestPath}:\n\n${text}` }], structuredContent: { selectedFile: { machine: requestMachine, path: requestPath, sha256: content.sha256 } } })
   notify("Selected file added to model context", "success")
-  if (ask) await app.sendMessage({ role: "user", content: [{ type: "text", text: `Inspect the selected file ${selectedFile} in Live Workspace. Explain anything important and suggest or make the next appropriate change.` }] })
+  if (ask) await app.sendMessage({ role: "user", content: [{ type: "text", text: `Inspect the selected file ${requestPath} in Live Workspace. Explain anything important and suggest or make the next appropriate change.` }] })
 }
 
 function renderDiff(): void {
@@ -772,7 +775,26 @@ async function renameRemote(machine: string): Promise<void> {
   if (control === "agent" || !machine) return
   const name = await promptValue("Rename remote", "New name", machine)
   if (!name?.trim() || name === machine) return
-  await api("/api/ui/remotes/rename", { method: "POST", body: JSON.stringify({ machine, new_name: name.trim() }) })
+  const newName = name.trim()
+  await api("/api/ui/remotes/rename", { method: "POST", body: JSON.stringify({ machine, new_name: newName }) })
+  if (config?.machine === machine) {
+    config = { ...config, machine: newName }
+    gitSnapshot = null
+  }
+  if (fileMachine === machine) {
+    fileMachine = newName
+    fileEntries = []
+    selectedFile = ""
+    filePreview = null
+    fileEditing = false
+  }
+  if (terminalMachine === machine) {
+    terminalMachine = newName
+    terminalSessions = []
+    selectedSession = ""
+    terminalSocket?.close()
+    terminalSocket = null
+  }
   await refreshAllCore()
   await refreshRemotes()
 }
