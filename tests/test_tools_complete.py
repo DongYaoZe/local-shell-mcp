@@ -50,6 +50,27 @@ def _handled_error_data(result: CallToolResult) -> dict:
     return result.structuredContent["data"]
 
 
+@pytest.mark.asyncio
+async def test_dynamic_mcp_downstream_error_is_exposed_as_tool_error(tmp_path, monkeypatch):
+    _configure(tmp_path, monkeypatch)
+
+    async def fake_call(_self, name, arguments=None, *, timeout_s=None):
+        return {
+            "name": name,
+            "result": {
+                "content": [{"type": "text", "text": "downstream failed"}],
+                "isError": True,
+            },
+        }
+
+    monkeypatch.setattr(tools.DynamicMCPManager, "call", fake_call)
+    mcp = tools.build_mcp()
+    result = await _raw_tool(mcp, "mcp_tool_call")("demo:fail", {"x": 1})
+    data = _handled_error_data(result)
+    assert data["name"] == "demo:fail"
+    assert data["result"]["isError"] is True
+
+
 class FakeRemoteManager:
     def __init__(self):
         self.calls = []
@@ -117,8 +138,6 @@ async def test_all_public_tool_wrappers_local_and_remote(tmp_path, monkeypatch):
         "_apply_patch_text",
         "_start_transfer_job",
         "_secret_scan",
-        "browser_capture",
-        "browser_get_text",
         "playwright_run_script",
     ):
         monkeypatch.setattr(tools, name, async_value)
@@ -187,9 +206,7 @@ async def test_all_public_tool_wrappers_local_and_remote(tmp_path, monkeypatch):
         "browser_session": {"action": "list"},
         "browser_snapshot": {"session_id": "missing"},
         "browser_act": {"session_id": "missing", "actions": [{"action": "wait"}]},
-        "browser_capture_tool": {"url": "https://example.test"},
-        "browser_get_text_tool": {"url": "https://example.test"},
-        "playwright_run_script_tool": {"script": "print(1)"},
+        "browser_run_script": {"script": "print(1)"},
         "audit_tail": {},
         "remote_manage": {"action": "list"},
     }
@@ -246,9 +263,7 @@ async def test_all_public_tool_wrappers_local_and_remote(tmp_path, monkeypatch):
         "browser_session": {"action": "list"},
         "browser_snapshot": {"session_id": "s"},
         "browser_act": {"session_id": "s", "actions": [{"action": "wait"}]},
-        "browser_capture_tool": {"url": "https://x"},
-        "browser_get_text_tool": {"url": "https://x"},
-        "playwright_run_script_tool": {"script": "x"},
+        "browser_run_script": {"script": "x"},
     }
     for name, kwargs in remote_cases.items():
         result = await _raw_tool(mcp, name)(**kwargs, machine="node")
@@ -295,8 +310,6 @@ async def test_tool_wrapper_error_paths_and_remote_disabled(tmp_path, monkeypatc
     monkeypatch.setattr(tools, "_secret_scan", fail_async)
     monkeypatch.setattr(tools, "todo_read", fail_sync)
     monkeypatch.setattr(tools, "todo_write", fail_sync)
-    monkeypatch.setattr(tools, "browser_capture", fail_async)
-    monkeypatch.setattr(tools, "browser_get_text", fail_async)
     monkeypatch.setattr(tools, "playwright_run_script", fail_async)
     monkeypatch.setattr(tools, "_read_audit_tail_entries", fail_sync)
     fake_remote = FakeRemoteManager()
@@ -333,9 +346,7 @@ async def test_tool_wrapper_error_paths_and_remote_disabled(tmp_path, monkeypatc
         ("secret_scan", {}),
         ("todo_read_tool", {}),
         ("todo_write_tool", {"todos": []}),
-        ("browser_capture_tool", {"url": "x"}),
-        ("browser_get_text_tool", {"url": "x"}),
-        ("playwright_run_script_tool", {"script": "x"}),
+        ("browser_run_script", {"script": "x"}),
         ("audit_tail", {}),
     ]
     for name, kwargs in checks:

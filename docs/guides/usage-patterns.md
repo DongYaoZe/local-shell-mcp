@@ -25,7 +25,7 @@ Use this loop for most coding tasks:
 | Multi-file patch | `apply_patch` | Ad hoc shell edits |
 | Finding files | `tree_view`, `glob_search` | Full recursive listings of large repositories |
 | Finding code | `grep_search` | Reading many files blindly |
-| Browser evidence | `browser_capture_tool`, `browser_get_text_tool` | Guessing from page names or routes |
+| Browser evidence | `browser_snapshot`, `browser_run_script` | Guessing from page names or routes |
 | Downloadable artifacts | `create_file_link` | Pasting large binary content into chat |
 | Remote machine work | normal tools with `machine`, plus `remote_transfer` | Opening inbound SSH when outbound worker mode is enough |
 

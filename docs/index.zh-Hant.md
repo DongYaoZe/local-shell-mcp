@@ -68,7 +68,7 @@ Docker、VS Code 擴展、二進制、Python 和 stdio 是運行時；ChatGPT �
 | Shell 和 Python | `run_shell_tool`, `run_python_tool`, `shell_start` | 構建、測試、腳本、長時間進程 |
 | 文件和搜索 | `tree_view`, `grep_search`, `read_file`, `apply_patch` | 倉庫檢查和精確修改 |
 | Git | `run_shell_tool`, `run_shell_tool`, `run_shell_tool`, `run_shell_tool` | 可審查的源碼管理流程 |
-| 瀏覽器 | `browser_session`, `browser_snapshot`, `browser_act`、一次性截圖/文字工具、`playwright_run_script_tool` | 持久互動、UI 檢查、截圖、渲染文檔、頁面文字 |
+| 瀏覽器 | `browser_session`, `browser_snapshot`, `browser_act`、`browser_run_script` | 持久互動、UI 檢查、截圖、渲染文檔、頁面文字 |
 | 文件鏈接 | `create_file_link`, `revoke_file_link` | 從聊天中下載生成產物 |
 | 遠程節點 | `remote_manage`, `run_shell_tool`, `remote_transfer` | NAT、防火牆或集羣登錄流程後的機器 |
 

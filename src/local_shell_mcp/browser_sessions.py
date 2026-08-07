@@ -17,6 +17,7 @@ _IDLE_TIMEOUT_S = 3600
 _MAX_ACTIONS = 50
 _MAX_SNAPSHOT_ELEMENTS = 200
 _MAX_SNAPSHOT_TEXT_CHARS = 100_000
+_MAX_ELEMENT_METADATA_CHARS = 2_000
 _MAX_BROWSER_ARTIFACT_FILES = 100
 _MAX_BROWSER_ARTIFACT_BYTES = 512 * 1024 * 1024
 _PROFILE_RE = re.compile(r"^[A-Za-z0-9._-]{1,80}$")
@@ -56,6 +57,8 @@ class BrowserSessionManager:
     def __init__(self, state_dir: Path) -> None:
         self._state_dir = Path(state_dir)
         self._sessions: dict[str, BrowserSessionState] = {}
+        self._cleanup_pending: dict[str, BrowserSessionState] = {}
+        self._closing_sessions: dict[str, BrowserSessionState] = {}
         self._starting_sessions = 0
         self._lock = asyncio.Lock()
         self._artifact_lock = asyncio.Lock()
@@ -91,7 +94,11 @@ class BrowserSessionManager:
             await self._cleanup_idle()
             async with self._lock:
                 sessions = list(self._sessions.values())
-            return {"sessions": [await self._session_summary(item) for item in sessions]}
+                cleanup_pending = sorted(self._cleanup_pending.keys() | self._closing_sessions.keys())
+            return {
+                "sessions": [await self._session_summary(item) for item in sessions],
+                "cleanup_pending": cleanup_pending,
+            }
         if action == "close":
             if not session_id:
                 raise ValueError("session_id is required for action=close")
@@ -127,7 +134,13 @@ class BrowserSessionManager:
 
         await self._cleanup_idle()
         async with self._lock:
-            if len(self._sessions) + self._starting_sessions >= _MAX_SESSIONS:
+            if (
+                len(self._sessions)
+                + len(self._cleanup_pending)
+                + len(self._closing_sessions)
+                + self._starting_sessions
+                >= _MAX_SESSIONS
+            ):
                 raise ValueError(f"at most {_MAX_SESSIONS} browser sessions may be active")
             self._starting_sessions += 1
         slot_reserved = True
@@ -209,15 +222,31 @@ class BrowserSessionManager:
     ) -> dict[str, Any]:
         async with self._lock:
             session = self._sessions.pop(session_id, None)
+            if session is None:
+                session = self._cleanup_pending.pop(session_id, None)
+            if session is not None:
+                self._closing_sessions[session.session_id] = session
         if session is None:
             raise ValueError(f"unknown browser session: {session_id}")
+        save_error: BaseException | None = None
         try:
             if save_storage_state_path:
                 target = resolve_path(save_storage_state_path)
                 target.parent.mkdir(parents=True, exist_ok=True)
                 await session.context.storage_state(path=str(target))
-        finally:
+        except (Exception, asyncio.CancelledError) as exc:
+            save_error = exc
+        try:
             await self._close_state(session)
+        except (Exception, asyncio.CancelledError):
+            async with self._lock:
+                self._closing_sessions.pop(session.session_id, None)
+                self._cleanup_pending.setdefault(session.session_id, session)
+            raise
+        async with self._lock:
+            self._closing_sessions.pop(session.session_id, None)
+        if save_error is not None:
+            raise save_error
         result: dict[str, Any] = {"session_id": session_id, "closed": True}
         if save_storage_state_path:
             result["storage_state_path"] = relative_display(resolve_path(save_storage_state_path))
@@ -408,7 +437,8 @@ class BrowserSessionManager:
         ).evaluate_all(
             """
 (elements, payload) => {
-  const [attribute, token, maxElements] = payload;
+  const [attribute, token, maxElements, maxMetadataChars] = payload;
+  const clip = (value) => typeof value === 'string' ? value.slice(0, maxMetadataChars) : null;
   const visible = elements.filter((element) => {
     const style = window.getComputedStyle(element);
     const rect = element.getBoundingClientRect();
@@ -423,18 +453,18 @@ class BrowserSessionManager:
       ref,
       marker,
       tag: element.tagName.toLowerCase(),
-      role: element.getAttribute('role'),
-      type: element.getAttribute('type'),
+      role: clip(element.getAttribute('role')),
+      type: clip(element.getAttribute('type')),
       text,
-      name: element.getAttribute('name'),
-      placeholder: element.getAttribute('placeholder'),
-      href: element.href || null,
+      name: clip(element.getAttribute('name')),
+      placeholder: clip(element.getAttribute('placeholder')),
+      href: clip(element.href || null),
       disabled: Boolean(element.disabled),
     };
   });
 }
 """,
-            [_REF_ATTRIBUTE, token, max_elements],
+            [_REF_ATTRIBUTE, token, max_elements, _MAX_ELEMENT_METADATA_CHARS],
         )
         page_state.refs = {
             str(item["ref"]): f'[{_REF_ATTRIBUTE}="{item.pop("marker")}"]' for item in raw
@@ -567,9 +597,44 @@ class BrowserSessionManager:
                 if force or state.last_used_at < cutoff
             ]
             stale = [self._sessions.pop(session_id) for session_id in stale_ids]
-        for session in stale:
-            await self._close_state(session)
-        return len(stale)
+            pending = list(self._cleanup_pending.values()) if force else []
+            pending_ids = {session.session_id for session in pending}
+            if force:
+                self._cleanup_pending.clear()
+            candidates = stale + [
+                session for session in pending if session.session_id not in stale_ids
+            ]
+            for session in candidates:
+                self._closing_sessions[session.session_id] = session
+        closed = 0
+        first_error: Exception | None = None
+        for index, session in enumerate(candidates):
+            try:
+                await self._close_state(session)
+            except asyncio.CancelledError:
+                async with self._lock:
+                    self._closing_sessions.pop(session.session_id, None)
+                    self._cleanup_pending.setdefault(session.session_id, session)
+                    for remaining in candidates[index + 1 :]:
+                        self._closing_sessions.pop(remaining.session_id, None)
+                        if remaining.session_id in pending_ids:
+                            self._cleanup_pending.setdefault(remaining.session_id, remaining)
+                        else:
+                            self._sessions.setdefault(remaining.session_id, remaining)
+                raise
+            except Exception as exc:
+                async with self._lock:
+                    self._closing_sessions.pop(session.session_id, None)
+                    self._cleanup_pending.setdefault(session.session_id, session)
+                if first_error is None:
+                    first_error = exc
+            else:
+                async with self._lock:
+                    self._closing_sessions.pop(session.session_id, None)
+                closed += 1
+        if force and first_error is not None:
+            raise first_error
+        return closed
 
     @staticmethod
     async def _close_state(session: BrowserSessionState) -> None:

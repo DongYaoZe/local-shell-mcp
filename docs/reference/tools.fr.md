@@ -26,7 +26,7 @@ Cette page est une vue d’ensemble localisée des outils. Les noms d’outils e
 
 ### Browser automation
 
-`browser_get_text_tool`, `browser_capture_tool`, `playwright_run_script_tool`
+`browser_session`, `browser_snapshot`, `browser_act`, `browser_run_script`
 
 ### File links
 

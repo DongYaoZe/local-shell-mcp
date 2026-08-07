@@ -11,7 +11,7 @@ MCP 客户端 -> 控制服务 -> 出站轮询 worker -> 远程机器
 1. 使用 `remote_manage(action="invite", ...)` 创建一次性邀请。
 2. 在远程机器上执行生成的命令。
 3. 使用 `remote_manage(action="list")` 确认注册成功。
-4. 在普通工具中指定 `machine="<worker-name>"`，例如 `environment_info`、`run_shell_tool`、`read_file` 或 `browser_capture_tool`。
+4. 在普通工具中指定 `machine="<worker-name>"`，例如 `environment_info`、`run_shell_tool`、`read_file` 或 `browser_run_script`。
 5. 使用 `remote_transfer` 处理控制端到 worker、worker 到控制端以及 worker 到 worker 的文件或目录传输。
 6. 使用 `remote_manage(action="rename", ...)` 重命名，或用 `remote_manage(action="revoke", ...)` 撤销 worker。
 

@@ -68,7 +68,7 @@ The intended isolation boundary is the container or VM running the service.
 | Shell and Python | `run_shell_tool`, `run_python_tool`, `shell_start` | Builds, tests, scripts, long-running processes |
 | Files and search | `tree_view`, `grep_search`, `read_file`, `apply_patch` | Repository inspection and precise edits |
 | Git | `run_shell_tool`, `run_shell_tool`, `run_shell_tool`, `run_shell_tool` | Reviewable source-control workflows |
-| Browser | `browser_session`, `browser_snapshot`, `browser_act`, one-shot capture/text tools, `playwright_run_script_tool` | Persistent interaction, UI checks, screenshots, rendered docs, page text |
+| Browser | `browser_session`, `browser_snapshot`, `browser_act`, `browser_run_script` | Persistent interaction, UI checks, screenshots, rendered docs, page text |
 | File links | `create_file_link`, `revoke_file_link` | Downloading generated artifacts from chat |
 | Remote workers | `remote_manage`, `run_shell_tool`, `remote_transfer` | Machines behind NAT, firewalls, or cluster login flows |
 

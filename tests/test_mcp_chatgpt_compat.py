@@ -103,8 +103,7 @@ async def test_mcp_metadata_for_chatgpt_developer_mode(tmp_path, monkeypatch):
     assert scopes("search", scheme_index=1) == full_scopes
     assert scopes("audit_tail") == full_scopes
     assert scopes("apply_patch") == full_scopes
-    assert scopes("browser_get_text_tool") == full_scopes
-    assert scopes("browser_capture_tool") == full_scopes
+    assert scopes("browser_run_script") == full_scopes
     assert scopes("remote_transfer") == full_scopes
     assert all(tool.outputSchema is not None for tool in tools.values())
     assert tools["run_shell_tool"].outputSchema["title"] == "ToolResult"
@@ -196,8 +195,6 @@ async def test_tool_annotations_are_conservative_and_mode_independent(
     assert tools["write_file"].annotations.openWorldHint is True
     assert tools["create_file_link"].annotations.destructiveHint is False
     assert tools["create_file_link"].annotations.openWorldHint is True
-    assert tools["browser_get_text_tool"].annotations.readOnlyHint is True
-    assert tools["browser_get_text_tool"].annotations.openWorldHint is True
     assert tools["browser_snapshot"].annotations.readOnlyHint is True
     assert tools["browser_snapshot"].annotations.openWorldHint is True
     assert tools["browser_session"].annotations.destructiveHint is True
@@ -370,7 +367,7 @@ async def test_read_only_tools_have_read_only_hint(tmp_path, monkeypatch):
         "secret_scan",
         "todo_read_tool",
         "audit_tail",
-        "browser_get_text_tool",
+        "browser_snapshot",
     }
 
     for name in names:

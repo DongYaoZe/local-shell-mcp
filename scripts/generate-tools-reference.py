@@ -81,9 +81,7 @@ GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "browser_session",
             "browser_snapshot",
             "browser_act",
-            "browser_capture_tool",
-            "browser_get_text_tool",
-            "playwright_run_script_tool",
+            "browser_run_script",
         ),
     ),
     (
@@ -152,7 +150,7 @@ async def generate() -> str:
         "| Transfer a file or directory | `remote_transfer` |",
         "| Discover an external MCP capability | `mcp_tool_search`, then `mcp_tool_inspect` |",
         "| Interact with a page | `browser_session`, `browser_snapshot`, then `browser_act` |",
-        "| Capture a one-shot page | `browser_get_text_tool` or `browser_capture_tool` |",
+        "| Run custom browser logic | `browser_run_script` |",
         "| Work on a remote machine | use the same tool with `machine`; use `remote_*` only for worker administration |",
         "",
     ]

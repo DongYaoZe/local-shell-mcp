@@ -23,7 +23,19 @@ from .shell_ops import check_command_policy
 
 _REGISTRY_VERSION = 1
 _MAX_TOOLS_PER_SERVER = 512
+_MAX_TOOL_DESCRIPTOR_BYTES = 256 * 1024
+_MAX_TOOL_CACHE_BYTES_PER_SERVER = 4 * 1024 * 1024
 _SERVER_NAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+_SENSITIVE_CONFIG_KEY_RE = re.compile(
+    r"(?:^|[_-])(?:auth(?:orization)?|api[_-]?key|access[_-]?key|credential|cookie|"
+    r"password|passwd|private[_-]?key|secret|session|token)(?:$|[_-])|"
+    r"(?:password|passwd)$|(?:^|[_-])pat$|"
+    r"(?:^|[_-])(?:connection[_-]?string|dsn)(?:$|[_-])|"
+    r"(?:^|[_-])(?:database|db|postgres(?:ql)?|mysql|mariadb|mongo(?:db)?|redis|amqp|rabbitmq)"
+    r"[_-]?url(?:$|[_-])",
+    re.IGNORECASE,
+)
+_MIN_SECRET_SUBSTRING_CHARS = 8
 _INHERITED_ENV_KEYS = {
     "COMSPEC",
     "HOME",
@@ -77,16 +89,76 @@ def _config_key(server: DynamicMCPServer) -> tuple[Any, ...]:
     )
 
 
+def _configured_secrets(server: DynamicMCPServer) -> list[str]:
+    secrets: set[str] = set()
+    for key, value in (*server.env.items(), *server.headers.items()):
+        normalized_key = re.sub(r"[^A-Za-z0-9]+", "_", key).strip("_")
+        if value and _SENSITIVE_CONFIG_KEY_RE.search(normalized_key):
+            secrets.add(value)
+    return sorted(secrets, key=len, reverse=True)
+
+
 def _redact_config_secrets(message: str, server: DynamicMCPServer) -> str:
     redacted = message
-    secrets = sorted(
-        {value for value in (*server.env.values(), *server.headers.values()) if value},
-        key=len,
-        reverse=True,
-    )
-    for secret in secrets:
-        redacted = redacted.replace(secret, "<redacted>")
+    for secret in _configured_secrets(server):
+        if redacted == secret:
+            return "<redacted>"
+        if len(secret) >= _MIN_SECRET_SUBSTRING_CHARS:
+            redacted = redacted.replace(secret, "<redacted>")
     return redacted
+
+
+def _is_protocol_content_path(path: tuple[str | int, ...]) -> bool:
+    return len(path) == 2 and path[0] == "content" and isinstance(path[1], int)
+
+
+def _is_protocol_result_key(path: tuple[str | int, ...], key: str) -> bool:
+    return not path and key in {"content", "structuredContent", "isError", "_meta"}
+
+
+def _is_protocol_type_path(path: tuple[str | int, ...]) -> bool:
+    return (
+        _is_protocol_content_path(path[:2])
+        and len(path) == 3
+        and path[2] == "type"
+    )
+
+
+def _redact_config_value(
+    value: Any,
+    server: DynamicMCPServer,
+    *,
+    path: tuple[str | int, ...] = (),
+) -> Any:
+    if isinstance(value, str):
+        if _is_protocol_type_path(path):
+            return value
+        return _redact_config_secrets(value, server)
+    if isinstance(value, list):
+        return [
+            _redact_config_value(item, server, path=(*path, index))
+            for index, item in enumerate(value)
+        ]
+    if isinstance(value, dict):
+        redacted: dict[str, Any] = {}
+        for child_key, item in value.items():
+            key = str(child_key)
+            output_key = (
+                key
+                if _is_protocol_result_key(path, key) or _is_protocol_content_path(path)
+                else _redact_config_secrets(key, server)
+            )
+            redacted[output_key] = _redact_config_value(
+                item, server, path=(*path, key)
+            )
+        return redacted
+    return value
+
+
+def _serialized_json_bytes(value: Any) -> int:
+    return len(
+        json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    )
 
 
 @dataclass(slots=True)
@@ -181,6 +253,8 @@ class DynamicMCPManager:
             if not isinstance(item, dict):
                 continue
             server = DynamicMCPServer.from_json(item)
+            if server.transport == "stdio" and not server.cwd:
+                server.cwd = str(resolve_path("."))
             servers[server.name] = server
         return servers
 
@@ -192,7 +266,7 @@ class DynamicMCPManager:
                 "servers": [servers[name].to_json() for name in sorted(servers)],
             },
             ensure_ascii=False,
-            indent=2,
+            separators=(",", ":"),
             sort_keys=True,
         )
         fd, temporary_name = tempfile.mkstemp(
@@ -259,16 +333,31 @@ class DynamicMCPManager:
 
     async def _fetch_tools(self, server: DynamicMCPServer) -> list[dict[str, Any]]:
         tools: list[dict[str, Any]] = []
+        cached_bytes = 0
         cursor: str | None = None
         async with asyncio.timeout(min(30, self._max_timeout_s)):
             async with self._session(server) as session:
                 while True:
                     response = await session.list_tools(cursor=cursor)
-                    tools.extend(_tool_json(tool) for tool in response.tools)
-                    if len(tools) > _MAX_TOOLS_PER_SERVER:
-                        raise ValueError(
-                            f"dynamic MCP server exposes more than {_MAX_TOOLS_PER_SERVER} tools"
-                        )
+                    for tool in response.tools:
+                        if len(tools) >= _MAX_TOOLS_PER_SERVER:
+                            raise ValueError(
+                                f"dynamic MCP server exposes more than {_MAX_TOOLS_PER_SERVER} tools"
+                            )
+                        descriptor = _tool_json(tool)
+                        descriptor_bytes = _serialized_json_bytes(descriptor)
+                        if descriptor_bytes > _MAX_TOOL_DESCRIPTOR_BYTES:
+                            raise ValueError(
+                                "dynamic MCP tool descriptor exceeds "
+                                f"{_MAX_TOOL_DESCRIPTOR_BYTES} bytes"
+                            )
+                        cached_bytes += descriptor_bytes
+                        if cached_bytes > _MAX_TOOL_CACHE_BYTES_PER_SERVER:
+                            raise ValueError(
+                                "dynamic MCP tool cache exceeds "
+                                f"{_MAX_TOOL_CACHE_BYTES_PER_SERVER} bytes per server"
+                            )
+                        tools.append(descriptor)
                     cursor = response.nextCursor
                     if not cursor:
                         break
@@ -314,7 +403,11 @@ class DynamicMCPManager:
                 enabled=enabled,
                 command=normalized_command,
                 args=normalized_args,
-                cwd=str(resolve_path(cwd.strip())) if cwd else None,
+                cwd=(
+                    str(resolve_path(cwd.strip() if cwd else "."))
+                    if normalized_transport == "stdio"
+                    else None
+                ),
                 url=url.strip() if url else None,
                 env=_string_dict(env, label="env"),
                 headers=_string_dict(headers, label="headers"),
@@ -499,9 +592,10 @@ class DynamicMCPManager:
         async with asyncio.timeout(bounded_timeout):
             async with self._session(config) as session:
                 result = await session.call_tool(tool_name, arguments or {})
+        result_payload = result.model_dump(mode="json", by_alias=True, exclude_none=True)
         return {
             "name": qualified_name,
-            "result": result.model_dump(mode="json", by_alias=True, exclude_none=True),
+            "result": _redact_config_value(result_payload, config),
         }
 
     @staticmethod

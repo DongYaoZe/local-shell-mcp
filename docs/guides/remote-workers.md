@@ -11,7 +11,7 @@ MCP client -> control server -> outbound polling worker -> remote machine
 1. Create a one-time invite with `remote_manage(action="invite", ...)`.
 2. Run the generated command on the remote machine.
 3. Confirm registration with `remote_manage(action="list")`.
-4. Call normal tools with `machine="<worker-name>"`, for example `environment_info`, `run_shell_tool`, `read_file`, or `browser_capture_tool`.
+4. Call normal tools with `machine="<worker-name>"`, for example `environment_info`, `run_shell_tool`, `read_file`, or `browser_run_script`.
 5. Use `remote_transfer` to start a tracked controller-to-worker, worker-to-controller, or worker-to-worker file or directory transfer. Follow it with `job_list` or `job_tail`; stop or retry it with `job_stop` or `job_retry`.
 6. Rename or revoke workers with `remote_manage(action="rename", ...)` or `remote_manage(action="revoke", ...)`.
 

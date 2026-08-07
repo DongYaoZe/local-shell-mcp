@@ -64,7 +64,7 @@ from .models import ToolResult
 from .models import ok_result as _ok
 from .oauth import ALL_OAUTH_SCOPES
 from .patch_ops import git_apply_command, git_apply_prefix, normalize_patch_text
-from .playwright_ops import browser_capture, browser_get_text, playwright_run_script
+from .playwright_ops import playwright_run_script
 from .remote import remote_manager
 from .remote_transfer import (
     create_download_ticket,
@@ -776,9 +776,7 @@ MACHINE_CAPABLE_TOOL_NAMES = {
     "browser_session",
     "browser_snapshot",
     "browser_act",
-    "browser_capture_tool",
-    "browser_get_text_tool",
-    "playwright_run_script_tool",
+    "browser_run_script",
 }
 
 OPEN_WORLD_TOOL_NAMES = {
@@ -792,7 +790,6 @@ OPEN_WORLD_TOOL_NAMES = {
 
 READ_ONLY_OPEN_WORLD_TOOL_NAMES = {
     "browser_snapshot",
-    "browser_get_text_tool",
 }
 
 NON_DESTRUCTIVE_MUTATION_TOOL_NAMES = {
@@ -2338,12 +2335,18 @@ def _register_dynamic_mcp_tools(
         timeout_s: int | None = None,
     ) -> ToolResult:
         """Call one cached dynamic MCP tool named <server>:<tool>. Discover it with mcp_tool_search and inspect its schema with mcp_tool_inspect first. External MCP connections are opened only for the duration of this call."""
-        return await _tool_call(manager.call, name, arguments, timeout_s=timeout_s)
+        try:
+            result = await manager.call(name, arguments, timeout_s=timeout_s)
+        except Exception as exc:
+            return _handled_error(exc)
+        downstream = result.get("result") if isinstance(result, dict) else None
+        if isinstance(downstream, dict) and downstream.get("isError") is True:
+            return _error_call_result(result, f"Dynamic MCP tool returned an error: {name}")
+        return _ok(result)
 
 
 def _register_browser_tools(mcp: FastMCP, settings: Any, read_only_tool: ToolAnnotations) -> None:
     browser_meta = _oauth_meta(["browser:use"])
-    browser_write_meta = _oauth_meta(["browser:use", "shell:write"])
     browser_execute_meta = _oauth_meta(["browser:use", "shell:execute"])
     session_manager = get_browser_session_manager(settings.state_dir)
 
@@ -2413,7 +2416,7 @@ def _register_browser_tools(mcp: FastMCP, settings: Any, read_only_tool: ToolAnn
         timeout_ms: int = 30_000,
         machine: str | None = None,
     ) -> ToolResult:
-        """Run structured actions in a persistent browser session. Supports navigate, new_page, close_page, click, fill, type, select, press, check, uncheck, hover, wait, wait_for_text, and wait_for_url. target may be a browser_snapshot ref such as e1 or a CSS selector. Use playwright_run_script_tool only when these high-level actions are insufficient."""
+        """Run structured actions in a persistent browser session. Supports navigate, new_page, close_page, click, fill, type, select, press, check, uncheck, hover, wait, wait_for_text, and wait_for_url. target may be a browser_snapshot ref such as e1 or a CSS selector. Use browser_run_script only when these high-level actions are insufficient."""
         args = {
             "session_id": session_id,
             "actions": actions,
@@ -2424,54 +2427,8 @@ def _register_browser_tools(mcp: FastMCP, settings: Any, read_only_tool: ToolAnn
             return await _remote_call(settings, machine, "browser_act", args)
         return await _tool_call(session_manager.act, **args)
 
-    @mcp.tool(structured_output=True, meta=browser_write_meta)
-    async def browser_capture_tool(
-        url: str,
-        output_path: str | None = None,
-        capture_format: str = "png",
-        browser: str = "chromium",
-        full_page: bool = True,
-        width: int = 1440,
-        height: int = 1000,
-        wait_until: str = "networkidle",
-        machine: str | None = None,
-    ) -> ToolResult:
-        """Open a URL and save a PNG screenshot or PDF locally or on a remote machine."""
-        args = {
-            "url": url,
-            "output_path": output_path,
-            "capture_format": capture_format,
-            "browser": browser,
-            "full_page": full_page,
-            "width": width,
-            "height": height,
-            "wait_until": wait_until,
-        }
-        if machine:
-            return await _remote_call(settings, machine, "browser_capture_tool", args)
-        return await _tool_call(browser_capture, **args)
-
-    @mcp.tool(structured_output=True, meta=browser_meta)
-    async def browser_get_text_tool(
-        url: str,
-        browser: str = "chromium",
-        wait_until: str = "networkidle",
-        selector: str = "body",
-        machine: str | None = None,
-    ) -> ToolResult:
-        """Open a URL and return visible text locally or on a remote machine."""
-        args = {
-            "url": url,
-            "browser": browser,
-            "wait_until": wait_until,
-            "selector": selector,
-        }
-        if machine:
-            return await _remote_call(settings, machine, "browser_get_text_tool", args)
-        return await _tool_call(browser_get_text, **args)
-
     @mcp.tool(structured_output=True, meta=browser_execute_meta)
-    async def playwright_run_script_tool(
+    async def browser_run_script(
         script: str,
         cwd: str = ".",
         timeout_s: int = 60,
@@ -2482,7 +2439,7 @@ def _register_browser_tools(mcp: FastMCP, settings: Any, read_only_tool: ToolAnn
             return await _remote_call(
                 settings,
                 machine,
-                "playwright_run_script_tool",
+                "browser_run_script",
                 {"script": script, "cwd": cwd, "timeout_s": timeout_s},
                 timeout_s,
             )
