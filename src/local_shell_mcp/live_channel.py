@@ -9,9 +9,21 @@ import uuid
 import weakref
 from collections import deque
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
-LIVE_RESOURCE_URI = "ui://local-shell-mcp/live-workspace.html"
+_LIVE_RESOURCE_PATH = Path(__file__).resolve().parent / "ui_static" / "live-workspace.html"
+
+
+def _versioned_live_resource_uri() -> str:
+    try:
+        digest = hashlib.sha256(_LIVE_RESOURCE_PATH.read_bytes()).hexdigest()[:16]
+    except OSError:
+        digest = "unbuilt"
+    return f"ui://local-shell-mcp/live-workspace-{digest}.html"
+
+
+LIVE_RESOURCE_URI = _versioned_live_resource_uri()
 LIVE_RESOURCE_MIME = "text/html;profile=mcp-app"
 LIVE_API_PREFIX = "/api/live"
 LIVE_TOKEN_TTL_S = 12 * 60 * 60

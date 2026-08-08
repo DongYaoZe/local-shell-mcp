@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import subprocess
 import time
 from pathlib import Path
@@ -36,6 +37,12 @@ def _configure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, auth: str = "
     monkeypatch.setenv("LOCAL_SHELL_MCP_PUBLIC_BASE_URL", "https://lsm.example.test")
     get_settings.cache_clear()
     monkeypatch.setattr(live_channel_module, "_MANAGER", LiveChannelManager())
+
+
+def test_live_workspace_resource_uri_is_content_versioned():
+    asset = Path(live_channel_module.__file__).resolve().parent / "ui_static" / "live-workspace.html"
+    digest = hashlib.sha256(asset.read_bytes()).hexdigest()[:16]
+    assert f"ui://local-shell-mcp/live-workspace-{digest}.html" == LIVE_RESOURCE_URI
 
 
 def test_live_workspace_tokens_rotate_and_events_are_bounded():
