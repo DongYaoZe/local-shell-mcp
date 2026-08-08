@@ -112,6 +112,54 @@ export function nextDisplayMode(current: DisplayMode, requested: Exclude<Display
   return current === requested ? "inline" : requested
 }
 
+export function isOperationalActivityEvent(event: LiveEvent): boolean {
+  if (event.type === "workspace.opened") return false
+  return String(event.data.tool || "") !== "open_live_workspace"
+}
+
+export function activityIntent(event: LiveEvent): string {
+  const tool = String(event.data.tool || "")
+  const purpose = typeof event.data.purpose === "string" ? event.data.purpose.trim() : ""
+  const path = typeof event.data.path === "string" ? event.data.path : ""
+  const name = typeof event.data.name === "string" ? event.data.name : ""
+  if (purpose) return purpose
+  if (tool === "run_shell_tool") return "Running command"
+  if (tool === "shell_start") return name ? `Opening ${name}` : "Opening terminal"
+  if (tool === "shell_send") return "Sending terminal input"
+  if (tool === "shell_read") return "Reading terminal output"
+  if (tool === "shell_kill") return "Closing terminal"
+  if (tool === "job_start") return name ? `Starting ${name}` : "Starting background job"
+  if (tool === "job_tail") return "Reading job output"
+  if (tool === "job_stop") return "Stopping background job"
+  if (tool === "job_retry") return "Retrying background job"
+  if (tool === "remote_transfer") return "Transferring files"
+  if (tool === "read_file") return path ? `Reading ${basename(path)}` : "Reading file"
+  if (tool === "write_file") return path ? `Writing ${basename(path)}` : "Writing file"
+  if (tool === "edit_file") return path ? `Editing ${basename(path)}` : "Editing file"
+  if (tool === "delete_file_or_dir") return path ? `Deleting ${basename(path)}` : "Deleting file"
+  if (tool === "apply_patch") return "Applying patch"
+  if (tool === "grep_search" || tool === "glob_search" || tool === "tree_view" || tool === "search") return "Searching workspace"
+  if (tool === "browser_session" || tool === "browser_act" || tool === "browser_snapshot" || tool === "browser_run_script") return "Using browser"
+  if (tool === "remote_manage") return "Managing remote machines"
+  if (tool === "audit_tail") return "Reading audit log"
+  if (!tool) return eventTitle(event)
+  return tool.replaceAll("_", " ")
+}
+
+export type ActivityDestination = "terminal" | "jobs" | "files" | "diff" | "remotes" | "audit" | "detail" | null
+
+export function activityDestination(event: LiveEvent): ActivityDestination {
+  const tool = String(event.data.tool || "")
+  if (["shell_start", "shell_send", "shell_read", "shell_kill"].includes(tool)) return "terminal"
+  if (["job_start", "job_list", "job_tail", "job_stop", "job_retry", "remote_transfer"].includes(tool)) return "jobs"
+  if (["read_file", "write_file", "edit_file", "delete_file_or_dir", "list_files", "glob_search", "grep_search", "tree_view", "search"].includes(tool)) return "files"
+  if (tool === "apply_patch") return "diff"
+  if (tool === "remote_manage") return "remotes"
+  if (tool === "audit_tail") return "audit"
+  if (tool === "run_shell_tool" || tool === "run_python_tool") return "detail"
+  return event.data.call_id ? "detail" : null
+}
+
 export function eventTitle(event: LiveEvent): string {
   const tool = String(event.data.tool ?? "")
   const action = String(event.data.action ?? "")

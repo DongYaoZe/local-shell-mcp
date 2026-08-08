@@ -7,6 +7,8 @@ import {
 import { FitAddon } from "@xterm/addon-fit"
 import { Terminal } from "@xterm/xterm"
 import {
+  activityDestination,
+  activityIntent,
   basename,
   controlLabel,
   escapeHtml,
@@ -15,6 +17,7 @@ import {
   eventTone,
   formatBytes,
   formatClock,
+  isOperationalActivityEvent,
   joinPath,
   nextDisplayMode,
   parentPath,
@@ -77,6 +80,11 @@ let machines: Machine[] = []
 let lastPassiveRefresh = 0
 let passiveRefreshing = false
 let coreRefreshQueued = false
+let activityExpandedCallId = ""
+const activityAuditDetails = new Map<string, JsonRecord>()
+let activityDiscoveryInitialized = false
+let knownActiveJobs = new Set<string>()
+let knownStandaloneSessions = new Set<string>()
 
 let terminal: Terminal | null = null
 let fitAddon: FitAddon | null = null
@@ -231,12 +239,24 @@ function updateChrome(): void {
   }
 
   const running = currentRunningEvent()
+  const activeJob = dashboard?.jobs?.[0]
+  const activeSession = dashboard?.sessions?.[0]
   const current = qs<HTMLElement>("[data-role=current-op]")
   const detail = qs<HTMLElement>("[data-role=current-detail]")
   const pulse = qs<HTMLElement>("[data-role=op-pulse]")
-  if (current) current.textContent = running ? eventTitle(running) : "No active tool call"
-  if (detail) detail.textContent = running ? eventDetail(running) || "In progress" : latestCompletedSummary()
-  pulse?.classList.toggle("active", Boolean(running))
+  if (current) {
+    if (running) current.textContent = activityIntent(running)
+    else if (activeJob) current.textContent = `Background: ${String(activeJob.name || activeJob.job_id || "job")}`
+    else if (activeSession) current.textContent = `Terminal: ${String(activeSession.name || activeSession.session_id || "session")}`
+    else current.textContent = "Idle"
+  }
+  if (detail) {
+    if (running) detail.textContent = eventDetail(running) || "In progress"
+    else if (activeJob) detail.textContent = String(activeJob.command || activeJob.status || "running")
+    else if (activeSession) detail.textContent = String(activeSession.cwd || activeSession.backend || "ready")
+    else detail.textContent = latestCompletedSummary()
+  }
+  pulse?.classList.toggle("active", Boolean(running || activeJob))
 
   const machineCount = qs<HTMLElement>("[data-role=machine-count]")
   const online = machines.filter((item) => item.status === "online" || item.name === "local").length
@@ -248,19 +268,25 @@ function updateChrome(): void {
   if (terminal) terminal.options.disableStdin = control === "agent"
 }
 
+function operationalEvents(): LiveEvent[] {
+  return events.filter(isOperationalActivityEvent)
+}
+
 function currentRunningEvent(): LiveEvent | null {
-  const completed = new Set(events.filter((event) => event.type === "tool.completed" || event.type === "tool.failed").map((event) => String(event.data.call_id || "")))
-  for (let index = events.length - 1; index >= 0; index -= 1) {
-    const event = events[index]
+  const visible = operationalEvents()
+  const completed = new Set(visible.filter((event) => event.type === "tool.completed" || event.type === "tool.failed").map((event) => String(event.data.call_id || "")))
+  for (let index = visible.length - 1; index >= 0; index -= 1) {
+    const event = visible[index]
     if (event.type === "tool.started" && !completed.has(String(event.data.call_id || ""))) return event
   }
   return null
 }
 
 function latestCompletedSummary(): string {
-  for (let index = events.length - 1; index >= 0; index -= 1) {
-    const event = events[index]
-    if (["tool.completed", "tool.failed", "human.action"].includes(event.type)) return eventTitle(event)
+  const visible = operationalEvents()
+  for (let index = visible.length - 1; index >= 0; index -= 1) {
+    const event = visible[index]
+    if (["tool.completed", "tool.failed", "human.action"].includes(event.type)) return activityIntent(event)
   }
   return connected ? "Ready" : "Waiting for connection"
 }
@@ -279,6 +305,26 @@ async function handleAction(action: string, target: HTMLElement): Promise<void> 
     else if (action === "pip") await requestDisplayMode(nextDisplayMode(displayMode, "pip"))
     else if (action === "refresh") await refreshCurrent(true)
     else if (action === "activity-ask") await askAboutLatestActivity()
+    else if (action === "activity-open-detail") await toggleActivityDetail(target.dataset.callId || "")
+    else if (action === "activity-open-terminal") {
+      terminalMachine = target.dataset.machine || config?.machine || "local"
+      selectedSession = target.dataset.session || ""
+      await switchTab("terminal")
+    }
+    else if (action === "activity-open-jobs") await switchTab("jobs")
+    else if (action === "activity-open-files") {
+      const path = target.dataset.path || ""
+      fileMachine = target.dataset.machine || config?.machine || "local"
+      if (path) {
+        filePath = parentPath(path)
+        selectedFile = path
+      }
+      await switchTab("files")
+      if (path && fileEntries.some((entry) => entry.path === path)) await selectFile(path)
+    }
+    else if (action === "activity-open-diff") await switchTab("diff")
+    else if (action === "activity-open-remotes") await switchTab("remotes")
+    else if (action === "activity-open-audit") await switchTab("audit")
     else if (action === "terminal-new") await newTerminal()
     else if (action === "terminal-kill") await killTerminal()
     else if (action === "terminal-copy") await copyTerminal()
@@ -357,34 +403,119 @@ function renderCurrentTab(): void {
 }
 
 function renderActivity(): void {
-  const recent = [...events].reverse().slice(0, 120)
+  const visible = operationalEvents()
+  const recent = [...visible].reverse().slice(0, 120)
   const running = currentRunningEvent()
-  const completed = events.filter((event) => event.type === "tool.completed").length
-  const failed = events.filter((event) => event.type === "tool.failed").length
-  const human = events.filter((event) => event.actor === "human").length
+  const completed = visible.filter((event) => event.type === "tool.completed").length
+  const failed = visible.filter((event) => event.type === "tool.failed").length
+  const human = visible.filter((event) => event.actor === "human").length
   mainNode().innerHTML = `
     <section class="view activity-view">
-      <div class="view-toolbar"><div><h2>Operational activity</h2><p>Observable tool and human actions. Model private reasoning is never exposed.</p></div><div class="toolbar-actions"><button class="button" data-action="activity-ask">${icon("chat")}Ask about latest</button><button class="button" data-action="refresh">${icon("refresh")}Refresh</button></div></div>
+      <div class="view-toolbar"><div><h2>Operational activity</h2><p>What ChatGPT is doing in LSM, with direct paths to the relevant workspace view.</p></div><div class="toolbar-actions"><button class="button" data-action="activity-ask">${icon("chat")}Ask about latest</button><button class="button" data-action="refresh">${icon("refresh")}Refresh</button></div></div>
+      ${activityFocusCards()}
       <div class="metric-row">
-        <div><small>Current</small><strong>${running ? escapeHtml(String(running.data.tool || "tool")) : "Idle"}</strong><span>${running ? escapeHtml(eventDetail(running) || "running") : "No active call"}</span></div>
-        <div><small>Completed</small><strong>${completed}</strong><span>this workspace</span></div>
+        <div><small>Current</small><strong>${running ? escapeHtml(activityIntent(running)) : dashboard?.jobs?.length ? "Background work" : dashboard?.sessions?.length ? "Terminal ready" : "Idle"}</strong><span>${running ? escapeHtml(eventDetail(running) || "running") : dashboard?.jobs?.length ? escapeHtml(String(dashboard.jobs[0]?.name || dashboard.jobs[0]?.job_id || "job")) : dashboard?.sessions?.length ? escapeHtml(String(dashboard.sessions[0]?.name || dashboard.sessions[0]?.session_id || "session")) : "Ready"}</span></div>
+        <div><small>Completed</small><strong>${completed}</strong><span>operations</span></div>
         <div><small>Failures</small><strong>${failed}</strong><span>${failed ? "needs attention" : "none"}</span></div>
-        <div><small>Human actions</small><strong>${human}</strong><span>collaboration events</span></div>
+        <div><small>Human actions</small><strong>${human}</strong><span>interventions</span></div>
       </div>
       <div class="panel activity-panel">
         <div class="panel-head"><strong>Timeline</strong><span>${recent.length} recent events</span></div>
-        <div class="timeline">${recent.length ? recent.map(activityRow).join("") : '<div class="empty-state">No execution activity yet.</div>'}</div>
+        <div class="timeline">${recent.length ? recent.map(activityRow).join("") : '<div class="empty-state">No execution activity yet. Start a task and this view will follow it.</div>'}</div>
       </div>
     </section>`
 }
 
+function activityFocusCards(): string {
+  const jobs = dashboard?.jobs || []
+  const sessions = dashboard?.sessions || []
+  if (!jobs.length && !sessions.length) return ""
+  const cards: string[] = []
+  for (const job of jobs.slice(0, 2)) {
+    const sessionId = String(job.session_id || "")
+    const action = sessionId ? "activity-open-terminal" : "activity-open-jobs"
+    cards.push(`<button class="focus-card job" data-action="${action}" data-session="${escapeHtml(sessionId)}" data-machine="${escapeHtml(String(job.machine || config?.machine || "local"))}"><small>Background job</small><strong>${escapeHtml(String(job.name || job.job_id || "job"))}</strong><span>${escapeHtml(String(job.status || "running"))} · ${sessionId ? "View output" : "Open jobs"}</span></button>`)
+  }
+  for (const session of sessions.slice(0, Math.max(0, 3 - cards.length))) {
+    cards.push(`<button class="focus-card terminal" data-action="activity-open-terminal" data-session="${escapeHtml(String(session.session_id || ""))}" data-machine="${escapeHtml(String(session.machine || config?.machine || "local"))}"><small>Persistent terminal</small><strong>${escapeHtml(String(session.name || session.session_id || "terminal"))}</strong><span>Open terminal</span></button>`)
+  }
+  return `<div class="activity-focus">${cards.join("")}</div>`
+}
+
 function activityRow(event: LiveEvent): string {
   const detail = eventDetail(event)
-  return `<div class="timeline-row ${eventTone(event)}"><div class="timeline-marker"><span></span></div><div class="timeline-copy"><div><strong>${escapeHtml(eventTitle(event))}</strong><span class="actor ${escapeHtml(event.actor)}">${escapeHtml(event.actor)}</span></div>${detail ? `<p>${escapeHtml(detail)}</p>` : ""}</div><time>${escapeHtml(formatClock(event.ts))}</time></div>`
+  const destination = activityDestination(event)
+  const callId = String(event.data.call_id || "")
+  let action = ""
+  let actionLabel = ""
+  if (destination === "terminal") {
+    action = `data-action="activity-open-terminal" data-session="${escapeHtml(String(event.data.session_id || ""))}" data-machine="${escapeHtml(String(event.data.machine || config?.machine || "local"))}"`
+    actionLabel = "Open terminal"
+  } else if (destination === "jobs") {
+    action = `data-action="activity-open-jobs"`
+    actionLabel = "Open jobs"
+  } else if (destination === "files") {
+    const rawPath = event.data.path
+    const path = Array.isArray(rawPath) ? String(rawPath[0] || "") : String(rawPath || "")
+    action = `data-action="activity-open-files" data-path="${escapeHtml(path)}" data-machine="${escapeHtml(String(event.data.machine || config?.machine || "local"))}"`
+    actionLabel = "Open files"
+  } else if (destination === "diff") {
+    action = `data-action="activity-open-diff"`
+    actionLabel = "View diff"
+  } else if (destination === "remotes") {
+    action = `data-action="activity-open-remotes"`
+    actionLabel = "Open remotes"
+  } else if (destination === "audit") {
+    action = `data-action="activity-open-audit"`
+    actionLabel = "Open audit"
+  } else if (destination === "detail" && callId) {
+    action = `data-action="activity-open-detail" data-call-id="${escapeHtml(callId)}"`
+    actionLabel = activityExpandedCallId === callId ? "Hide output" : "View output"
+  }
+  const expanded = callId && activityExpandedCallId === callId ? activityDetailHtml(callId) : ""
+  return `<div class="timeline-row ${eventTone(event)} ${action ? "clickable" : ""}" ${action}><div class="timeline-marker"><span></span></div><div class="timeline-copy"><div><strong>${escapeHtml(eventTitle(event))}</strong><span class="actor ${escapeHtml(event.actor)}">${escapeHtml(event.actor)}</span>${actionLabel ? `<span class="timeline-action">${escapeHtml(actionLabel)}</span>` : ""}</div>${detail ? `<p>${escapeHtml(detail)}</p>` : ""}</div><time>${escapeHtml(formatClock(event.ts))}</time>${expanded}</div>`
+}
+
+function activityDetailHtml(callId: string): string {
+  const detail = activityAuditDetails.get(callId)
+  if (!detail) return '<div class="timeline-detail loading-detail">Loading output…</div>'
+  const output = detail.output as JsonRecord | undefined
+  const structured = (output?.structuredContent || output?.structured_content) as JsonRecord | undefined
+  const payload = (structured?.data || output?.data || structured || output || detail) as unknown
+  if (payload && typeof payload === "object" && !Array.isArray(payload)) {
+    const record = payload as JsonRecord
+    const chunks: string[] = []
+    if (record.command) chunks.push(`$ ${String(record.command)}`)
+    if (record.stdout) chunks.push(String(record.stdout))
+    if (record.stderr) chunks.push(`stderr:\n${String(record.stderr)}`)
+    if (chunks.length) return `<pre class="timeline-detail">${escapeHtml(truncateContext(chunks.join("\n"), 24_000))}</pre>`
+  }
+  return `<pre class="timeline-detail">${escapeHtml(truncateContext(JSON.stringify(payload, null, 2), 24_000))}</pre>`
+}
+
+async function toggleActivityDetail(callId: string): Promise<void> {
+  if (!callId) return
+  if (activityExpandedCallId === callId) {
+    activityExpandedCallId = ""
+    renderActivity()
+    return
+  }
+  activityExpandedCallId = callId
+  renderActivity()
+  if (activityAuditDetails.has(callId)) return
+  try {
+    const detail = await api<JsonRecord>(`/api/ui/audit/detail?id=${encodeURIComponent(`call:${callId}`)}`)
+    activityAuditDetails.set(callId, detail)
+    if (activityExpandedCallId === callId && activeTab === "activity") renderActivity()
+  } catch (error) {
+    if (activityExpandedCallId === callId) activityExpandedCallId = ""
+    if (activeTab === "activity") renderActivity()
+    notify(error instanceof Error ? error.message : String(error), "warning")
+  }
 }
 
 async function askAboutLatestActivity(): Promise<void> {
-  const recent = events.slice(-20)
+  const recent = operationalEvents().slice(-20)
   await app.updateModelContext({
     content: [{ type: "text", text: `Live Workspace recent operational activity:\n${recent.map((event) => `${formatClock(event.ts)} ${eventTitle(event)} — ${eventDetail(event)}`).join("\n")}` }],
     structuredContent: { liveWorkspaceEvents: recent },
@@ -760,7 +891,11 @@ function renderJobs(): void {
 
 function jobRow(job: JsonRecord): string {
   const status = String(job.status || "unknown")
-  return `<div class="object-row"><span class="state-dot ${escapeHtml(status)}"></span><div><strong>${escapeHtml(String(job.name || job.job_id || "job"))}</strong><p>${escapeHtml(String(job.command || job.kind || ""))}</p></div><div class="object-meta"><span>${escapeHtml(status)}</span><small>${escapeHtml(String(job.machine || "local"))}</small></div></div>`
+  const sessionId = String(job.session_id || "")
+  const body = `<span class="state-dot ${escapeHtml(status)}"></span><div><strong>${escapeHtml(String(job.name || job.job_id || "job"))}</strong><p>${escapeHtml(String(job.command || job.kind || ""))}</p></div><div class="object-meta"><span>${escapeHtml(status)}</span><small>${sessionId ? "view output" : escapeHtml(String(job.machine || "local"))}</small></div>`
+  return sessionId
+    ? `<button class="object-row clickable" data-open-session="${escapeHtml(sessionId)}" data-machine="${escapeHtml(String(job.machine || "local"))}">${body}</button>`
+    : `<div class="object-row">${body}</div>`
 }
 
 function sessionRow(session: JsonRecord): string {
@@ -771,10 +906,34 @@ function wireJobRows(): void {
   root.querySelectorAll<HTMLButtonElement>("[data-open-session]").forEach((row) => {
     row.addEventListener("click", () => {
       selectedSession = row.dataset.openSession || ""
-      terminalMachine = String((dashboard?.sessions || []).find((item) => item.session_id === selectedSession)?.machine || "local")
+      const source = [...(dashboard?.jobs || []), ...(dashboard?.sessions || [])].find((item) => item.session_id === selectedSession)
+      terminalMachine = row.dataset.machine || String(source?.machine || config?.machine || "local")
       void switchTab("terminal")
     })
   })
+}
+
+function trackActivityDiscoveries(next: Dashboard): void {
+  const jobs = next.jobs || []
+  const sessions = next.sessions || []
+  const nextJobs = new Set(jobs.map((job) => `${String(job.machine || "local")}:${String(job.job_id || job.session_id || job.name || "job")}`))
+  const nextSessions = new Set(sessions.map((session) => `${String(session.machine || "local")}:${String(session.session_id || session.name || "terminal")}`))
+  if (!activityDiscoveryInitialized) {
+    knownActiveJobs = nextJobs
+    knownStandaloneSessions = nextSessions
+    activityDiscoveryInitialized = true
+    return
+  }
+  for (const job of jobs) {
+    const key = `${String(job.machine || "local")}:${String(job.job_id || job.session_id || job.name || "job")}`
+    if (!knownActiveJobs.has(key)) notify(`Background job started: ${String(job.name || job.job_id || "job")}`, "info")
+  }
+  for (const session of sessions) {
+    const key = `${String(session.machine || "local")}:${String(session.session_id || session.name || "terminal")}`
+    if (!knownStandaloneSessions.has(key)) notify(`Terminal ready: ${String(session.name || session.session_id || "terminal")}`, "info")
+  }
+  knownActiveJobs = nextJobs
+  knownStandaloneSessions = nextSessions
 }
 
 function renderRemotes(): void {
@@ -832,6 +991,11 @@ function resetTerminalTarget(machine: string): void {
 function resetWorkspaceTarget(machine: string, cwd: string): void {
   gitSnapshot = null
   dashboard = null
+  activityDiscoveryInitialized = false
+  knownActiveJobs.clear()
+  knownStandaloneSessions.clear()
+  activityExpandedCallId = ""
+  activityAuditDetails.clear()
   resetFileTarget(machine, cwd)
   resetTerminalTarget(machine)
 }
@@ -905,6 +1069,7 @@ async function refreshJobs(): Promise<void> {
   const requestMachine = config.machine
   const result = await api<Dashboard>(`/api/ui/dashboard?machine=${encodeURIComponent(requestMachine)}`)
   if (!config || config.workspaceId !== requestWorkspace || config.machine !== requestMachine) return
+  trackActivityDiscoveries(result)
   dashboard = result
   updateChrome()
   if (activeTab === "jobs") { renderJobs(); wireJobRows() }
@@ -952,9 +1117,11 @@ async function refreshAllCore(): Promise<void> {
       coreRefreshQueued = true
       return
     }
+    trackActivityDiscoveries(dash)
     dashboard = dash
     lastPassiveRefresh = Date.now()
     updateChrome()
+    if (activeTab === "activity") renderActivity()
   } finally {
     passiveRefreshing = false
     if (coreRefreshQueued) {

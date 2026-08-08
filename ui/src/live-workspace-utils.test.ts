@@ -1,9 +1,12 @@
 import { describe, expect, test } from "bun:test"
 import {
+  activityDestination,
+  activityIntent,
   controlLabel,
   eventDetail,
   eventTitle,
   formatBytes,
+  isOperationalActivityEvent,
   joinPath,
   parentPath,
   renderDiffHtml,
@@ -53,8 +56,25 @@ describe("live workspace utilities", () => {
       data: { tool: "run_shell_tool", cwd: "/workspace", duration_ms: 1420 },
     }
     expect(eventTitle(event)).toBe("run_shell_tool completed")
+    expect(activityIntent(event)).toBe("Running command")
+    expect(activityDestination(event)).toBe("detail")
     expect(eventDetail(event)).toContain("/workspace")
     expect(eventDetail(event)).toContain("1.4 s")
+  })
+
+  test("activity hides workspace bootstrap noise and routes useful operations", () => {
+    const opened: LiveEvent = { seq: 1, ts: 1, type: "workspace.opened", actor: "system", data: {} }
+    const bootstrap: LiveEvent = { seq: 2, ts: 1, type: "tool.completed", actor: "agent", data: { tool: "open_live_workspace" } }
+    const edit: LiveEvent = { seq: 3, ts: 1, type: "tool.completed", actor: "agent", data: { tool: "edit_file", path: "/workspace/src/app.ts" } }
+    const job: LiveEvent = { seq: 4, ts: 1, type: "tool.completed", actor: "agent", data: { tool: "job_start", name: "tests" } }
+
+    expect(isOperationalActivityEvent(opened)).toBeFalse()
+    expect(isOperationalActivityEvent(bootstrap)).toBeFalse()
+    expect(isOperationalActivityEvent(edit)).toBeTrue()
+    expect(activityIntent(edit)).toBe("Editing app.ts")
+    expect(activityDestination(edit)).toBe("files")
+    expect(activityIntent(job)).toBe("Starting tests")
+    expect(activityDestination(job)).toBe("jobs")
   })
 
   test("diff renderer escapes content and classifies lines", () => {
