@@ -1027,25 +1027,7 @@ async function pollEvents(generation: number): Promise<void> {
   }
 }
 
-function configureFromToolResult(result: unknown): void {
-  const value = result as { _meta?: JsonRecord; structuredContent?: JsonRecord }
-  const hidden = value?._meta?.["local-shell-mcp/live"] as JsonRecord | undefined
-  const structured = value?.structuredContent || {}
-  const token = String(hidden?.token || "")
-  const apiBase = String(hidden?.apiBase || structured.api_base || "")
-  if (!token || !apiBase) {
-    connectionMessage = "Live credentials unavailable"
-    renderCurrentTab()
-    return
-  }
-  const nextConfig: LiveConfig = {
-    token,
-    apiBase,
-    uiPath: String(hidden?.uiPath || structured.ui_path || "/ui"),
-    workspaceId: String(hidden?.workspaceId || structured.workspace_id || ""),
-    machine: String(structured.machine || "local"),
-    cwd: String(structured.cwd || "."),
-  }
+function activateLiveConfig(nextConfig: LiveConfig): void {
   if (
     config
     && config.token === nextConfig.token
@@ -1079,6 +1061,66 @@ function configureFromToolResult(result: unknown): void {
   })()
 }
 
+let credentialRefresh: Promise<void> | null = null
+
+function refreshLiveCredentials(structured: JsonRecord): Promise<void> {
+  if (credentialRefresh) return credentialRefresh
+  credentialRefresh = (async () => {
+    connectionMessage = "Authorizing Live Workspace…"
+    renderCurrentTab()
+    const machine = String(structured.machine || "local")
+    const cwd = String(structured.cwd || ".")
+    const response = await app.callServerTool({
+      name: "open_live_workspace",
+      arguments: { machine, cwd },
+    })
+    const responseStructured = (response.structuredContent || {}) as JsonRecord
+    const hidden = response._meta?.["local-shell-mcp/live"] as JsonRecord | undefined
+    const token = String(hidden?.token || "")
+    const apiBase = String(hidden?.apiBase || responseStructured.api_base || structured.api_base || "")
+    if (!token || !apiBase) {
+      throw new Error("ChatGPT omitted Live Workspace credentials from the app-initiated tool result")
+    }
+    activateLiveConfig({
+      token,
+      apiBase,
+      uiPath: String(hidden?.uiPath || responseStructured.ui_path || structured.ui_path || "/ui"),
+      workspaceId: String(hidden?.workspaceId || responseStructured.workspace_id || structured.workspace_id || ""),
+      machine: String(responseStructured.machine || machine),
+      cwd: String(responseStructured.cwd || cwd),
+    })
+  })().catch((error) => {
+    connected = false
+    connectionMessage = "Live authorization failed"
+    updateChrome()
+    renderCurrentTab()
+    notify(error instanceof Error ? error.message : String(error), "danger")
+  }).finally(() => {
+    credentialRefresh = null
+  })
+  return credentialRefresh
+}
+
+async function configureFromToolResult(result: unknown): Promise<void> {
+  const value = result as { _meta?: JsonRecord; structuredContent?: JsonRecord }
+  const hidden = value?._meta?.["local-shell-mcp/live"] as JsonRecord | undefined
+  const structured = value?.structuredContent || {}
+  const token = String(hidden?.token || "")
+  const apiBase = String(hidden?.apiBase || structured.api_base || "")
+  if (!token || !apiBase) {
+    await refreshLiveCredentials(structured)
+    return
+  }
+  activateLiveConfig({
+    token,
+    apiBase,
+    uiPath: String(hidden?.uiPath || structured.ui_path || "/ui"),
+    workspaceId: String(hidden?.workspaceId || structured.workspace_id || ""),
+    machine: String(structured.machine || "local"),
+    cwd: String(structured.cwd || "."),
+  })
+}
+
 function applyHostContext(context: unknown): void {
   const value = (context || {}) as JsonRecord
   const theme = value.theme
@@ -1098,7 +1140,7 @@ type OpenAiGlobalsWindow = Window & {
 function configureFromOpenAiGlobals(globals?: unknown): boolean {
   const result = toolResultFromOpenAiGlobals(globals ?? (window as OpenAiGlobalsWindow).openai)
   if (!result) return false
-  configureFromToolResult(result)
+  void configureFromToolResult(result)
   return true
 }
 
@@ -1107,7 +1149,16 @@ function onOpenAiGlobalsChanged(event: Event): void {
   configureFromOpenAiGlobals(detail?.globals)
 }
 
-app.ontoolresult = (result) => configureFromToolResult(result)
+let bridgeReady = false
+let pendingToolResult: unknown = null
+
+app.ontoolresult = (result) => {
+  if (!bridgeReady) {
+    pendingToolResult = result
+    return
+  }
+  void configureFromToolResult(result)
+}
 app.onhostcontextchanged = (context) => applyHostContext(context)
 window.addEventListener("openai:set_globals", onOpenAiGlobalsChanged)
 
@@ -1116,8 +1167,15 @@ shell()
 void (async () => {
   try {
     await app.connect()
+    bridgeReady = true
     applyHostContext(app.getHostContext())
-    configureFromOpenAiGlobals()
+    if (pendingToolResult) {
+      const result = pendingToolResult
+      pendingToolResult = null
+      await configureFromToolResult(result)
+    } else if (!configureFromOpenAiGlobals()) {
+      await refreshLiveCredentials({})
+    }
   } catch (error) {
     connected = false
     connectionMessage = "Host bridge unavailable"

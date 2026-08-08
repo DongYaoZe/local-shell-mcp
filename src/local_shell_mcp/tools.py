@@ -2507,6 +2507,7 @@ def _register_live_workspace_tools(
         # have not yet moved to the nested MCP Apps metadata shape.
         "ui/resourceUri": LIVE_RESOURCE_URI,
         "openai/outputTemplate": LIVE_RESOURCE_URI,
+        "openai/widgetAccessible": True,
         "openai/toolInvocation/invoking": "Opening live workspace",
         "openai/toolInvocation/invoked": "Live workspace ready",
     }
@@ -2514,9 +2515,9 @@ def _register_live_workspace_tools(
     @mcp.tool(
         structured_output=True,
         annotations=ToolAnnotations(
-            readOnlyHint=False,
+            readOnlyHint=True,
             destructiveHint=False,
-            idempotentHint=False,
+            idempotentHint=True,
             openWorldHint=False,
         ),
         meta=tool_meta,

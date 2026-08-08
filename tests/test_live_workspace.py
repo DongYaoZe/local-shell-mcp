@@ -194,11 +194,12 @@ async def test_mcp_app_resource_and_render_result_hide_live_token(tmp_path, monk
     assert render_tool.meta["ui"]["resourceUri"] == LIVE_RESOURCE_URI
     assert render_tool.meta["ui/resourceUri"] == LIVE_RESOURCE_URI
     assert render_tool.meta["openai/outputTemplate"] == LIVE_RESOURCE_URI
+    assert render_tool.meta["openai/widgetAccessible"] is True
     assert render_tool.meta["securitySchemes"][0]["scopes"] == list(ALL_OAUTH_SCOPES)
     assert render_tool.outputSchema["title"] == "LiveWorkspaceResult"
-    assert render_tool.annotations.readOnlyHint is False
+    assert render_tool.annotations.readOnlyHint is True
     assert render_tool.annotations.destructiveHint is False
-    assert render_tool.annotations.idempotentHint is False
+    assert render_tool.annotations.idempotentHint is True
 
     resources = {str(resource.uri): resource for resource in await mcp.list_resources()}
     resource = resources[LIVE_RESOURCE_URI]
@@ -236,8 +237,10 @@ async def test_human_takeover_blocks_model_mutation_but_not_reads(tmp_path, monk
     assert workspace is not None
     live_module.get_live_workspace_manager().set_control(workspace, "human")
 
-    with pytest.raises(Exception, match="human takeover mode"):
-        await mcp.call_tool("open_live_workspace", {"cwd": "."})
+    reopened = await mcp.call_tool("open_live_workspace", {"cwd": "."})
+    assert isinstance(reopened, CallToolResult)
+    refreshed_live_token = reopened.meta["local-shell-mcp/live"]["token"]
+    assert refreshed_live_token != live_token
     with pytest.raises(Exception, match="human takeover mode"):
         await mcp.call_tool("write_file", {"path": "blocked.txt", "content": "blocked"})
     with pytest.raises(Exception, match="human takeover mode"):
@@ -251,7 +254,8 @@ async def test_human_takeover_blocks_model_mutation_but_not_reads(tmp_path, monk
         {"session_id": "missing", "screenshot": False},
     )
     assert snapshot_without_screenshot is not None
-    assert live_module.get_live_workspace_manager().authenticate(live_token) is workspace
+    assert live_module.get_live_workspace_manager().authenticate(live_token) is None
+    assert live_module.get_live_workspace_manager().authenticate(refreshed_live_token) is workspace
     event_types = [event["type"] for event in workspace.events]
     assert "tool.blocked" in event_types
     assert "tool.failed" in event_types
