@@ -233,15 +233,20 @@ async def test_mcp_app_resource_and_render_result_hide_live_token(tmp_path, monk
 
     tools = {tool.name: tool for tool in await mcp.list_tools()}
     render_tool = tools["open_live_workspace"]
+    reconnect_tool = tools["live_workspace_reconnect"]
     assert render_tool.meta["ui"]["resourceUri"] == LIVE_RESOURCE_URI
     assert render_tool.meta["ui/resourceUri"] == LIVE_RESOURCE_URI
     assert render_tool.meta["openai/outputTemplate"] == LIVE_RESOURCE_URI
     assert render_tool.meta["openai/widgetAccessible"] is True
+    assert "live_id" not in render_tool.inputSchema["properties"]
     assert render_tool.meta["securitySchemes"][0]["scopes"] == list(ALL_OAUTH_SCOPES)
     assert render_tool.outputSchema["title"] == "LiveChannelResult"
     assert render_tool.annotations.readOnlyHint is True
     assert render_tool.annotations.destructiveHint is False
     assert render_tool.annotations.idempotentHint is True
+    assert reconnect_tool.meta["ui"] == {"visibility": ["app"]}
+    assert "ui/resourceUri" not in reconnect_tool.meta
+    assert "openai/outputTemplate" not in reconnect_tool.meta
 
     resources = {str(resource.uri): resource for resource in await mcp.list_resources()}
     resource = resources[LIVE_RESOURCE_URI]
@@ -263,6 +268,14 @@ async def test_mcp_app_resource_and_render_result_hide_live_token(tmp_path, monk
     assert hidden["token"]
     assert hidden["apiBase"] == "https://lsm.example.test"
     assert hidden["token"] not in (tmp_path / "audit.jsonl").read_text(encoding="utf-8")
+
+    reconnected = await mcp.call_tool(
+        "live_workspace_reconnect",
+        {"machine": "local", "cwd": ".", "live_id": result.structuredContent["live_id"]},
+    )
+    assert isinstance(reconnected, CallToolResult)
+    assert reconnected.structuredContent["live_id"] == result.structuredContent["live_id"]
+    assert reconnected.meta["local-shell-mcp/live"]["token"] == hidden["token"]
 
     templates = {
         str(template.uriTemplate): template for template in await mcp.list_resource_templates()

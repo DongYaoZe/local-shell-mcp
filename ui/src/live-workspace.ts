@@ -103,6 +103,8 @@ const activityAuditDetails = new Map<string, JsonRecord>()
 let activityDiscoveryInitialized = false
 let knownActiveJobs = new Set<string>()
 let knownStandaloneSessions = new Set<string>()
+let shuttingDown = false
+let passiveRefreshTimer: number | null = null
 
 let terminal: Terminal | null = null
 let fitAddon: FitAddon | null = null
@@ -1206,7 +1208,7 @@ async function loadSnapshot(generation: number): Promise<boolean> {
 }
 
 async function pollEvents(generation: number): Promise<void> {
-  while (config && generation === pollGeneration) {
+  while (!shuttingDown && config && generation === pollGeneration) {
     const payload = await api<{ events: LiveEvent[]; cursor: number }>(`/api/live/events?after=${cursor}&timeout=25`)
     if (generation !== pollGeneration) return
     mergeEvents(payload.events || [])
@@ -1221,7 +1223,7 @@ async function pollEvents(generation: number): Promise<void> {
 async function runConnectionLoop(generation: number): Promise<void> {
   let attempt = 0
   let announcedRetry = false
-  while (config && generation === pollGeneration) {
+  while (!shuttingDown && config && generation === pollGeneration) {
     try {
       connectionMessage = attempt ? "Reconnecting" : "Connecting"
       updateChrome()
@@ -1236,7 +1238,7 @@ async function runConnectionLoop(generation: number): Promise<void> {
       await pollEvents(generation)
       return
     } catch (caught) {
-      if (!config || generation !== pollGeneration) return
+      if (shuttingDown || !config || generation !== pollGeneration) return
       let error = caught
       if (isLiveCredentialError(error)) {
         const stale = config
@@ -1263,6 +1265,7 @@ async function runConnectionLoop(generation: number): Promise<void> {
 }
 
 function activateLiveConfig(nextConfig: LiveConfig): void {
+  if (shuttingDown) return
   if (
     config
     && config.token === nextConfig.token
@@ -1288,7 +1291,7 @@ async function requestLiveConfig(structured: JsonRecord, allowCreate: boolean): 
   const cwd = String(structured.cwd || ".")
   const liveId = String(structured.live_id || "")
   const invoke = (id: string) => app.callServerTool({
-    name: "open_live_workspace",
+    name: "live_workspace_reconnect",
     arguments: id ? { machine, cwd, live_id: id } : { machine, cwd },
   })
   let response
@@ -1335,7 +1338,7 @@ function refreshLiveCredentials(structured: JsonRecord, allowCreate = false): Pr
 async function recoverCredentialsForever(structured: JsonRecord): Promise<void> {
   let attempt = 0
   const announcedLiveId = String(structured.live_id || "")
-  while (!config || Boolean(announcedLiveId && config.liveId !== announcedLiveId)) {
+  while (!shuttingDown && (!config || Boolean(announcedLiveId && config.liveId !== announcedLiveId))) {
     try {
       await refreshLiveCredentials(structured, true)
       return
@@ -1353,6 +1356,7 @@ async function recoverCredentialsForever(structured: JsonRecord): Promise<void> 
 }
 
 async function configureFromToolResult(result: unknown): Promise<void> {
+  if (shuttingDown) return
   const value = result as { _meta?: JsonRecord; structuredContent?: JsonRecord }
   const hidden = value?._meta?.["local-shell-mcp/live"] as JsonRecord | undefined
   const structured = value?.structuredContent || {}
@@ -1407,6 +1411,7 @@ type OpenAiGlobalsWindow = Window & {
 }
 
 function configureFromOpenAiGlobals(globals?: unknown): boolean {
+  if (shuttingDown) return false
   const result = toolResultFromOpenAiGlobals(globals ?? (window as OpenAiGlobalsWindow).openai)
   if (!result) return false
   void configureFromToolResult(result)
@@ -1414,6 +1419,7 @@ function configureFromOpenAiGlobals(globals?: unknown): boolean {
 }
 
 function onOpenAiGlobalsChanged(event: Event): void {
+  if (shuttingDown) return
   const detail = (event as CustomEvent<{ globals?: unknown }>).detail
   configureFromOpenAiGlobals(detail?.globals)
 }
@@ -1443,6 +1449,7 @@ function waitForInitialToolResult(timeoutMs: number): Promise<unknown | null> {
 }
 
 app.ontoolresult = (result) => {
+  if (shuttingDown) return
   if (initialToolResultResolve) {
     const resolve = initialToolResultResolve
     initialToolResultResolve = null
@@ -1456,6 +1463,26 @@ app.ontoolresult = (result) => {
   void configureFromToolResult(result)
 }
 app.onhostcontextchanged = (context) => applyHostContext(context)
+
+function stopLiveWorkspace(): void {
+  if (shuttingDown) return
+  shuttingDown = true
+  pollGeneration += 1
+  config = null
+  connected = false
+  destroyTerminal()
+  window.removeEventListener("openai:set_globals", onOpenAiGlobalsChanged)
+  if (passiveRefreshTimer !== null) {
+    window.clearInterval(passiveRefreshTimer)
+    passiveRefreshTimer = null
+  }
+}
+
+app.onteardown = async () => {
+  stopLiveWorkspace()
+  return {}
+}
+
 window.addEventListener("openai:set_globals", onOpenAiGlobalsChanged)
 
 shell()
@@ -1463,10 +1490,13 @@ shell()
 void (async () => {
   try {
     await app.connect()
+    if (shuttingDown) return
     bridgeReady = true
     applyHostContext(app.getHostContext())
     await enterPreferredDisplayMode()
+    if (shuttingDown) return
     const initialResult = await waitForInitialToolResult(300)
+    if (shuttingDown) return
     if (initialResult) await configureFromToolResult(initialResult)
     else if (!configureFromOpenAiGlobals()) await recoverCredentialsForever({})
   } catch (error) {
@@ -1478,13 +1508,11 @@ void (async () => {
   }
 })()
 
-setInterval(() => {
-  if (config && Date.now() - lastPassiveRefresh > 6_000) void refreshAllCore()
+passiveRefreshTimer = window.setInterval(() => {
+  if (!shuttingDown && config && Date.now() - lastPassiveRefresh > 6_000) void refreshAllCore()
 }, 6_000)
 
 window.addEventListener("beforeunload", () => {
-  pollGeneration += 1
-  destroyTerminal()
-  window.removeEventListener("openai:set_globals", onOpenAiGlobalsChanged)
+  stopLiveWorkspace()
   void app.close()
 })

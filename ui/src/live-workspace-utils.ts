@@ -117,7 +117,7 @@ export function activityEventKey(event: LiveEvent): string {
 export function isOperationalActivityEvent(event: LiveEvent): boolean {
   if (event.type === "channel.opened") return false
   if (event.type === "human.action" && event.data.action === "terminal.input") return false
-  return String(event.data.tool || "") !== "open_live_workspace"
+  return !["open_live_workspace", "live_workspace_reconnect"].includes(String(event.data.tool || ""))
 }
 
 export function activityIntent(event: LiveEvent): string {

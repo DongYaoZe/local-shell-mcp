@@ -2528,22 +2528,12 @@ def _register_live_workspace_tools(
         "openai/toolInvocation/invoked": "Live workspace ready",
     }
 
-    @mcp.tool(
-        structured_output=True,
-        annotations=ToolAnnotations(
-            readOnlyHint=True,
-            destructiveHint=False,
-            idempotentHint=True,
-            openWorldHint=False,
-        ),
-        meta=tool_meta,
-    )
-    async def open_live_workspace(
-        machine: str | None = None,
-        cwd: str = ".",
-        live_id: str | None = None,
+    async def build_live_channel_result(
+        *,
+        machine: str | None,
+        cwd: str,
+        live_id: str | None,
     ) -> LiveChannelResult:
-        """Open or reuse the interactive Live Workspace for real-time human/agent collaboration. Call it once for an active task and reuse the self-reconnecting floating workspace instead of reopening it repeatedly. Use it when terminal output, files/diffs, jobs, remotes, or audit activity would materially improve the workflow."""
         principal = current_principal()
         if principal is None:
             subject = "local-mcp-client"
@@ -2580,17 +2570,55 @@ def _register_live_workspace_tools(
                         "liveId": result.live_id,
                     }
                 },
-                content=[
-                    TextContent(
-                        type="text",
-                        text=(
-                            "Live Workspace ready. The user can monitor execution, inspect files "
-                            "and diffs, use a persistent terminal, and change collaboration mode."
-                        ),
-                    )
-                ],
+                content=[TextContent(type="text", text="Live Workspace channel ready.")],
                 structuredContent=result.model_dump(mode="json"),
             ),
+        )
+
+    @mcp.tool(
+        structured_output=True,
+        annotations=ToolAnnotations(
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=False,
+        ),
+        meta=tool_meta,
+    )
+    async def open_live_workspace(
+        machine: str | None = None,
+        cwd: str = ".",
+    ) -> LiveChannelResult:
+        """Open or reuse the interactive Live Workspace for real-time human/agent collaboration. Call it once for an active task and reuse the self-reconnecting floating workspace instead of reopening it repeatedly. Use it when terminal output, files/diffs, jobs, remotes, or audit activity would materially improve the workflow."""
+        return await build_live_channel_result(
+            machine=machine,
+            cwd=cwd,
+            live_id=None,
+        )
+
+    @mcp.tool(
+        structured_output=True,
+        annotations=ToolAnnotations(
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=False,
+        ),
+        meta={
+            **_oauth_meta(list(ALL_OAUTH_SCOPES)),
+            "ui": {"visibility": ["app"]},
+        },
+    )
+    async def live_workspace_reconnect(
+        machine: str | None = None,
+        cwd: str = ".",
+        live_id: str | None = None,
+    ) -> LiveChannelResult:
+        """Internal app-only Live Workspace credential attachment endpoint."""
+        return await build_live_channel_result(
+            machine=machine,
+            cwd=cwd,
+            live_id=live_id,
         )
 
 

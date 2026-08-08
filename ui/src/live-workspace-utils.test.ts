@@ -18,6 +18,13 @@ import {
 } from "./live-workspace-utils"
 
 describe("live workspace utilities", () => {
+  test("Live Workspace teardown does not recursively call its rendering tool", async () => {
+    const source = await Bun.file(new URL("./live-workspace.ts", import.meta.url)).text()
+    expect(source).toContain("app.onteardown = async")
+    expect(source).toContain('name: "live_workspace_reconnect"')
+    expect(source).not.toContain('name: "open_live_workspace"')
+  })
+
   test("display mode toggles only between floating and fullscreen", () => {
     expect(toggleWorkspaceDisplayMode("pip")).toBe("fullscreen")
     expect(toggleWorkspaceDisplayMode("fullscreen")).toBe("pip")
@@ -84,12 +91,14 @@ describe("live workspace utilities", () => {
   test("activity hides workspace bootstrap noise and routes useful operations", () => {
     const opened: LiveEvent = { seq: 1, ts: 1, type: "channel.opened", actor: "system", data: {} }
     const bootstrap: LiveEvent = { seq: 2, ts: 1, type: "tool.completed", actor: "agent", data: { tool: "open_live_workspace" } }
-    const terminalInput: LiveEvent = { seq: 3, ts: 1, type: "human.action", actor: "human", data: { action: "terminal.input", bytes: 1 } }
-    const edit: LiveEvent = { seq: 4, ts: 1, type: "tool.completed", actor: "agent", data: { tool: "edit_file", path: "/workspace/src/app.ts" } }
-    const job: LiveEvent = { seq: 5, ts: 1, type: "tool.completed", actor: "agent", data: { tool: "job_start", name: "tests" } }
+    const reconnect: LiveEvent = { seq: 3, ts: 1, type: "tool.completed", actor: "agent", data: { tool: "live_workspace_reconnect" } }
+    const terminalInput: LiveEvent = { seq: 4, ts: 1, type: "human.action", actor: "human", data: { action: "terminal.input", bytes: 1 } }
+    const edit: LiveEvent = { seq: 5, ts: 1, type: "tool.completed", actor: "agent", data: { tool: "edit_file", path: "/workspace/src/app.ts" } }
+    const job: LiveEvent = { seq: 6, ts: 1, type: "tool.completed", actor: "agent", data: { tool: "job_start", name: "tests" } }
 
     expect(isOperationalActivityEvent(opened)).toBeFalse()
     expect(isOperationalActivityEvent(bootstrap)).toBeFalse()
+    expect(isOperationalActivityEvent(reconnect)).toBeFalse()
     expect(isOperationalActivityEvent(terminalInput)).toBeFalse()
     expect(isOperationalActivityEvent(edit)).toBeTrue()
     expect(activityIntent(edit)).toBe("Editing app.ts")
