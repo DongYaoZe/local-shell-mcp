@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test"
 import {
-  controlDescription,
   controlLabel,
   eventDetail,
   eventTitle,
@@ -8,6 +7,7 @@ import {
   joinPath,
   parentPath,
   renderDiffHtml,
+  nextDisplayMode,
   toolResultFromOpenAiGlobals,
   truncateContext,
   type LiveEvent,
@@ -18,7 +18,14 @@ describe("live workspace utilities", () => {
     expect(controlLabel("agent")).toBe("Observe")
     expect(controlLabel("shared")).toBe("Collaborate")
     expect(controlLabel("human")).toBe("Take over")
-    expect(controlDescription("human")).toContain("ChatGPT remains read-only")
+  })
+
+  test("display mode buttons toggle back to inline", () => {
+    expect(nextDisplayMode("inline", "fullscreen")).toBe("fullscreen")
+    expect(nextDisplayMode("fullscreen", "fullscreen")).toBe("inline")
+    expect(nextDisplayMode("inline", "pip")).toBe("pip")
+    expect(nextDisplayMode("pip", "pip")).toBe("inline")
+    expect(nextDisplayMode("fullscreen", "pip")).toBe("pip")
   })
 
   test("paths work for POSIX and Windows", () => {

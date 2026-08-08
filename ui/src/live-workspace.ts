@@ -8,7 +8,6 @@ import { FitAddon } from "@xterm/addon-fit"
 import { Terminal } from "@xterm/xterm"
 import {
   basename,
-  controlDescription,
   controlLabel,
   escapeHtml,
   eventDetail,
@@ -17,11 +16,13 @@ import {
   formatBytes,
   formatClock,
   joinPath,
+  nextDisplayMode,
   parentPath,
   renderDiffHtml,
   toolResultFromOpenAiGlobals,
   truncateContext,
   type ControlMode,
+  type DisplayMode,
   type LiveEvent,
 } from "./live-workspace-utils"
 
@@ -69,6 +70,7 @@ let pollGeneration = 0
 let connected = false
 let connectionMessage = "Waiting for Live Workspace…"
 let activeTab = "activity"
+let displayMode: DisplayMode = "inline"
 let bootstrap: JsonRecord | null = null
 let dashboard: Dashboard | null = null
 let machines: Machine[] = []
@@ -136,9 +138,9 @@ function shell(): void {
       </header>
       <section class="status-strip">
         <div class="current-operation"><span class="pulse" data-role="op-pulse"></span><div><small>Current</small><strong data-role="current-op">No active tool call</strong><span data-role="current-detail">Waiting for activity</span></div></div>
-        <div class="status-stat"><small>Control</small><strong data-role="control-label">${controlLabel(control)}</strong><span data-role="control-description">${controlDescription(control)}</span></div>
-        <div class="status-stat compact-stat"><small>Machines</small><strong data-role="machine-count">—</strong><span data-role="machine-status">loading</span></div>
-        <div class="status-stat compact-stat"><small>Workload</small><strong data-role="workload-count">—</strong><span data-role="workload-status">jobs + terminals</span></div>
+        <div class="status-stat"><small>Control</small><strong data-role="control-label">${controlLabel(control)}</strong></div>
+        <div class="status-stat compact-stat"><small>Machines</small><strong data-role="machine-count">—</strong></div>
+        <div class="status-stat compact-stat"><small>Workload</small><strong data-role="workload-count">—</strong></div>
       </section>
       <nav class="tabs" aria-label="Workspace views">
         ${tabButton("activity", "Activity")}${tabButton("terminal", "Terminal")}${tabButton("files", "Files")}${tabButton("diff", "Diff")}${tabButton("jobs", "Jobs")}${tabButton("remotes", "Remotes")}${tabButton("audit", "Audit")}
@@ -213,8 +215,20 @@ function updateChrome(): void {
   })
   const controlNode = qs<HTMLElement>("[data-role=control-label]")
   if (controlNode) controlNode.textContent = controlLabel(control)
-  const description = qs<HTMLElement>("[data-role=control-description]")
-  if (description) description.textContent = controlDescription(control)
+  const pipButton = qs<HTMLButtonElement>("[data-action=pip]")
+  if (pipButton) {
+    const active = displayMode === "pip"
+    pipButton.classList.toggle("active", active)
+    pipButton.title = active ? "Return to inline" : "Picture in picture"
+    pipButton.setAttribute("aria-label", pipButton.title)
+  }
+  const expandButton = qs<HTMLButtonElement>("[data-action=expand]")
+  if (expandButton) {
+    const active = displayMode === "fullscreen"
+    expandButton.classList.toggle("active", active)
+    expandButton.title = active ? "Return to inline" : "Fullscreen"
+    expandButton.setAttribute("aria-label", expandButton.title)
+  }
 
   const running = currentRunningEvent()
   const current = qs<HTMLElement>("[data-role=current-op]")
@@ -225,13 +239,11 @@ function updateChrome(): void {
   pulse?.classList.toggle("active", Boolean(running))
 
   const machineCount = qs<HTMLElement>("[data-role=machine-count]")
-  if (machineCount) machineCount.textContent = machines.length ? String(machines.length) : "1"
   const online = machines.filter((item) => item.status === "online" || item.name === "local").length
-  const machineStatus = qs<HTMLElement>("[data-role=machine-status]")
-  if (machineStatus) machineStatus.textContent = `${online || 1} online`
+  if (machineCount) machineCount.textContent = `${machines.length || 1} · ${online || 1} online`
   const workload = (dashboard?.jobs?.length || 0) + (dashboard?.session_count || dashboard?.sessions?.length || 0)
   const workloadCount = qs<HTMLElement>("[data-role=workload-count]")
-  if (workloadCount) workloadCount.textContent = String(workload)
+  if (workloadCount) workloadCount.textContent = workload ? `${workload} active` : "0"
 
   if (terminal) terminal.options.disableStdin = control === "agent"
 }
@@ -263,8 +275,8 @@ function onRootClick(event: MouseEvent): void {
 
 async function handleAction(action: string, target: HTMLElement): Promise<void> {
   try {
-    if (action === "expand") await requestDisplayMode("fullscreen")
-    else if (action === "pip") await requestDisplayMode("pip")
+    if (action === "expand") await requestDisplayMode(nextDisplayMode(displayMode, "fullscreen"))
+    else if (action === "pip") await requestDisplayMode(nextDisplayMode(displayMode, "pip"))
     else if (action === "refresh") await refreshCurrent(true)
     else if (action === "activity-ask") await askAboutLatestActivity()
     else if (action === "terminal-new") await newTerminal()
@@ -294,7 +306,10 @@ async function handleAction(action: string, target: HTMLElement): Promise<void> 
 
 async function requestDisplayMode(mode: "fullscreen" | "pip" | "inline"): Promise<void> {
   try {
-    await app.requestDisplayMode({ mode })
+    const result = await app.requestDisplayMode({ mode })
+    displayMode = result.mode
+    document.documentElement.dataset.displayMode = displayMode
+    updateChrome()
   } catch (error) {
     notify(`Host did not change display mode: ${error instanceof Error ? error.message : String(error)}`, "warning")
   }
@@ -1130,7 +1145,9 @@ function applyHostContext(context: unknown): void {
   const css = styles?.css as JsonRecord | undefined
   if (typeof css?.fonts === "string") applyHostFonts(css.fonts)
   const mode = String(value.displayMode || "inline")
-  document.documentElement.dataset.displayMode = mode
+  displayMode = mode === "fullscreen" || mode === "pip" ? mode : "inline"
+  document.documentElement.dataset.displayMode = displayMode
+  updateChrome()
 }
 
 type OpenAiGlobalsWindow = Window & {

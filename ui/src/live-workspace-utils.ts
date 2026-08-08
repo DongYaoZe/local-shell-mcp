@@ -1,4 +1,5 @@
 export type ControlMode = "agent" | "shared" | "human"
+export type DisplayMode = "inline" | "fullscreen" | "pip"
 
 export type LiveEvent = {
   seq: number
@@ -107,10 +108,8 @@ export function controlLabel(mode: ControlMode): string {
   return "Observe"
 }
 
-export function controlDescription(mode: ControlMode): string {
-  if (mode === "shared") return "You and ChatGPT can both operate LSM."
-  if (mode === "human") return "Human has write control; ChatGPT remains read-only."
-  return "ChatGPT operates; human controls are read-only."
+export function nextDisplayMode(current: DisplayMode, requested: Exclude<DisplayMode, "inline">): DisplayMode {
+  return current === requested ? "inline" : requested
 }
 
 export function eventTitle(event: LiveEvent): string {

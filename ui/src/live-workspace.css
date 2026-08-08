@@ -88,9 +88,10 @@ svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width:
 .control-switch button[data-control="human"].active { color: var(--ls-warning); background: var(--ls-warning-soft); }
 .icon-button { display: grid; place-items: center; width: 31px; height: 31px; border: 1px solid var(--ls-border); border-radius: 8px; background: transparent; color: var(--ls-text-2); cursor: pointer; }
 .icon-button:hover { background: var(--ls-panel-strong); color: var(--ls-text); border-color: var(--ls-border-strong); }
+.icon-button.active { background: var(--ls-accent-soft); color: var(--ls-accent-strong); border-color: color-mix(in srgb, var(--ls-accent) 35%, var(--ls-border)); }
 .icon-button svg { width: 15px; height: 15px; }
 
-.status-strip { display: grid; grid-template-columns: minmax(230px, 1.7fr) minmax(210px, 1.25fr) minmax(100px, .6fr) minmax(110px, .7fr); border-bottom: 1px solid var(--ls-border); background: color-mix(in srgb, var(--ls-bg) 80%, transparent); }
+.status-strip { display: grid; grid-template-columns: minmax(230px, 2fr) minmax(120px, .65fr) minmax(130px, .65fr) minmax(95px, .5fr); border-bottom: 1px solid var(--ls-border); background: color-mix(in srgb, var(--ls-bg) 80%, transparent); }
 .current-operation, .status-stat { min-width: 0; padding: 9px 13px; border-right: 1px solid var(--ls-border); }
 .status-strip > :last-child { border-right: 0; }
 .current-operation { display: flex; align-items: center; gap: 9px; }
