@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 _LIVE_RESOURCE_PATH = Path(__file__).resolve().parent / "ui_static" / "live-workspace.html"
-LIVE_RESOURCE_LEGACY_URI = "ui://local-shell-mcp/live-workspace.html"
+LIVE_RESOURCE_URI = "ui://local-shell-mcp/live-workspace.html"
 LIVE_RESOURCE_TEMPLATE_URI = "ui://local-shell-mcp/live-workspace-{version}.html"
 
 
@@ -25,7 +25,7 @@ def _versioned_live_resource_uri() -> str:
     return LIVE_RESOURCE_TEMPLATE_URI.format(version=digest)
 
 
-LIVE_RESOURCE_URI = _versioned_live_resource_uri()
+LIVE_RESOURCE_VERSIONED_URI = _versioned_live_resource_uri()
 LIVE_RESOURCE_MIME = "text/html;profile=mcp-app"
 LIVE_API_PREFIX = "/api/live"
 LIVE_TOKEN_TTL_S = 12 * 60 * 60

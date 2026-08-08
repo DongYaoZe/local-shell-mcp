@@ -16,10 +16,10 @@ import local_shell_mcp.live_channel_routes as live_routes
 from local_shell_mcp.auth import Principal
 from local_shell_mcp.live_channel import (
     LIVE_EVENT_LIMIT,
-    LIVE_RESOURCE_LEGACY_URI,
     LIVE_RESOURCE_MIME,
     LIVE_RESOURCE_TEMPLATE_URI,
     LIVE_RESOURCE_URI,
+    LIVE_RESOURCE_VERSIONED_URI,
     LiveChannelManager,
 )
 from local_shell_mcp.main import _build_mcp_http_app
@@ -39,10 +39,11 @@ def _configure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, auth: str = "
     monkeypatch.setattr(live_channel_module, "_MANAGER", LiveChannelManager())
 
 
-def test_live_workspace_resource_uri_is_content_versioned():
+def test_live_workspace_resource_uri_stays_stable_with_versioned_alias():
     asset = Path(live_channel_module.__file__).resolve().parent / "ui_static" / "live-workspace.html"
     digest = hashlib.sha256(asset.read_bytes()).hexdigest()[:16]
-    assert f"ui://local-shell-mcp/live-workspace-{digest}.html" == LIVE_RESOURCE_URI
+    assert LIVE_RESOURCE_URI == "ui://local-shell-mcp/live-workspace.html"
+    assert f"ui://local-shell-mcp/live-workspace-{digest}.html" == LIVE_RESOURCE_VERSIONED_URI
 
 
 def test_live_workspace_tokens_rotate_and_events_are_bounded():
@@ -250,7 +251,7 @@ async def test_mcp_app_resource_and_render_result_hide_live_token(tmp_path, monk
 
     resources = {str(resource.uri): resource for resource in await mcp.list_resources()}
     resource = resources[LIVE_RESOURCE_URI]
-    assert LIVE_RESOURCE_LEGACY_URI in resources
+    assert LIVE_RESOURCE_VERSIONED_URI in resources
     assert resource.mimeType == LIVE_RESOURCE_MIME
     assert resource.meta["ui"]["domain"] == "https://lsm.example.test"
     assert resource.meta["ui"]["csp"]["connectDomains"] == [
@@ -275,7 +276,9 @@ async def test_mcp_app_resource_and_render_result_hide_live_token(tmp_path, monk
     )
     assert isinstance(reconnected, CallToolResult)
     assert reconnected.structuredContent["live_id"] == result.structuredContent["live_id"]
-    assert reconnected.meta["local-shell-mcp/live"]["token"] == hidden["token"]
+    reconnect_token = reconnected.meta["local-shell-mcp/live"]["token"]
+    assert reconnect_token == hidden["token"]
+    assert reconnect_token not in (tmp_path / "audit.jsonl").read_text(encoding="utf-8")
 
     templates = {
         str(template.uriTemplate): template for template in await mcp.list_resource_templates()
@@ -284,7 +287,7 @@ async def test_mcp_app_resource_and_render_result_hide_live_token(tmp_path, monk
 
     for uri in (
         LIVE_RESOURCE_URI,
-        LIVE_RESOURCE_LEGACY_URI,
+        LIVE_RESOURCE_VERSIONED_URI,
         "ui://local-shell-mcp/live-workspace-previous-cache-key.html",
     ):
         contents = list(await mcp.read_resource(uri))

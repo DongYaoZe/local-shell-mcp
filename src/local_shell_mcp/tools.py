@@ -56,10 +56,10 @@ from .jobs import (
     tail_job,
 )
 from .live_channel import (
-    LIVE_RESOURCE_LEGACY_URI,
     LIVE_RESOURCE_MIME,
     LIVE_RESOURCE_TEMPLATE_URI,
     LIVE_RESOURCE_URI,
+    LIVE_RESOURCE_VERSIONED_URI,
     get_live_channel_manager,
     mcp_session_key,
 )
@@ -427,7 +427,9 @@ def _serialize_audit_value(value: Any) -> Any:
 
 def _safe_audit_result(tool_name: str, value: Any) -> Any:
     serialized = _serialize_audit_value(value)
-    if tool_name != "open_live_workspace" or not isinstance(serialized, dict):
+    if tool_name not in {"open_live_workspace", "live_workspace_reconnect"} or not isinstance(
+        serialized, dict
+    ):
         return serialized
     sanitized = dict(serialized)
     sanitized.pop("meta", None)
@@ -2502,10 +2504,10 @@ def _register_live_workspace_tools(
         return _live_workspace_html()
 
     @mcp.resource(
-        LIVE_RESOURCE_LEGACY_URI,
+        LIVE_RESOURCE_VERSIONED_URI,
         **resource_options,
     )
-    def legacy_live_workspace_resource() -> str:
+    def versioned_live_workspace_resource() -> str:
         return _live_workspace_html()
 
     @mcp.resource(
