@@ -111,7 +111,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 
 ### `plan_manage`
 
-Manage the current Live Workspace plan. An active plan enables Goal mode and automatic continuation after 15 minutes without agent tool activity, capped at 10 continuation attempts. Use action=start only for substantial multi-step work that should continue across ChatGPT turns; short tasks should not create a plan. Goal mode requires open_live_workspace first. Actions: start, get, update, block, resume, finish, cancel. start requires objective and steps; update may replace steps or update one step by step_id; block requires note; finish requires every step to be completed or skipped.
+Manage the current Live Workspace plan. An active plan enables Goal mode and automatic continuation after 15 minutes without agent tool activity, capped at 10 accepted continuation messages. Use action=start only for substantial multi-step work that should continue across ChatGPT turns; short tasks should not create a plan. Goal mode requires open_live_workspace first. Actions: start, get, update, block, resume, finish, cancel. start requires objective and steps; update may replace steps or update one step by step_id; block requires note; finish requires every step to be completed or skipped.
 
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|

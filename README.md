@@ -116,7 +116,7 @@ For full shell, filesystem, remote-worker, and Playwright tools, use ChatGPT Dev
 
 When the client supports MCP Apps, `open_live_workspace` can open the execution workspace as a floating MCP App and expand it to fullscreen when needed. Open it once for an active task; the app reconnects itself rather than requiring repeated tool calls. The workspace is always collaborative: ChatGPT and the human can operate the same terminal/files/remotes concurrently. Ordinary MCP tools remain the execution API, while the app adds live operational activity, persistent terminals, file/diff inspection, jobs, remotes, and audit data. Clients that do not render MCP Apps continue to use the normal tool surface unchanged.
 
-`plan_manage` optionally turns the current Live Workspace into **Goal mode** for substantial multi-step work. An active Plan is the goal: its steps are visible in the workspace, can be revised as execution changes, and are automatically continued when no agent tool activity has occurred for 15 minutes. Automatic continuation is capped at 10 attempts; blocked, completed, cancelled, or fully terminal Plans are never nudged. Short tasks should simply run without a Plan.
+`plan_manage` optionally turns the current Live Workspace into **Goal mode** for substantial multi-step work. An active Plan is the goal: its steps are visible in the workspace, can be revised as execution changes, and are automatically continued when no agent tool activity has occurred for 15 minutes. Automatic continuation is capped at 10 accepted continuation messages; blocked, completed, cancelled, or fully terminal Plans are never nudged. Short tasks should simply run without a Plan.
 
 1. Expose the server through HTTPS.
 2. Keep OAuth enabled.
