@@ -121,8 +121,6 @@ def required_scopes_for_http_tool(path: str, method: str | None = None) -> tuple
 
     if path.startswith("/tools/download/"):
         return file_share
-    if path == "/tools/todo":
-        return read if str(method or "").upper() == "GET" else write
     if path in {
         "/tools/write_file",
         "/tools/edit_file",

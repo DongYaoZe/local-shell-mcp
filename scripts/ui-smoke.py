@@ -296,28 +296,6 @@ def run_browser(port: int) -> None:
                 rightmost=True,
             )
 
-            todo_seed = api_request(page, "/api/ui/todos")
-            assert todo_seed["status"] == 200, todo_seed
-            todo_items = [
-                {"id": "ui-smoke-first", "content": "mouse todo first", "status": "pending", "priority": "medium"},
-                {"id": "ui-smoke-second", "content": "mouse todo second", "status": "pending", "priority": "medium"},
-                {"id": "ui-smoke-done", "content": "mouse todo done", "status": "completed", "priority": "low"},
-            ]
-            todo_write = api_request(
-                page,
-                "/api/ui/todos",
-                "PUT",
-                {"todos": todo_items, "expected_revision": todo_seed["body"]["data"]["revision"]},
-            )
-            assert todo_write["status"] == 200, todo_write
-
-            page.locator('[data-interface-mode="web"]').click()
-            page.locator('.nav-item[data-view="todos"]').click()
-            page.get_by_text("mouse todo second", exact=True).wait_for(timeout=8_000)
-            assert "Untitled todo" not in page.locator("#view-root").inner_text()
-            page.locator('[data-interface-mode="tui"]').click()
-            page.locator("#connection-state").get_by_text("Connected").wait_for(timeout=8_000)
-
             session_name = f"ui-smoke-{os.getpid()}"
             created = page.evaluate(
                 """name => fetch('/api/ui/terminals/start', {
@@ -455,24 +433,6 @@ def run_browser(port: int) -> None:
             page.keyboard.press("PageDown")
             page.keyboard.press("PageDown")
             wait_for_terminal_text(page, "REPEAT-END")
-
-            click_tui_label(page, "Todos")
-            wait_for_terminal_text(page, "mouse todo second")
-            click_tui_label(page, "mouse todo second")
-            page.locator(".xterm-helper-textarea").focus()
-            page.keyboard.press("p")
-            deadline = time.monotonic() + 8
-            while time.monotonic() < deadline:
-                todo_state = api_request(page, "/api/ui/todos")
-                priorities = {item["id"]: item["priority"] for item in todo_state["body"]["data"]["todos"]}
-                if priorities.get("ui-smoke-second") == "high":
-                    break
-                page.wait_for_timeout(100)
-            else:
-                raise AssertionError(f"Todo mouse selection did not target the second row: {priorities}")
-            assert priorities["ui-smoke-first"] == "medium"
-            click_tui_label(page, "Open")
-            wait_for_terminal_text(page, "OPEN")
 
             click_tui_label(page, "Audit")
             wait_for_terminal_text(page, "Audit records")

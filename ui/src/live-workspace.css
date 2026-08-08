@@ -343,3 +343,26 @@ select:hover, input:hover, textarea:hover { border-color: var(--ls-border-strong
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; }
 }
+
+.goal-card { margin-bottom: 9px; border: 1px solid color-mix(in srgb, var(--ls-accent) 32%, var(--ls-border)); border-radius: 9px; background: color-mix(in srgb, var(--ls-accent-soft) 55%, var(--ls-panel)); overflow: hidden; }
+.goal-card.blocked { border-color: color-mix(in srgb, var(--ls-warning) 40%, var(--ls-border)); background: color-mix(in srgb, var(--ls-warning-soft) 55%, var(--ls-panel)); }
+.goal-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 11px 8px; }
+.goal-head > div { min-width: 0; display: grid; gap: 2px; }
+.goal-head small { color: var(--ls-text-3); font-size: 9px; text-transform: uppercase; letter-spacing: .07em; }
+.goal-head strong { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.goal-status { flex: 0 0 auto; padding: 3px 7px; border-radius: 999px; color: var(--ls-accent-strong); background: var(--ls-accent-soft); font-size: 9px; }
+.goal-card.blocked .goal-status { color: var(--ls-warning); background: var(--ls-warning-soft); }
+.goal-note { margin: -1px 11px 8px; color: var(--ls-warning); font-size: 10.5px; }
+.plan-steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1px; border-top: 1px solid var(--ls-border); border-bottom: 1px solid var(--ls-border); background: var(--ls-border); }
+.plan-step { min-width: 0; display: grid; grid-template-columns: 19px minmax(0, 1fr); gap: 6px; align-items: start; padding: 7px 9px; background: var(--ls-panel-solid); }
+.plan-step-mark { display: grid; place-items: center; width: 18px; height: 18px; border-radius: 5px; color: var(--ls-text-3); background: var(--ls-panel-strong); font-size: 10px; }
+.plan-step.active .plan-step-mark { color: var(--ls-accent-strong); background: var(--ls-accent-soft); }
+.plan-step.completed .plan-step-mark { color: var(--ls-success); background: var(--ls-success-soft); }
+.plan-step.skipped { opacity: .65; }
+.plan-step > div { min-width: 0; display: grid; gap: 2px; }
+.plan-step strong { font-size: 10.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plan-step small { color: var(--ls-text-3); font-size: 9px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.goal-card footer { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 6px 10px; color: var(--ls-text-3); font-size: 9px; }
+.goal-actions { display: flex; gap: 5px; margin-left: auto; }
+.goal-actions .button { min-height: 25px; padding: 0 8px; font-size: 9px; }
+.goal-actions .button.danger { color: var(--ls-danger); border-color: color-mix(in srgb, var(--ls-danger) 35%, var(--ls-border)); }

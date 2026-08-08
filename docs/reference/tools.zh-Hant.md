@@ -14,7 +14,7 @@ Git 不再擁有專用 MCP 工具。請透過 `run_shell_tool` 執行標準 Git 
 
 ### 環境、Skills 與任務狀態
 
-`environment_info`、`skills_list`、`skill_load`、`skill_read_file`、`secret_scan`、`todo_read_tool`、`todo_write_tool`、`audit_tail`
+`environment_info`、`skills_list`、`skill_load`、`skill_read_file`、`secret_scan`、`plan_manage`、`audit_tail`
 
 `environment_info` 已包含執行版本、Python、平台、可執行檔、工作區、權限策略和基礎探測資訊，因此不再單獨暴露 `version_info`。
 

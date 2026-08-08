@@ -159,7 +159,6 @@ def test_auth_scopes_hosts_tokens_and_metadata(tmp_path, monkeypatch):
 
     expected = {
         "/tools/download/create": ("shell:read", "file:share"),
-        "/tools/todo": ("shell:read",),
         "/tools/write_file": ("shell:read", "shell:write"),
         "/tools/run_shell": ("shell:read", "shell:execute"),
         "/tools/browser/text": ("browser:use",),
@@ -169,12 +168,7 @@ def test_auth_scopes_hosts_tokens_and_metadata(tmp_path, monkeypatch):
         "/other": (),
     }
     for path, scopes in expected.items():
-        method = "GET" if path == "/tools/todo" else None
-        assert auth.required_scopes_for_http_tool(path, method) == scopes
-    assert auth.required_scopes_for_http_tool("/tools/todo", "POST") == (
-        "shell:read",
-        "shell:write",
-    )
+        assert auth.required_scopes_for_http_tool(path) == scopes
 
     for host, result in (
         ("localhost", True),
@@ -637,7 +631,6 @@ def test_http_app_executes_every_route_wrapper(tmp_path, monkeypatch):
     for name in (
         "list_dir", "glob_paths", "create_download_link", "list_download_links",
         "revoke_download_link", "read_texts", "write_text", "edit_text", "delete_path",
-        "todo_read", "todo_write",
     ):
         monkeypatch.setattr(http_app, name, sync_value)
     monkeypatch.setattr(
@@ -670,8 +663,6 @@ def test_http_app_executes_every_route_wrapper(tmp_path, monkeypatch):
         ("post", "/tools/write_file", {"path": "x", "content": "y", "overwrite": False}),
         ("post", "/tools/edit_file", {"path": "x", "edits": []}),
         ("post", "/tools/delete", {"path": "x", "recursive": True}),
-        ("get", "/tools/todo", None),
-        ("post", "/tools/todo", {"todos": []}),
         ("post", "/tools/browser/capture", {"url": "x", "full_page": False, "width": 1, "height": 2}),
         ("post", "/tools/browser/text", {"url": "x"}),
         ("post", "/tools/playwright/run_script", {"script": "x", "timeout_s": 2}),

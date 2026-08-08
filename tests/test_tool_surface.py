@@ -37,8 +37,7 @@ CORE_TOOL_NAMES = {
     "delete_file_or_dir",
     "apply_patch",
     "secret_scan",
-    "todo_read_tool",
-    "todo_write_tool",
+    "plan_manage",
     "mcp_manage",
     "mcp_tool_search",
     "mcp_tool_inspect",
@@ -83,6 +82,8 @@ REMOVED_TOOL_NAMES = {
     "remote_list_machines",
     "remote_revoke_machine",
     "remote_rename_machine",
+    "todo_read_tool",
+    "todo_write_tool",
 }
 
 

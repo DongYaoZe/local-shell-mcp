@@ -89,8 +89,8 @@ Full setup instructions are in the [documentation](https://fwerkor.github.io/loc
 
 The service includes two compatible human interfaces backed by the same authenticated API and state:
 
-- **Web UI** is a native browser dashboard for system health, machines, workloads, recent MCP activity, alerts, and todos.
-- **OpenTUI** is the full terminal-oriented interface with Dashboard, Files, Terminals, Remotes, Audit, and Todos screens. It remains available in the browser as a selectable console and as the native `local-shell-mcp tui` command.
+- **Web UI** is a native browser dashboard for system health, machines, workloads, recent MCP activity, and alerts.
+- **OpenTUI** is the full terminal-oriented interface with Dashboard, Files, Terminals, Remotes, and Audit screens. It remains available in the browser as a selectable console and as the native `local-shell-mcp tui` command.
 
 Open the browser interface on the service origin:
 
@@ -115,6 +115,8 @@ See the [human interface guide](https://fwerkor.github.io/local-shell-mcp/guides
 For full shell, filesystem, remote-worker, and Playwright tools, use ChatGPT Developer Mode or another full MCP client. ChatGPT is a client connection; choose and start a runtime first.
 
 When the client supports MCP Apps, `open_live_workspace` can open the execution workspace as a floating MCP App and expand it to fullscreen when needed. Open it once for an active task; the app reconnects itself rather than requiring repeated tool calls. The workspace is always collaborative: ChatGPT and the human can operate the same terminal/files/remotes concurrently. Ordinary MCP tools remain the execution API, while the app adds live operational activity, persistent terminals, file/diff inspection, jobs, remotes, and audit data. Clients that do not render MCP Apps continue to use the normal tool surface unchanged.
+
+`plan_manage` optionally turns the current Live Workspace into **Goal mode** for substantial multi-step work. An active Plan is the goal: its steps are visible in the workspace, can be revised as execution changes, and are automatically continued when no agent tool activity has occurred for 15 minutes. Automatic continuation is capped at 10 attempts; blocked, completed, cancelled, or fully terminal Plans are never nudged. Short tasks should simply run without a Plan.
 
 1. Expose the server through HTTPS.
 2. Keep OAuth enabled.
@@ -169,7 +171,8 @@ The public MCP surface includes:
 - File links: `create_file_link`, `list_file_links`, `revoke_file_link`.
 - Remote workers: `remote_manage` with `invite`, `list`, `rename`, and `revoke` actions; normal execution tools accept optional `machine`.
 - Agent Skills: `skills_list`, `skill_load`, `skill_read_file`.
-- Diagnostics: `environment_info` (including version information), `secret_scan`, `audit_tail`, `todo_read_tool`, and `todo_write_tool`.
+- Planning: `plan_manage` for optional Live Workspace Goal mode and cross-turn continuation.
+- Diagnostics: `environment_info` (including version information), `secret_scan`, and `audit_tail`.
 
 The detailed tool reference, including purpose, inputs, returns, combinations, and notes for every tool, is available in the [docs](https://fwerkor.github.io/local-shell-mcp/reference/tools/).
 

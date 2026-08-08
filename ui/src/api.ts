@@ -9,8 +9,6 @@ import type {
   InvitePayload,
   MachinePayload,
   TerminalPayload,
-  TodoItem,
-  TodoPayload,
 } from "./types"
 
 const configuredBase = process.env.LOCAL_SHELL_MCP_UI_API_BASE || "http://127.0.0.1:8765/api/ui"
@@ -108,15 +106,6 @@ export const api = {
     return request(`/terminals/${encodeURIComponent(action)}`, {
       method: "POST",
       body: JSON.stringify(body),
-    })
-  },
-  todos(): Promise<TodoPayload> {
-    return request("/todos")
-  },
-  writeTodos(todos: TodoItem[], expectedRevision: number): Promise<TodoPayload> {
-    return request("/todos", {
-      method: "PUT",
-      body: JSON.stringify({ todos, expected_revision: expectedRevision }),
     })
   },
   audit(filters: Record<string, string | number | boolean | null | undefined>, signal?: AbortSignal): Promise<AuditPayload> {

@@ -53,6 +53,24 @@ type Machine = { name: string; status?: string; workdir?: string; version?: stri
 type TerminalSession = { session_id: string; backend?: string; created?: number; attached?: number; cwd?: string; name?: string }
 type FileEntry = { name: string; path: string; type: string; size?: number; modified?: number; hidden?: boolean }
 
+type PlanStep = { id: string; text: string; status: "pending" | "active" | "completed" | "skipped"; note?: string }
+type PlanState = {
+  plan_id: string
+  objective: string
+  status: "active" | "blocked" | "completed" | "cancelled"
+  steps: PlanStep[]
+  revision: number
+  note?: string | null
+  continuation_count: number
+  continuation_pending: boolean
+  last_agent_activity: number
+  execution_lease_s: number
+  continuation_due_at: number
+  continuation_due: boolean
+  max_continuations: number
+  auto_continue_exhausted: boolean
+}
+
 type LiveConfig = {
   token: string
   apiBase: string
@@ -71,7 +89,6 @@ type Dashboard = {
   session_count?: number
   activity?: JsonRecord[]
   alerts?: JsonRecord[]
-  todo_counts?: JsonRecord
   version?: JsonRecord
 }
 
@@ -98,6 +115,8 @@ let machines: Machine[] = []
 let lastPassiveRefresh = 0
 let passiveRefreshing = false
 let coreRefreshQueued = false
+let plan: PlanState | null = null
+let continuationChecking = false
 let activityExpandedEventKey = ""
 const activityAuditDetails = new Map<string, JsonRecord>()
 let activityDiscoveryInitialized = false
@@ -105,6 +124,7 @@ let knownActiveJobs = new Set<string>()
 let knownStandaloneSessions = new Set<string>()
 let shuttingDown = false
 let passiveRefreshTimer: number | null = null
+let planContinuationTimer: number | null = null
 
 let terminal: Terminal | null = null
 let fitAddon: FitAddon | null = null
@@ -305,6 +325,9 @@ async function handleAction(action: string, target: HTMLElement): Promise<void> 
     if (action === "expand") await requestDisplayMode(toggleWorkspaceDisplayMode(displayMode))
     else if (action === "refresh") await refreshCurrent(true)
     else if (action === "activity-ask") await askAboutLatestActivity()
+    else if (action === "plan-pause") await controlPlan("pause")
+    else if (action === "plan-resume") await controlPlan("resume")
+    else if (action === "plan-cancel") await controlPlan("cancel")
     else if (action === "activity-open-detail") await toggleActivityDetail(target.dataset.eventKey || "", target.dataset.callId || "")
     else if (action === "activity-open-terminal") {
       terminalMachine = target.dataset.machine || "local"
@@ -375,6 +398,20 @@ async function requestDisplayMode(mode: "fullscreen" | "pip"): Promise<void> {
   }
 }
 
+async function controlPlan(action: "pause" | "resume" | "cancel"): Promise<void> {
+  if (!config || !plan) return
+  const payload = await api<{ goal_mode: boolean; plan: PlanState }>("/api/live/plan", {
+    method: "POST",
+    body: JSON.stringify({ action }),
+  })
+  plan = payload.plan
+  renderCurrentTab()
+  notify(
+    action === "pause" ? "Goal paused" : action === "resume" ? "Goal resumed" : "Goal cancelled",
+    action === "cancel" ? "warning" : "success",
+  )
+}
+
 async function switchTab(next: string): Promise<void> {
   if (next === activeTab) return
   if (activeTab === "terminal") destroyTerminal()
@@ -414,6 +451,7 @@ function renderActivity(): void {
   mainNode().innerHTML = `
     <section class="view activity-view">
       <div class="view-toolbar"><div><h2>Operational activity</h2><p>What ChatGPT is doing in LSM, with direct paths to the relevant workspace view.</p></div><div class="toolbar-actions"><button class="button" data-action="activity-ask">${icon("chat")}Ask about latest</button><button class="button" data-action="refresh">${icon("refresh")}Refresh</button></div></div>
+      ${planCard()}
       ${activityFocusCards()}
       <div class="metric-row">
         <div><small>Current</small><strong>${running ? escapeHtml(activityIntent(running)) : dashboard?.jobs?.length ? "Background work" : dashboard?.sessions?.length ? "Terminal ready" : "Idle"}</strong><span>${running ? escapeHtml(eventDetail(running) || "running") : dashboard?.jobs?.length ? escapeHtml(String(dashboard.jobs[0]?.name || dashboard.jobs[0]?.job_id || "job")) : dashboard?.sessions?.length ? escapeHtml(String(dashboard.sessions[0]?.name || dashboard.sessions[0]?.session_id || "session")) : "Ready"}</span></div>
@@ -425,6 +463,22 @@ function renderActivity(): void {
         <div class="panel-head"><strong>Timeline</strong><span>${recent.length} recent events</span></div>
         <div class="timeline">${recent.length ? recent.map(activityRow).join("") : '<div class="empty-state">No execution activity yet. Start a task and this view will follow it.</div>'}</div>
       </div>
+    </section>`
+}
+
+function planCard(): string {
+  if (!plan || !["active", "blocked"].includes(plan.status)) return ""
+  const completed = plan.steps.filter((step) => step.status === "completed" || step.status === "skipped").length
+  const continuation = plan.auto_continue_exhausted
+    ? `Auto continue stopped at ${plan.continuation_count}/${plan.max_continuations}`
+    : `Auto continue ${plan.continuation_count}/${plan.max_continuations} · ${Math.round(plan.execution_lease_s / 60)} min lease`
+  const status = plan.status === "blocked" ? "Needs you" : plan.continuation_pending ? "Continuing" : "Active"
+  return `
+    <section class="goal-card ${escapeHtml(plan.status)}">
+      <div class="goal-head"><div><small>Goal</small><strong>${escapeHtml(plan.objective)}</strong></div><span class="goal-status">${escapeHtml(status)}</span></div>
+      ${plan.note ? `<p class="goal-note">${escapeHtml(plan.note)}</p>` : ""}
+      <div class="plan-steps">${plan.steps.map((step) => `<div class="plan-step ${escapeHtml(step.status)}"><span class="plan-step-mark">${step.status === "completed" ? "✓" : step.status === "skipped" ? "–" : step.status === "active" ? "→" : "○"}</span><div><strong>${escapeHtml(step.text)}</strong>${step.note ? `<small>${escapeHtml(step.note)}</small>` : ""}</div></div>`).join("")}</div>
+      <footer><span>${completed}/${plan.steps.length} steps complete</span><span>${escapeHtml(continuation)}</span><div class="goal-actions">${plan.status === "blocked" ? '<button class="button" data-action="plan-resume">Resume</button>' : '<button class="button" data-action="plan-pause">Pause</button>'}<button class="button danger" data-action="plan-cancel">Cancel</button></div></footer>
     </section>`
 }
 
@@ -1196,8 +1250,9 @@ function mergeEvents(incoming: LiveEvent[]): void {
 }
 
 async function loadSnapshot(generation: number): Promise<boolean> {
-  const payload = await api<{ channel: JsonRecord; events: LiveEvent[] }>("/api/live/snapshot")
+  const payload = await api<{ channel: JsonRecord & { plan?: PlanState | null }; events: LiveEvent[] }>("/api/live/snapshot")
   if (generation !== pollGeneration) return false
+  plan = payload.channel.plan || null
   events = payload.events || []
   cursor = Number(payload.channel.seq || events.at(-1)?.seq || 0)
   connected = true
@@ -1209,14 +1264,75 @@ async function loadSnapshot(generation: number): Promise<boolean> {
 
 async function pollEvents(generation: number): Promise<void> {
   while (!shuttingDown && config && generation === pollGeneration) {
-    const payload = await api<{ events: LiveEvent[]; cursor: number }>(`/api/live/events?after=${cursor}&timeout=25`)
+    const payload = await api<{ events: LiveEvent[]; cursor: number; plan?: PlanState | null }>(`/api/live/events?after=${cursor}&timeout=25`)
     if (generation !== pollGeneration) return
+    plan = payload.plan || null
     mergeEvents(payload.events || [])
     cursor = Math.max(cursor, Number(payload.cursor || 0))
     connected = true
     connectionMessage = "Live"
     updateChrome()
     if (payload.events?.some((event) => ["tool.completed", "tool.failed", "human.action"].includes(event.type)) && Date.now() - lastPassiveRefresh > 1500) void refreshAllCore()
+  }
+}
+
+async function checkPlanContinuation(): Promise<void> {
+  if (!config || continuationChecking) return
+  continuationChecking = true
+  try {
+    const claim = await api<{ claimed: boolean; plan?: PlanState | null; recent_events?: LiveEvent[]; continuation_count?: number }>("/api/live/plan/continuation", {
+      method: "POST",
+      body: JSON.stringify({ action: "claim" }),
+    })
+    plan = claim.plan || plan
+    if (!claim.claimed || !plan) {
+      if (activeTab === "activity") renderActivity()
+      return
+    }
+
+    const recent = claim.recent_events || []
+    const attempt = Number(claim.continuation_count || plan.continuation_count + 1)
+    const checkpoint = {
+      objective: plan.objective,
+      status: plan.status,
+      steps: plan.steps,
+      continuation: `${attempt}/${plan.max_continuations}`,
+      recentActivity: recent,
+    }
+    let accepted = false
+    let error = ""
+    try {
+      await app.updateModelContext({
+        content: [{ type: "text", text: `Active local-shell-mcp Goal checkpoint:\n${truncateContext(JSON.stringify(checkpoint, null, 2), 20_000)}` }],
+        structuredContent: { localShellMcpPlan: plan, localShellMcpRecentActivity: recent },
+      })
+      const response = await app.sendMessage({
+        role: "user",
+        content: [{ type: "text", text: 'Continue working on the active plan from its current state. Do not repeat completed steps. Keep working autonomously and keep the Plan state synchronized with your execution: use plan_manage(action="update") whenever step status or the execution plan changes; when every step is completed or skipped, you must call plan_manage(action="finish") before ending the turn; if you genuinely cannot continue without user input or an external condition, you must call plan_manage(action="block", note=...) before ending the turn. Do not merely state completion or blockage in natural language without updating the Plan.' }],
+      })
+      const result = response as unknown as JsonRecord
+      accepted = result?.isError !== true
+      if (!accepted) error = String(result?.message || "Host rejected the continuation message")
+    } catch (sendError) {
+      error = sendError instanceof Error ? sendError.message : String(sendError)
+    }
+
+    try {
+      const report = await api<{ plan: PlanState }>("/api/live/plan/continuation", {
+        method: "POST",
+        body: JSON.stringify({ action: "report", accepted, error: error || null }),
+      })
+      plan = report.plan
+    } catch (reportError) {
+      console.warn("Unable to report plan continuation result", reportError)
+    }
+    if (accepted) notify(`Goal continuation ${plan?.continuation_count || attempt}/${plan?.max_continuations || ""} sent`, "success")
+    else if (error) console.warn("Goal continuation was not accepted", error)
+    if (activeTab === "activity") renderActivity()
+  } catch (error) {
+    console.warn("Goal continuation check failed", error)
+  } finally {
+    continuationChecking = false
   }
 }
 
@@ -1235,6 +1351,7 @@ async function runConnectionLoop(generation: number): Promise<void> {
       if (generation !== pollGeneration) return
       attempt = 0
       announcedRetry = false
+      void checkPlanContinuation()
       await pollEvents(generation)
       return
     } catch (caught) {
@@ -1476,6 +1593,10 @@ function stopLiveWorkspace(): void {
     window.clearInterval(passiveRefreshTimer)
     passiveRefreshTimer = null
   }
+  if (planContinuationTimer !== null) {
+    window.clearInterval(planContinuationTimer)
+    planContinuationTimer = null
+  }
 }
 
 app.onteardown = async () => {
@@ -1511,6 +1632,10 @@ void (async () => {
 passiveRefreshTimer = window.setInterval(() => {
   if (!shuttingDown && config && Date.now() - lastPassiveRefresh > 6_000) void refreshAllCore()
 }, 6_000)
+
+planContinuationTimer = window.setInterval(() => {
+  if (!shuttingDown && config) void checkPlanContinuation()
+}, 30_000)
 
 window.addEventListener("beforeunload", () => {
   stopLiveWorkspace()

@@ -46,7 +46,6 @@ from .settings import get_settings
 from .shell_environment import subprocess_env
 from .shell_ops import kill_shell, list_shells, read_shell, resize_shell, send_shell, start_shell
 from .tmux_helper import resolve_tmux, tmux_socket_name
-from .todo_ops import TodoConflictError, todo_read, todo_write
 from .tui_runtime import materialize_embedded_tui
 from .ui_security import UI_LOCAL_TOKEN_ENV, get_or_create_ui_local_token
 from .version import version_info
@@ -358,7 +357,6 @@ _AUDIT_FILE_WRITE_TOOLS = frozenset(
         "edit_file",
         "delete_file_or_dir",
         "apply_patch",
-        "todo_write_tool",
     }
 )
 _AUDIT_EXECUTE_TOOLS = frozenset(
@@ -717,15 +715,11 @@ async def api_bootstrap(request: Request) -> Response:
     if settings.remote_enabled:
         required.append("remote:use")
     _require_ui_scopes(request, *required)
-    machines, todos = await asyncio.gather(
-        asyncio.to_thread(_machine_rows),
-        asyncio.to_thread(todo_read),
-    )
+    machines = await asyncio.to_thread(_machine_rows)
     return _json_ok(
         {
             "version": version_info(),
             "machines": machines,
-            "todos": todos,
             "features": {
                 "remote": settings.remote_enabled,
                 "wallpaper": settings.ui_wallpaper,
@@ -748,19 +742,6 @@ async def api_dashboard(request: Request) -> Response:
     )
 
     source_alerts: list[dict[str, Any]] = []
-    try:
-        todos = await asyncio.to_thread(todo_read)
-    except Exception as exc:
-        _LOGGER.debug("Dashboard todo snapshot failed", exc_info=True)
-        todos = {"revision": 0, "todos": []}
-        source_alerts.append(
-            {
-                "severity": "warning",
-                "title": "Todo data unavailable",
-                "detail": f"{type(exc).__name__}: {exc}",
-                "node": "local",
-            }
-        )
     with suppress_audit():
         try:
             terminals = await _machine_dispatch(machine, list_shells, "shell_list", {})
@@ -834,7 +815,6 @@ async def api_dashboard(request: Request) -> Response:
     standalone_sessions = [
         session for session in sessions if str(session.get("session_id") or "") not in job_session_ids
     ]
-    open_todos = [item for item in list(todos.get("todos") or []) if item.get("status") != "completed"]
     severity_rank = {"info": 0, "warning": 1, "critical": 2}
     alerts.sort(
         key=lambda alert: severity_rank.get(str(alert.get("severity")), 0),
@@ -860,10 +840,6 @@ async def api_dashboard(request: Request) -> Response:
             "alerts": alerts[:12],
             "activity": _dashboard_activity(audit_entries),
             "audit_total_24h": int(audit_payload.get("total_matched") or 0),
-            "todo_counts": {
-                "total": len(list(todos.get("todos") or [])),
-                "open": len(open_todos),
-            },
         }
     )
 
@@ -1218,28 +1194,6 @@ async def api_terminal_action(request: Request) -> Response:
     except Exception as exc:
         return _json_error(exc)
 
-
-async def api_todos(request: Request) -> Response:
-    try:
-        if request.method == "GET":
-            _require_ui_scopes(request, "shell:read")
-            return _json_ok(await asyncio.to_thread(todo_read))
-        _require_ui_scopes(request, "shell:read", "shell:write")
-        live_id = _require_live_human_mutation(request)
-        body = await request.json()
-        expected_revision = body.get("expected_revision")
-        with suppress_audit():
-            result = await asyncio.to_thread(
-                todo_write,
-                list(body.get("todos") or []),
-                int(expected_revision) if expected_revision is not None else None,
-            )
-        _record_live_human_action(live_id, "todo.write")
-        return _json_ok(result)
-    except TodoConflictError as exc:
-        return _json_error(exc, status_code=409)
-    except Exception as exc:
-        return _json_error(exc)
 
 
 async def api_audit(request: Request) -> Response:
@@ -2175,7 +2129,6 @@ def ui_routes() -> list[Any]:
         Route(UI_API_PREFIX + "/terminals", api_terminals, methods=["GET"]),
         Route(UI_API_PREFIX + "/terminals/read", api_terminal_read, methods=["GET"]),
         Route(UI_API_PREFIX + "/terminals/{action}", api_terminal_action, methods=["POST"]),
-        Route(UI_API_PREFIX + "/todos", api_todos, methods=["GET", "PUT"]),
         Route(UI_API_PREFIX + "/audit", api_audit, methods=["GET"]),
         Route(UI_API_PREFIX + "/audit/detail", api_audit_detail, methods=["GET"]),
         Route(UI_API_PREFIX + "/remotes", api_remotes, methods=["GET", "POST"]),

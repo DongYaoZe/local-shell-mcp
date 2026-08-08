@@ -151,8 +151,6 @@ async def test_all_public_tool_wrappers_local_and_remote(tmp_path, monkeypatch):
         "write_text",
         "edit_text",
         "delete_path",
-        "todo_read",
-        "todo_write",
     ):
         monkeypatch.setattr(tools, name, sync_value)
 
@@ -198,8 +196,7 @@ async def test_all_public_tool_wrappers_local_and_remote(tmp_path, monkeypatch):
         "apply_patch": {"patch": "diff", "purpose": "test"},
         "remote_transfer": {"source_path": "a", "destination_path": "b", "destination_machine": "node", "purpose": "test"},
         "secret_scan": {},
-        "todo_read_tool": {},
-        "todo_write_tool": {"todos": []},
+        "plan_manage": {"action": "get"},
         "mcp_manage": {"action": "list"},
         "mcp_tool_search": {},
         "mcp_tool_inspect": {"name": "missing:tool"},
@@ -309,8 +306,6 @@ async def test_tool_wrapper_error_paths_and_remote_disabled(tmp_path, monkeypatc
     monkeypatch.setattr(tools, "_apply_patch_text", fail_async)
     monkeypatch.setattr(tools, "_start_transfer_job", fail_async)
     monkeypatch.setattr(tools, "_secret_scan", fail_async)
-    monkeypatch.setattr(tools, "todo_read", fail_sync)
-    monkeypatch.setattr(tools, "todo_write", fail_sync)
     monkeypatch.setattr(tools, "playwright_run_script", fail_async)
     monkeypatch.setattr(tools, "_read_audit_tail_entries", fail_sync)
     fake_remote = FakeRemoteManager()
@@ -345,8 +340,6 @@ async def test_tool_wrapper_error_paths_and_remote_disabled(tmp_path, monkeypatc
         ("apply_patch", {"patch": "x"}),
         ("remote_transfer", {"source_path": "a", "destination_path": "b"}),
         ("secret_scan", {}),
-        ("todo_read_tool", {}),
-        ("todo_write_tool", {"todos": []}),
         ("browser_run_script", {"script": "x"}),
         ("audit_tail", {}),
     ]

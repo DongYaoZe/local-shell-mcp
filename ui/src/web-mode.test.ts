@@ -24,7 +24,7 @@ describe("WebUI mode routing", () => {
   test("rejects unknown routes and emits canonical hashes", () => {
     expect(viewFromHash("")).toBeNull()
     expect(viewFromHash("#/unknown")).toBeNull()
-    expect(hashForView("todos")).toBe("#/todos")
+    expect(hashForView("audit")).toBe("#/audit")
   })
 
   test("maps views to the corresponding interface", () => {
@@ -34,7 +34,7 @@ describe("WebUI mode routing", () => {
   })
 
   test("preserves compatible bookmarks without overriding an explicit interface choice", () => {
-    expect(oauthReturnView("#/todos", "overview")).toBe("todos")
+    expect(oauthReturnView("#/audit", "overview")).toBe("audit")
     expect(oauthReturnView("#/console", "overview")).toBe("overview")
     expect(oauthReturnView("#/overview", "console")).toBe("console")
   })

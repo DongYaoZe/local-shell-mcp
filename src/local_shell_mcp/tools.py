@@ -98,7 +98,6 @@ from .skill_ops import (
     read_installed_skill_file,
 )
 from .tmux_helper import persistent_shell_backend_info
-from .todo_ops import todo_read, todo_write
 from .transfer_ops import (
     DEFAULT_TRANSFER_CHUNK_BYTES,
     normalize_chunk_size,
@@ -312,7 +311,6 @@ NON_CANCELLABLE_TOOL_NAMES = frozenset(
         "delete_file_or_dir",
         "apply_patch",
         "remote_transfer",
-        "todo_write_tool",
         "mcp_tool_call",
     }
 )
@@ -797,6 +795,7 @@ READ_ONLY_OPEN_WORLD_TOOL_NAMES = {
 NON_DESTRUCTIVE_MUTATION_TOOL_NAMES = {
     "create_file_link",
     "open_live_workspace",
+    "plan_manage",
 }
 
 
@@ -2259,15 +2258,28 @@ def _register_maintenance_tools(mcp: FastMCP, read_only_tool: ToolAnnotations) -
         """Scan local workspace text files for common secrets before commit or push."""
         return await _tool_call(_secret_scan, cwd, glob, max_results)
 
-    @mcp.tool(structured_output=True, annotations=read_only_tool, meta=shell_read_meta)
-    async def todo_read_tool() -> ToolResult:
-        """Read the local agent todo list."""
-        return await _tool_call(asyncio.to_thread, todo_read)
-
     @mcp.tool(structured_output=True, meta=shell_write_meta)
-    async def todo_write_tool(todos: list[dict]) -> ToolResult:
-        """Write the local agent todo list."""
-        return await _tool_call(asyncio.to_thread, todo_write, todos)
+    async def plan_manage(
+        action: str,
+        objective: str | None = None,
+        steps: list[dict[str, Any]] | None = None,
+        step_id: str | None = None,
+        status: str | None = None,
+        text: str | None = None,
+        note: str | None = None,
+    ) -> ToolResult:
+        """Manage the current Live Workspace plan. An active plan enables Goal mode and automatic continuation after 15 minutes without agent tool activity, capped at 10 accepted continuation messages. Use action=start only for substantial multi-step work that should continue across ChatGPT turns; short tasks should not create a plan. Goal mode requires open_live_workspace first. Actions: start, get, update, block, resume, finish, cancel. start requires objective and steps; update may replace steps or update one step by step_id; block requires note; finish requires every step to be completed or skipped."""
+        return await _tool_call(
+            get_live_channel_manager().manage_plan,
+            mcp_session_key(mcp),
+            action=action,
+            objective=objective,
+            steps=steps,
+            step_id=step_id,
+            status=status,
+            text=text,
+            note=note,
+        )
 
     @mcp.tool(structured_output=True, annotations=read_only_tool, meta=shell_read_meta)
     async def audit_tail(lines: int = 100) -> ToolResult:

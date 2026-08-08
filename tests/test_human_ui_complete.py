@@ -379,7 +379,7 @@ def test_remote_dispatch_machine_rows_and_errors(tmp_path, monkeypatch):
     assert ui._machine_uses_windows_paths("win-node") is False
 
 
-def test_remote_file_terminal_todo_audit_and_admin_routes(tmp_path, monkeypatch):
+def test_remote_file_terminal_audit_and_admin_routes(tmp_path, monkeypatch):
     _configure(tmp_path, monkeypatch, remote=True)
     manager = FakeRemoteManager()
     monkeypatch.setattr(ui, "remote_manager", lambda: manager)
@@ -482,8 +482,6 @@ def test_remote_file_terminal_todo_audit_and_admin_routes(tmp_path, monkeypatch)
         "/api/ui/terminals/unknown", json={"machine": "win-node"}
     ).status_code == 400
 
-    monkeypatch.setattr(ui, "todo_read", lambda: (_ for _ in ()).throw(RuntimeError("todo")))
-    assert client.get("/api/ui/todos").status_code == 400
     assert client.get("/api/ui/audit", params={"limit": "bad"}).status_code == 400
 
     listing = client.get("/api/ui/remotes")
@@ -1289,7 +1287,6 @@ async def test_dashboard_dispatches_workloads_to_selected_remote(tmp_path, monke
     monkeypatch.setattr(ui, "_machine_dispatch", fake_dispatch)
     monkeypatch.setattr(ui, "_machine_rows", lambda: {"machines": []})
     monkeypatch.setattr(ui, "_local_system_snapshot", lambda: {})
-    monkeypatch.setattr(ui, "todo_read", lambda: {"revision": 0, "todos": []})
     monkeypatch.setattr(
         ui,
         "query_audit",

@@ -1,11 +1,11 @@
 # Human interface
 
-`local-shell-mcp` provides two compatible human interfaces on top of the same service API, workspace, persistent terminal registry, remote-worker registry, todo store, and MCP audit log:
+`local-shell-mcp` provides two compatible human interfaces on top of the same service API, workspace, persistent terminal registry, remote-worker registry, and MCP audit log:
 
 - **Web UI** is a native browser dashboard optimized for fast operational inspection.
 - **OpenTUI** is the full terminal-oriented application and remains available both inside the browser and as a native terminal command.
 
-Neither mode creates a separate control plane. Switching interfaces does not change the connected machines, sessions, jobs, todos, permissions, or audit data.
+Neither mode creates a separate control plane. Switching interfaces does not change the connected machines, sessions, jobs, permissions, or audit data.
 
 ## Start the service
 
@@ -47,7 +47,6 @@ Routes are bookmarkable:
 /ui/#/machines
 /ui/#/workloads
 /ui/#/activity
-/ui/#/todos
 /ui/#/console
 ```
 
@@ -67,7 +66,6 @@ Overview presents the highest-priority operational information first:
 - CPU, memory, workspace disk, load, network throughput, and uptime.
 - Alerts generated from worker state, resource thresholds, failed jobs, and failed MCP calls.
 - Recent model-originated MCP activity.
-- Open todo counts.
 
 ### Machines
 
@@ -80,10 +78,6 @@ Workloads combines active tracked jobs and standalone persistent shell sessions.
 ### Activity
 
 Activity combines current alerts with recent MCP audit activity. Human-entered commands and file operations remain excluded from the MCP audit log.
-
-### Todos
-
-Todos displays the persistent todo store shared with MCP. Full create, edit, status, priority, and deletion controls remain available in OpenTUI.
 
 ## Browser OpenTUI
 
@@ -138,10 +132,6 @@ Files is an LSM-native three-pane file manager for local and remote machines. It
 
 Terminals manages persistent shell sessions on local and remote machines. It supports complete-command input, raw interactive input, session switching, session creation and termination, recent output, and a collapsible MCP audit rail.
 
-### Todos
-
-Todos provides persistent create, edit, delete, filtering, status changes, and priority changes through the same todo store exposed to MCP.
-
 ### Audit
 
 Audit reads the bounded JSONL audit log and supports node, operation, event, session, search, time-range, and sort filters together with record-detail inspection.
@@ -156,8 +146,8 @@ The top category bar and contextual footer actions can be clicked with a mouse i
 
 | Keys | Action |
 |---|---|
-| `Alt+1` … `Alt+6` | Open Dashboard, Files, Terminals, Remotes, Audit, or Todos. |
-| `F2` … `F7` | Alternative category shortcuts. |
+| `Alt+1` … `Alt+5` | Open Dashboard, Files, Terminals, Remotes, or Audit. |
+| `F2` … `F6` | Alternative category shortcuts. |
 | `F1` | Open the keyboard guide. |
 | `F9` | Refresh the machine list. |
 | `Alt+Q` | Exit the native OpenTUI process without invoking a browser-reserved Ctrl shortcut. |

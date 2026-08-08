@@ -5,7 +5,6 @@ import {
   nextValue,
   payloadMatches,
   scopedItems,
-  updateTodo,
 } from "./state-utils"
 
 describe("clampIndex", () => {
@@ -39,17 +38,10 @@ describe("preview measurement", () => {
   })
 })
 
-describe("todo mutations", () => {
-  const todos = [{ id: "a", content: "A", status: "pending", priority: "medium" }]
-
+describe("ordered value cycling", () => {
   test("cycles unknown and known values safely", () => {
     expect(nextValue("pending", ["pending", "in_progress", "completed"] as const)).toBe("in_progress")
     expect(nextValue("unknown", ["low", "medium", "high"] as const)).toBe("low")
-  })
-
-  test("applies updates to the latest matching item", () => {
-    expect(updateTodo(todos, "a", (todo) => ({ content: `${todo.content}!` }))[0]!.content).toBe("A!")
-    expect(updateTodo(todos, "missing", { content: "ignored" })).toEqual(todos)
   })
 })
 

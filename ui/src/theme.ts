@@ -43,11 +43,6 @@ export const screenTheme = {
     selected: "#352846",
     panel: "#1d1829",
   },
-  Todos: {
-    accent: theme.orange,
-    selected: "#44351f",
-    panel: "#251f15",
-  },
   Audit: {
     accent: theme.pink,
     selected: "#46283b",

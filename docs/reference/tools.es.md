@@ -10,7 +10,7 @@ Esta página es una vista general localizada de las herramientas. Los nombres de
 
 ### Environment / audit / task state
 
-`environment_info`, `audit_tail`, `todo_read_tool`, `todo_write_tool`, `secret_scan`
+`environment_info`, `audit_tail`, `plan_manage`, `secret_scan`
 
 ### Skills
 

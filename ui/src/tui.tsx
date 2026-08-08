@@ -11,7 +11,6 @@ import { forceFullRepaint } from "./repaint"
 import { RemotesScreen } from "./remotes-screen"
 import { TerminalsScreen } from "./terminals-screen"
 import { theme } from "./theme"
-import { TodosScreen } from "./todos-screen"
 import type { BootstrapPayload, Machine, ScreenName } from "./types"
 
 function Help({ close }: { close: () => void }) {
@@ -21,7 +20,7 @@ function Help({ close }: { close: () => void }) {
   return (
     <Modal title="Keyboard guide" width={82} height={22}>
       <text fg={theme.cyan} attributes={1} content="Global navigation" />
-      <text fg={theme.muted} content="Alt+1…6  switch top-level screen (F2…F7 also work)" />
+      <text fg={theme.muted} content="Alt+1…5  switch top-level screen (F2…F6 also work)" />
       <text fg={theme.muted} content="F9        refresh machine list" />
       <text fg={theme.muted} content="Alt+Q     quit the TUI" />
       <text fg={theme.muted} content="F1        show this guide" />
@@ -124,8 +123,8 @@ function App() {
     }
     if (help || interactionLocked) return
     if (key.name === "f1") setHelp(true)
-    else if ((key.option || key.meta) && /^[1-6]$/.test(key.name)) setScreen(SCREENS[Number(key.name) - 1]!)
-    else if (/^f[2-7]$/.test(key.name)) setScreen(SCREENS[Number(key.name.slice(1)) - 2]!)
+    else if ((key.option || key.meta) && /^[1-5]$/.test(key.name)) setScreen(SCREENS[Number(key.name) - 1]!)
+    else if (/^f[2-6]$/.test(key.name)) setScreen(SCREENS[Number(key.name.slice(1)) - 2]!)
     else if (key.name === "f9") void loadBootstrap()
   })
 
@@ -168,16 +167,6 @@ function App() {
         height={contentHeight}
         setStatus={setStatus}
         onRawModeChange={setTerminalRawMode}
-        keyboardEnabled={!help}
-        onInteractionLockChange={setInteractionLocked}
-      />
-    )
-  } else if (screen === "Todos") {
-    content = (
-      <TodosScreen
-        width={contentWidth}
-        height={contentHeight}
-        setStatus={setStatus}
         keyboardEnabled={!help}
         onInteractionLockChange={setInteractionLocked}
       />

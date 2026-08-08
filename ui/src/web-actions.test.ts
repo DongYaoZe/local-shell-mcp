@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 
-const nativePages = ["files", "terminals", "remotes", "audit", "todos"] as const
+const nativePages = ["files", "terminals", "remotes", "audit"] as const
 
 describe("Native WebUI actions", () => {
   test("uses visible controls instead of shortcut footers", async () => {
@@ -13,7 +13,7 @@ describe("Native WebUI actions", () => {
 
   test("does not register document-wide single-key actions on ordinary WebUI pages", async () => {
     const sources = await Promise.all(
-      ["files", "remotes", "audit", "todos"].map((page) => Bun.file(new URL(`./web-native/${page}.ts`, import.meta.url)).text()),
+      ["files", "remotes", "audit"].map((page) => Bun.file(new URL(`./web-native/${page}.ts`, import.meta.url)).text()),
     )
 
     for (const source of sources) expect(source).not.toContain('this.listen(document, "keydown"')

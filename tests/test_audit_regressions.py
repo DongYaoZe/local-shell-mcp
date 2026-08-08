@@ -20,7 +20,6 @@ import local_shell_mcp.jobs as jobs_module
 import local_shell_mcp.playwright_ops as playwright_module
 import local_shell_mcp.remote as remote_module
 import local_shell_mcp.tools as tools_module
-from local_shell_mcp.auth import required_scopes_for_http_tool
 from local_shell_mcp.fs_ops import edit_text, resolve_path
 from local_shell_mcp.http_app import build_http_app
 from local_shell_mcp.models import CommandResult
@@ -380,7 +379,7 @@ async def test_python_and_playwright_tools_honor_configured_interpreter_and_clea
     assert not stale.exists()
 
 
-def test_rest_validation_readiness_and_todo_scope(tmp_path, monkeypatch):
+def test_rest_validation_and_readiness(tmp_path, monkeypatch):
     _configure_workspace(tmp_path, monkeypatch)
     client = TestClient(build_http_app())
 
@@ -400,11 +399,6 @@ def test_rest_validation_readiness_and_todo_scope(tmp_path, monkeypatch):
     assert invalid_integer.status_code == 400
     assert invalid_integer.json()["error"] == "validation_error"
 
-    assert required_scopes_for_http_tool("/tools/todo", "GET") == ("shell:read",)
-    assert required_scopes_for_http_tool("/tools/todo", "POST") == (
-        "shell:read",
-        "shell:write",
-    )
 
 
 def test_secret_scan_fallback_respects_gitignore(tmp_path, monkeypatch):

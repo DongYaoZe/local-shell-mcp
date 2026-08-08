@@ -1,4 +1,4 @@
-export type ScreenName = "Dashboard" | "Files" | "Terminals" | "Remotes" | "Audit" | "Todos"
+export type ScreenName = "Dashboard" | "Files" | "Terminals" | "Remotes" | "Audit"
 
 export interface Machine {
   name: string
@@ -66,19 +66,6 @@ export interface TerminalPayload {
   sessions: TerminalSession[]
 }
 
-export interface TodoItem {
-  id: string
-  content: string
-  status: "pending" | "in_progress" | "completed" | string
-  priority: "low" | "medium" | "high" | string
-}
-
-export interface TodoPayload {
-  revision: number
-  updated_at?: number | null
-  todos: TodoItem[]
-}
-
 export interface AuditEntry {
   id?: string
   call_id?: string
@@ -124,7 +111,6 @@ export interface InvitePayload {
 export interface BootstrapPayload {
   version: Record<string, unknown>
   machines: MachinePayload
-  todos: TodoPayload
   features: {
     remote: boolean
     wallpaper: "bing" | "aurora" | "none" | string
@@ -188,7 +174,6 @@ export interface DashboardPayload {
   alerts: DashboardAlert[]
   activity: DashboardActivity[]
   audit_total_24h: number
-  todo_counts: { total: number; open: number }
 }
 
 export interface ApiEnvelope<T> {

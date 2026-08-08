@@ -132,17 +132,6 @@ def test_dashboard_api_returns_macro_snapshot(tmp_path, monkeypatch):
             "uptime_s": 3600,
         },
     )
-    monkeypatch.setattr(
-        ui,
-        "todo_read",
-        lambda: {
-            "revision": 1,
-            "todos": [
-                {"id": "a", "status": "pending"},
-                {"id": "b", "status": "completed"},
-            ],
-        },
-    )
 
     async def fake_shells():
         return {
@@ -196,7 +185,6 @@ def test_dashboard_api_returns_macro_snapshot(tmp_path, monkeypatch):
     assert [job["job_id"] for job in payload["jobs"]] == ["job-1"]
     assert [session["session_id"] for session in payload["sessions"]] == ["manual"]
     assert payload["session_count"] == 2
-    assert payload["todo_counts"] == {"total": 2, "open": 1}
     assert payload["audit_total_24h"] == 2
     assert any(alert["title"] == "remote-a is offline" for alert in payload["alerts"])
     assert any("MCP call failure" in alert["title"] for alert in payload["alerts"])
@@ -207,11 +195,6 @@ def test_dashboard_api_degrades_when_optional_sources_fail(tmp_path, monkeypatch
     _configure(tmp_path, monkeypatch)
     monkeypatch.setattr(ui, "_machine_rows", lambda: {"machines": [{"name": "local", "status": "online", "info": {}}], "counts": {"online": 1, "offline": 0, "total": 1}})
     monkeypatch.setattr(ui, "_local_system_snapshot", lambda: {"timestamp": 1, "disk_percent": 1})
-    monkeypatch.setattr(
-        ui,
-        "todo_read",
-        lambda: (_ for _ in ()).throw(RuntimeError("todos")),
-    )
 
     async def broken(*args, **kwargs):  # noqa: ANN002, ANN003
         raise RuntimeError("optional source unavailable")
@@ -229,7 +212,6 @@ def test_dashboard_api_degrades_when_optional_sources_fail(tmp_path, monkeypatch
     assert payload["sessions"] == []
     assert payload["activity"] == []
     assert {alert["title"] for alert in payload["alerts"]} == {
-        "Todo data unavailable",
         "Persistent sessions unavailable",
         "Tracked jobs unavailable",
         "Audit activity unavailable",
@@ -254,7 +236,6 @@ def test_dashboard_api_prioritizes_critical_alerts_before_truncation(tmp_path, m
         },
     )
     monkeypatch.setattr(ui, "_local_system_snapshot", lambda: {"timestamp": 1, "disk_percent": 96})
-    monkeypatch.setattr(ui, "todo_read", lambda: {"revision": 0, "todos": []})
     monkeypatch.setattr(ui, "list_shells", lambda: {"sessions": []})
 
     async def no_jobs(include_finished=True):  # noqa: ARG001

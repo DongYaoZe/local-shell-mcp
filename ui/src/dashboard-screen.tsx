@@ -131,7 +131,6 @@ function SummaryStrip({ payload, width }: { payload: DashboardPayload; width: nu
       <MetricCard title="Nodes" value={`${online}/${total}`} detail="online" color={theme.green} />
       <MetricCard title="Jobs" value={summaryValue(running)} detail="active" color={theme.blue} />
       {width >= 92 && <MetricCard title="Sessions" value={summaryValue(payload.session_count)} detail="persistent" color={theme.magenta} />}
-      {width >= 118 && <MetricCard title="Todos" value={summaryValue(payload.todo_counts.open)} detail="open" color={theme.orange} />}
       {full && <MetricCard title="Audit" value={summaryValue(payload.audit_total_24h)} detail="calls · 24h" color={theme.cyan} />}
       {full && <MetricCard title="Uptime" value={formatDuration(payload.system.uptime_s)} detail="controller" color={theme.muted} />}
     </box>
@@ -473,7 +472,6 @@ function QuickSystemInfo({ payload, width }: { payload: DashboardPayload; width:
     ["Load", String(payload.system.load_1m ?? "—")],
     ["Uptime", formatDuration(payload.system.uptime_s)],
     ["Sessions", String(payload.session_count)],
-    ["Open todos", String(payload.todo_counts.open)],
     ["Audit 24h", String(payload.audit_total_24h)],
   ]
   return (

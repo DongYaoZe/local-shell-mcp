@@ -192,6 +192,114 @@ async def test_live_workspace_expiry_publish_and_wait_paths():
     assert manager.by_id(channel.live_id) is None
 
 
+def test_plan_state_machine_and_auto_promotion():
+    manager = LiveChannelManager()
+    channel, _ = manager.open(
+        session_key="mcp:plan",
+        subject="user",
+        scopes=tuple(ALL_OAUTH_SCOPES),
+    )
+
+    started = manager.manage_plan(
+        "mcp:plan",
+        action="start",
+        objective="Make the change fully ready",
+        steps=[{"id": "inspect", "text": "Inspect"}, {"id": "test", "text": "Test"}],
+    )
+    assert started["goal_mode"] is True
+    assert [step["status"] for step in started["plan"]["steps"]] == ["active", "pending"]
+
+    updated = manager.manage_plan(
+        "mcp:plan",
+        action="update",
+        step_id="inspect",
+        status="completed",
+    )
+    assert [step["status"] for step in updated["plan"]["steps"]] == ["completed", "active"]
+
+    with pytest.raises(ValueError, match="unfinished steps"):
+        manager.manage_plan("mcp:plan", action="finish")
+
+    manager.manage_plan("mcp:plan", action="update", step_id="test", status="completed")
+    finished = manager.manage_plan("mcp:plan", action="finish", note="done")
+    assert finished["goal_mode"] is False
+    assert finished["plan"]["status"] == "completed"
+    assert channel.plan is not None
+
+
+def test_plan_requires_live_workspace_and_block_stops_continuation():
+    manager = LiveChannelManager()
+    with pytest.raises(ValueError, match="open_live_workspace"):
+        manager.manage_plan(
+            "mcp:missing",
+            action="start",
+            objective="Long task",
+            steps=[{"text": "Do work"}],
+        )
+
+    channel, _ = manager.open(
+        session_key="mcp:block",
+        subject="user",
+        scopes=tuple(ALL_OAUTH_SCOPES),
+    )
+    manager.manage_plan(
+        "mcp:block",
+        action="start",
+        objective="Long task",
+        steps=[{"text": "Do work"}],
+    )
+    assert channel.plan is not None
+    channel.plan.last_agent_activity = time.time() - live_channel_module.PLAN_EXECUTION_LEASE_S - 1
+    assert manager.claim_plan_continuation(channel) is not None
+    manager.report_plan_continuation(channel, accepted=True)
+
+    manager.manage_plan("mcp:block", action="block", note="Need user input")
+    channel.plan.last_agent_activity = time.time() - live_channel_module.PLAN_EXECUTION_LEASE_S - 1
+    assert manager.claim_plan_continuation(channel) is None
+
+    resumed = manager.manage_plan("mcp:block", action="resume")
+    assert resumed["plan"]["status"] == "active"
+    assert resumed["plan"]["continuation_due"] is False
+
+
+def test_plan_continuation_lease_rejection_and_hard_cap():
+    manager = LiveChannelManager()
+    channel, _ = manager.open(
+        session_key="mcp:continue",
+        subject="user",
+        scopes=tuple(ALL_OAUTH_SCOPES),
+    )
+    manager.manage_plan(
+        "mcp:continue",
+        action="start",
+        objective="Keep going until done",
+        steps=[{"id": "work", "text": "Work"}],
+    )
+    assert channel.plan is not None
+
+    channel.plan.last_agent_activity = time.time() - live_channel_module.PLAN_EXECUTION_LEASE_S + 1
+    assert manager.claim_plan_continuation(channel) is None
+
+    channel.plan.last_agent_activity = time.time() - live_channel_module.PLAN_EXECUTION_LEASE_S - 1
+    rejected = manager.claim_plan_continuation(channel)
+    assert rejected is not None
+    assert rejected["continuation_count"] == 1
+    manager.report_plan_continuation(channel, accepted=False, error="host busy")
+    assert channel.plan.continuation_count == 0
+
+    for expected in range(1, live_channel_module.PLAN_MAX_CONTINUATIONS + 1):
+        channel.plan.last_agent_activity = time.time() - live_channel_module.PLAN_EXECUTION_LEASE_S - 1
+        claim = manager.claim_plan_continuation(channel)
+        assert claim is not None
+        assert claim["continuation_count"] == expected
+        assert manager.claim_plan_continuation(channel) is None
+        manager.report_plan_continuation(channel, accepted=True)
+
+    channel.plan.last_agent_activity = time.time() - live_channel_module.PLAN_EXECUTION_LEASE_S - 1
+    assert manager.claim_plan_continuation(channel) is None
+    assert channel.plan.public_state()["auto_continue_exhausted"] is True
+
+
 def test_mcp_session_key_uses_request_session_identity():
     class Session:
         pass
@@ -357,6 +465,26 @@ def test_live_http_token_cors_and_collaborative_human_mutation(tmp_path, monkeyp
         invalid_cursor = client.get("/api/live/events?after=not-a-number", headers=headers)
         assert invalid_cursor.status_code == 400
         assert invalid_cursor.json()["message"] == "Invalid event cursor"
+
+        manager.manage_plan(
+            "mcp:http-test",
+            action="start",
+            objective="Exercise human goal controls",
+            steps=[{"id": "work", "text": "Do the work"}],
+        )
+        paused = client.post("/api/live/plan", headers=headers, json={"action": "pause"})
+        assert paused.status_code == 200
+        assert paused.json()["data"]["plan"]["status"] == "blocked"
+        resumed = client.post("/api/live/plan", headers=headers, json={"action": "resume"})
+        assert resumed.status_code == 200
+        assert resumed.json()["data"]["plan"]["status"] == "active"
+        cancelled = client.post("/api/live/plan", headers=headers, json={"action": "cancel"})
+        assert cancelled.status_code == 200
+        assert cancelled.json()["data"]["plan"]["status"] == "cancelled"
+        assert any(
+            event["type"] == "plan.cancelled" and event["actor"] == "human"
+            for event in channel.events
+        )
 
         written = client.post(
             "/api/ui/files/write",

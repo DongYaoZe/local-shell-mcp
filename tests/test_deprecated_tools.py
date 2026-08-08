@@ -100,3 +100,11 @@ async def test_removed_remote_surface_points_to_consolidated_tools() -> None:
     transfer = await mcp.call_tool("transfer_path", {})
     assert transfer["data"]["replacement"] == "remote_transfer"
     assert transfer["data"]["removed_in"] == "3.3.0"
+
+
+async def test_todo_tombstones_point_to_plan_manage() -> None:
+    mcp = DeprecatedToolFastMCP("test")
+    for name in ("todo_read_tool", "todo_write_tool"):
+        result = await mcp.call_tool(name, {})
+        assert result["data"]["replacement"] == "plan_manage"
+        assert result["data"]["removed_in"] == "3.3.0"

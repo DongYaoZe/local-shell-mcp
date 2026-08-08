@@ -120,8 +120,68 @@ async def live_events(request: Request) -> Response:
             {
                 "events": events,
                 "cursor": events[-1]["seq"] if events else after,
+                "plan": channel.plan.public_state() if channel.plan else None,
             }
         )
+    except Exception as exc:
+        return _error(exc)
+
+
+async def live_plan_control(request: Request) -> Response:
+    try:
+        principal, channel = _live_channel(request)
+        require_scopes(principal, ("shell:read", "shell:write"))
+        body = await request.json()
+        action = str(body.get("action") or "").strip().lower()
+        manager = get_live_channel_manager()
+        if action == "pause":
+            return _ok(
+                manager.manage_channel_plan(
+                    channel, action="block", note="Paused by user", actor="human"
+                )
+            )
+        if action == "resume":
+            return _ok(manager.manage_channel_plan(channel, action="resume", actor="human"))
+        if action == "cancel":
+            note = str(body.get("note") or "Cancelled by user").strip() or "Cancelled by user"
+            return _ok(
+                manager.manage_channel_plan(
+                    channel, action="cancel", note=note, actor="human"
+                )
+            )
+        raise HTTPException(status_code=400, detail="action must be pause, resume, or cancel")
+    except Exception as exc:
+        return _error(exc)
+
+
+async def live_plan_continuation(request: Request) -> Response:
+    try:
+        principal, channel = _live_channel(request)
+        require_scopes(principal, ("shell:read",))
+        body = await request.json()
+        action = str(body.get("action") or "claim").strip().lower()
+        manager = get_live_channel_manager()
+        if action == "claim":
+            claimed = manager.claim_plan_continuation(channel)
+            if claimed is None:
+                return _ok(
+                    {
+                        "claimed": False,
+                        "plan": channel.plan.public_state() if channel.plan else None,
+                    }
+                )
+            return _ok({"claimed": True, **claimed})
+        if action == "report":
+            accepted = bool(body.get("accepted"))
+            error = str(body.get("error") or "").strip() or None
+            return _ok(
+                {
+                    "plan": manager.report_plan_continuation(
+                        channel, accepted=accepted, error=error
+                    )
+                }
+            )
+        raise HTTPException(status_code=400, detail="action must be claim or report")
     except Exception as exc:
         return _error(exc)
 
@@ -199,5 +259,7 @@ def live_channel_routes() -> list[Any]:
     return [
         Route(LIVE_API_PREFIX + "/snapshot", live_snapshot, methods=["GET"]),
         Route(LIVE_API_PREFIX + "/events", live_events, methods=["GET"]),
+        Route(LIVE_API_PREFIX + "/plan", live_plan_control, methods=["POST"]),
+        Route(LIVE_API_PREFIX + "/plan/continuation", live_plan_continuation, methods=["POST"]),
         Route(LIVE_API_PREFIX + "/git", live_git, methods=["GET"]),
     ]

@@ -367,7 +367,6 @@ async def test_read_only_tools_have_read_only_hint(tmp_path, monkeypatch):
         "view_image",
         "list_file_links",
         "secret_scan",
-        "todo_read_tool",
         "audit_tail",
         "browser_snapshot",
     }
