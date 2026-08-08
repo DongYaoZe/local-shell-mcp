@@ -75,9 +75,14 @@ class LiveWorkspaceManager:
             if workspace.expires_at <= current
         ]
         for workspace_id in expired:
-            workspace = self._workspaces.pop(workspace_id, None)
-            if workspace and self._session_workspaces.get(workspace.session_key) == workspace_id:
-                self._session_workspaces.pop(workspace.session_key, None)
+            self._workspaces.pop(workspace_id, None)
+        if expired:
+            expired_ids = set(expired)
+            self._session_workspaces = {
+                session_key: workspace_id
+                for session_key, workspace_id in self._session_workspaces.items()
+                if workspace_id not in expired_ids
+            }
 
     def open(
         self,
@@ -86,6 +91,7 @@ class LiveWorkspaceManager:
         subject: str,
         scopes: tuple[str, ...],
         parent_expires_at: float | None = None,
+        workspace_id: str | None = None,
     ) -> tuple[LiveWorkspace, str]:
         now = time.time()
         expires_at = now + LIVE_TOKEN_TTL_S
@@ -95,8 +101,12 @@ class LiveWorkspaceManager:
         digest = self._digest(token)
         with self._lock:
             self._prune_locked(now)
-            workspace_id = self._session_workspaces.get(session_key)
-            workspace = self._workspaces.get(workspace_id or "")
+            session_workspace_id = self._session_workspaces.get(session_key)
+            workspace = self._workspaces.get(workspace_id or session_workspace_id or "")
+            if workspace_id and workspace is not None and workspace.subject != subject:
+                raise PermissionError("Live workspace belongs to a different principal")
+            if workspace_id and workspace is None:
+                raise LookupError("Live workspace is no longer available")
             if workspace is None:
                 workspace = LiveWorkspace(
                     workspace_id=uuid.uuid4().hex,
@@ -108,12 +118,11 @@ class LiveWorkspaceManager:
                     expires_at=expires_at,
                 )
                 self._workspaces[workspace.workspace_id] = workspace
-                self._session_workspaces[session_key] = workspace.workspace_id
-            else:
-                workspace.subject = subject
-                workspace.scopes = scopes
-                workspace.token_digest = digest
-                workspace.expires_at = expires_at
+            self._session_workspaces[session_key] = workspace.workspace_id
+            workspace.subject = subject
+            workspace.scopes = scopes
+            workspace.token_digest = digest
+            workspace.expires_at = expires_at
             self._publish_locked(
                 workspace,
                 "workspace.opened",

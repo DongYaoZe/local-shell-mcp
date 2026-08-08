@@ -1252,9 +1252,13 @@ function refreshLiveCredentials(structured: JsonRecord): Promise<void> {
     renderCurrentTab()
     const machine = String(structured.machine || "local")
     const cwd = String(structured.cwd || ".")
+    const workspaceId = String(structured.workspace_id || "")
+    if (!workspaceId) {
+      throw new Error("ChatGPT omitted the Live Workspace ID needed to recover app credentials")
+    }
     const response = await app.callServerTool({
       name: "open_live_workspace",
-      arguments: { machine, cwd },
+      arguments: { machine, cwd, workspace_id: workspaceId },
     })
     const responseStructured = (response.structuredContent || {}) as JsonRecord
     const hidden = response._meta?.["local-shell-mcp/live"] as JsonRecord | undefined

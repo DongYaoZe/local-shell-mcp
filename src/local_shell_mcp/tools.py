@@ -2525,6 +2525,7 @@ def _register_live_workspace_tools(
     async def open_live_workspace(
         machine: str | None = None,
         cwd: str = ".",
+        workspace_id: str | None = None,
     ) -> LiveWorkspaceResult:
         """Open or reuse the interactive Live Workspace for real-time human monitoring and collaboration. Use it for tasks where terminal output, files/diffs, jobs, remotes, audit activity, or human takeover would materially improve the workflow."""
         principal = current_principal()
@@ -2538,6 +2539,7 @@ def _register_live_workspace_tools(
             session_key=mcp_session_key(mcp),
             subject=subject,
             scopes=scopes,
+            workspace_id=workspace_id,
             parent_expires_at=(
                 float(principal.claims["exp"])
                 if principal is not None and principal.claims.get("exp") is not None

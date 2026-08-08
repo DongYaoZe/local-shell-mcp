@@ -73,6 +73,43 @@ def test_live_workspace_tokens_rotate_and_events_are_bounded():
     assert workspace.events[0]["seq"] == workspace.seq - LIVE_EVENT_LIMIT + 1
 
 
+def test_live_workspace_can_reattach_a_second_mcp_session_by_workspace_id():
+    manager = LiveWorkspaceManager()
+    workspace, first_token = manager.open(
+        session_key="mcp:model-session",
+        subject="user",
+        scopes=tuple(ALL_OAUTH_SCOPES),
+    )
+
+    attached, app_token = manager.open(
+        session_key="mcp:app-session",
+        subject="user",
+        scopes=tuple(ALL_OAUTH_SCOPES),
+        workspace_id=workspace.workspace_id,
+    )
+
+    assert attached is workspace
+    assert manager.active_for_session("mcp:model-session") is workspace
+    assert manager.active_for_session("mcp:app-session") is workspace
+    assert manager.authenticate(first_token) is None
+    assert manager.authenticate(app_token) is workspace
+
+    manager.publish_for_session(
+        "mcp:model-session",
+        "tool.completed",
+        data={"tool": "run_shell_tool", "call_id": "model-call"},
+    )
+    assert workspace.events[-1]["data"]["call_id"] == "model-call"
+
+    with pytest.raises(PermissionError, match="different principal"):
+        manager.open(
+            session_key="mcp:other-user",
+            subject="other",
+            scopes=tuple(ALL_OAUTH_SCOPES),
+            workspace_id=workspace.workspace_id,
+        )
+
+
 @pytest.mark.asyncio
 async def test_live_workspace_expiry_publish_and_wait_paths():
     manager = LiveWorkspaceManager()
