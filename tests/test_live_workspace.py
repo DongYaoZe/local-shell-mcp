@@ -567,3 +567,54 @@ def test_live_route_principal_falls_back_to_request_verification(monkeypatch):
     monkeypatch.setattr(live_routes, "current_principal", lambda: None)
     monkeypatch.setattr(live_routes, "verify_request", lambda _request: expected)
     assert live_routes._principal(request) is expected
+
+
+def test_live_route_generic_error_response():
+    response = live_routes._error(RuntimeError("boom"))
+    assert response.status_code == 400
+    assert b"boom" in response.body
+
+
+@pytest.mark.asyncio
+async def test_live_remote_git_shell_rejects_failed_and_invalid_payloads(monkeypatch):
+    class FakeRemote:
+        def __init__(self):
+            self.response = {"ok": False, "message": "remote failed"}
+
+        async def call(self, *args, **kwargs):  # noqa: ANN002, ANN003
+            return self.response
+
+    fake = FakeRemote()
+    monkeypatch.setattr(live_routes, "remote_manager", lambda: fake)
+
+    with pytest.raises(RuntimeError, match="remote failed"):
+        await live_routes._run_machine_shell(
+            "worker",
+            "git status --short --branch",
+            cwd=".",
+            timeout_s=15,
+            max_output_bytes=80_000,
+        )
+
+    fake.response = {"ok": True, "data": "not-a-dict"}
+    with pytest.raises(RuntimeError, match="invalid data"):
+        await live_routes._run_machine_shell(
+            "worker",
+            "git status --short --branch",
+            cwd=".",
+            timeout_s=15,
+            max_output_bytes=80_000,
+        )
+
+
+@pytest.mark.asyncio
+async def test_live_snapshot_returns_missing_token_error():
+    request = Request({"type": "http", "method": "GET", "path": "/api/live/snapshot", "headers": []})
+    request.state.principal = Principal(
+        email=None,
+        subject="user",
+        claims={"scope": "shell:read"},
+    )
+    response = await live_routes.live_snapshot(request)
+    assert response.status_code == 403
+    assert b"live-workspace token" in response.body
