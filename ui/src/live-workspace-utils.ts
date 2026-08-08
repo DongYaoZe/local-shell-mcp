@@ -8,6 +8,29 @@ export type LiveEvent = {
   data: Record<string, unknown>
 }
 
+type JsonRecord = Record<string, unknown>
+
+function jsonRecord(value: unknown): JsonRecord | null {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return null
+  return value as JsonRecord
+}
+
+export function toolResultFromOpenAiGlobals(globals: unknown): JsonRecord | null {
+  const openai = jsonRecord(globals)
+  if (!openai) return null
+
+  const metadata = jsonRecord(openai.toolResponseMetadata)
+  if (!metadata) return null
+
+  const envelope = jsonRecord(metadata.mcp_tool_result) || jsonRecord(metadata.call_tool_result)
+  if (!envelope) return null
+
+  if (jsonRecord(envelope.structuredContent)) return envelope
+
+  const structuredContent = jsonRecord(openai.toolOutput)
+  return structuredContent ? { ...envelope, structuredContent } : envelope
+}
+
 export function escapeHtml(value: unknown): string {
   return String(value ?? "")
     .replaceAll("&", "&amp;")

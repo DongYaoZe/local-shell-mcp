@@ -8,6 +8,7 @@ import {
   joinPath,
   parentPath,
   renderDiffHtml,
+  toolResultFromOpenAiGlobals,
   truncateContext,
   type LiveEvent,
 } from "./live-workspace-utils"
@@ -63,5 +64,43 @@ describe("live workspace utilities", () => {
     expect(value.startsWith("x".repeat(20))).toBeTrue()
     expect(value).toContain("truncated")
     expect(formatBytes(1024)).toBe("1.0 KiB")
+  })
+
+  test("ChatGPT compatibility globals preserve hidden live credentials", () => {
+    const result = toolResultFromOpenAiGlobals({
+      toolOutput: { workspace_id: "workspace-1", machine: "local", cwd: "." },
+      toolResponseMetadata: {
+        status: "finished",
+        mcp_tool_result: {
+          _meta: {
+            "local-shell-mcp/live": {
+              token: "secret-live-token",
+              apiBase: "https://lsm.example.test",
+            },
+          },
+        },
+      },
+    })
+
+    expect(result?._meta).toEqual({
+      "local-shell-mcp/live": {
+        token: "secret-live-token",
+        apiBase: "https://lsm.example.test",
+      },
+    })
+    expect(result?.structuredContent).toEqual({ workspace_id: "workspace-1", machine: "local", cwd: "." })
+  })
+
+  test("ChatGPT compatibility globals accept call_tool_result fallback", () => {
+    const result = toolResultFromOpenAiGlobals({
+      toolResponseMetadata: {
+        call_tool_result: {
+          _meta: { "local-shell-mcp/live": { token: "token", apiBase: "https://lsm.example.test" } },
+          structuredContent: { workspace_id: "workspace-2" },
+        },
+      },
+    })
+
+    expect(result?.structuredContent).toEqual({ workspace_id: "workspace-2" })
   })
 })

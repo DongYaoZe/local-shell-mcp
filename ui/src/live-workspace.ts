@@ -19,6 +19,7 @@ import {
   joinPath,
   parentPath,
   renderDiffHtml,
+  toolResultFromOpenAiGlobals,
   truncateContext,
   type ControlMode,
   type LiveEvent,
@@ -1045,6 +1046,14 @@ function configureFromToolResult(result: unknown): void {
     machine: String(structured.machine || "local"),
     cwd: String(structured.cwd || "."),
   }
+  if (
+    config
+    && config.token === nextConfig.token
+    && config.apiBase === nextConfig.apiBase
+    && config.workspaceId === nextConfig.workspaceId
+    && config.machine === nextConfig.machine
+    && config.cwd === nextConfig.cwd
+  ) return
   const targetChanged = !config || config.machine !== nextConfig.machine || config.cwd !== nextConfig.cwd
   if (targetChanged) resetWorkspaceTarget(nextConfig.machine, nextConfig.cwd)
   config = nextConfig
@@ -1082,8 +1091,25 @@ function applyHostContext(context: unknown): void {
   document.documentElement.dataset.displayMode = mode
 }
 
+type OpenAiGlobalsWindow = Window & {
+  openai?: unknown
+}
+
+function configureFromOpenAiGlobals(globals?: unknown): boolean {
+  const result = toolResultFromOpenAiGlobals(globals ?? (window as OpenAiGlobalsWindow).openai)
+  if (!result) return false
+  configureFromToolResult(result)
+  return true
+}
+
+function onOpenAiGlobalsChanged(event: Event): void {
+  const detail = (event as CustomEvent<{ globals?: unknown }>).detail
+  configureFromOpenAiGlobals(detail?.globals)
+}
+
 app.ontoolresult = (result) => configureFromToolResult(result)
 app.onhostcontextchanged = (context) => applyHostContext(context)
+window.addEventListener("openai:set_globals", onOpenAiGlobalsChanged)
 
 shell()
 
@@ -1091,6 +1117,7 @@ void (async () => {
   try {
     await app.connect()
     applyHostContext(app.getHostContext())
+    configureFromOpenAiGlobals()
   } catch (error) {
     connected = false
     connectionMessage = "Host bridge unavailable"
@@ -1107,5 +1134,6 @@ setInterval(() => {
 window.addEventListener("beforeunload", () => {
   pollGeneration += 1
   destroyTerminal()
+  window.removeEventListener("openai:set_globals", onOpenAiGlobalsChanged)
   void app.close()
 })
