@@ -124,7 +124,11 @@ def _escape(value: Any) -> str:
 
 async def generate() -> str:
     get_settings.cache_clear()
-    tools = {tool.name: tool for tool in await build_mcp().list_tools()}
+    tools = {
+        tool.name: tool
+        for tool in await build_mcp().list_tools()
+        if "model" in ((tool.meta or {}).get("ui", {}).get("visibility") or ["model", "app"])
+    }
     expected = {name for _title, names in GROUPS for name in names}
     if set(tools) != expected:
         missing = sorted(expected - set(tools))

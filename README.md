@@ -40,7 +40,7 @@ The intended safety boundary is the container or VM, not the host.
 | Remote workers | Control NAT, firewall, HPC, NPU, or lab machines that can only connect outward. |
 | Agent Skills | Discover, load, and read reusable `SKILL.md` workflows through three fixed tools without changing the MCP tool list. |
 | ChatGPT connector support | OAuth 2.1, `/mcp`, discovery controls, and ChatGPT-compatible tool schemas. |
-| ChatGPT Live Workspace | Render a native MCP App for real-time activity, terminal, files, diffs, jobs, remotes, audit, and human/agent shared control inside ChatGPT. |
+| ChatGPT Live Workspace | Render a native MCP App for real-time activity, terminal, files, diffs, jobs, remotes, audit, and direct human/agent collaboration inside ChatGPT. |
 | Safer operations | Workspace scoping, shell timeouts, output limits, environment filtering, audit logs, and secret scanning. |
 
 ## Quick start
@@ -114,7 +114,7 @@ See the [human interface guide](https://fwerkor.github.io/local-shell-mcp/guides
 
 For full shell, filesystem, remote-worker, and Playwright tools, use ChatGPT Developer Mode or another full MCP client. ChatGPT is a client connection; choose and start a runtime first.
 
-When the client supports MCP Apps, `open_live_workspace` can render the execution workspace directly in the conversation. It keeps ordinary MCP tools as the execution API while adding live operational activity, persistent terminals, file/diff inspection, jobs, remotes, audit data, and explicit **Observe / Collaborate / Take over** control modes. Clients that do not render MCP Apps continue to use the normal tool surface unchanged.
+When the client supports MCP Apps, `open_live_workspace` can open the execution workspace as a floating MCP App and expand it to fullscreen when needed. Open it once for an active task; the app reconnects itself rather than requiring repeated tool calls. The workspace is always collaborative: ChatGPT and the human can operate the same terminal/files/remotes concurrently. Ordinary MCP tools remain the execution API, while the app adds live operational activity, persistent terminals, file/diff inspection, jobs, remotes, and audit data. Clients that do not render MCP Apps continue to use the normal tool surface unchanged.
 
 1. Expose the server through HTTPS.
 2. Keep OAuth enabled.

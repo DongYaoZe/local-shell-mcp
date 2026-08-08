@@ -247,17 +247,17 @@ def verify_request(request: Request) -> Principal:
     if path.startswith((HUMAN_UI_API_PREFIX, LIVE_UI_API_PREFIX)):
         token = _extract_token(request)
         if token:
-            from .live_workspace import get_live_workspace_manager
+            from .live_channel import get_live_channel_manager
 
-            workspace = get_live_workspace_manager().authenticate(token)
-            if workspace is not None:
+            channel = get_live_channel_manager().authenticate(token)
+            if channel is not None:
                 return Principal(
                     email=None,
-                    subject=workspace.subject,
+                    subject=channel.subject,
                     claims={
-                        "auth": "live-workspace",
-                        "scope": " ".join(workspace.scopes),
-                        "live_workspace_id": workspace.workspace_id,
+                        "auth": "live-channel",
+                        "scope": " ".join(channel.scopes),
+                        "live_id": channel.live_id,
                     },
                 )
             if settings.auth_mode == "none":

@@ -56,7 +56,7 @@ LOCAL_SHELL_MCP_OAUTH_ACCESS_TOKEN_TTL_S=0
 
 ## Live Workspace MCP App
 
-支持 MCP Apps 的 ChatGPT 客户端可以直接在对话中渲染 `local-shell-mcp` 的交互式执行工作区。需要实时观察或人机协作时，可以让 ChatGPT 打开 Live Workspace，也可以由模型在合适的任务中调用 `open_live_workspace`。
+支持 MCP Apps 的 ChatGPT 客户端可以渲染 `local-shell-mcp` 的交互式执行工作区。需要实时观察或人机协作时，只需让 ChatGPT 为当前任务打开一次 Live Workspace；此后 App 会自行重连，不需要反复调用 `open_live_workspace`。
 
 Live Workspace 只展示可观察的执行状态和共享资源，不展示模型的私有推理过程：
 
@@ -68,15 +68,7 @@ Live Workspace 只展示可观察的执行状态和共享资源，不展示模�
 - **Remotes**：显示远端 worker；启用远端支持时可创建邀请、重命名或撤销 worker。
 - **Audit**：查看最近的结构化 MCP 审计记录。
 
-顶部控制开关明确区分执行控制权：
-
-| 模式 | ChatGPT 修改操作 | Live Workspace 中的人类修改操作 |
-|---|---:|---:|
-| **Observe** | 允许 | 只读 |
-| **Collaborate** | 允许 | 允许 |
-| **Take over** | 阻止 | 允许 |
-
-Take over 由 MCP 执行层强制实施，并非只依赖浏览器按钮。此时只读 MCP 工具仍然可用，因此 ChatGPT 可以继续检查状态和分析问题，而人类负责实际操作。切回 Collaborate 或 Observe 后即可解除接管。
+Live Workspace 始终采用协作模式：ChatGPT 与人类可以并行修改同一个工作区。宿主支持时默认以悬浮窗（PiP）打开，并可在悬浮窗与全屏之间来回切换；不再提供 Observe / Take over 状态。
 
 Files、Diff、Audit 和 Activity 视图可以通过 MCP Apps bridge 把选中的操作上下文发送到下一轮模型上下文。这些内容属于显式共享的上下文；UI 不会暴露或尝试重建模型的私有推理。
 
@@ -84,7 +76,7 @@ Files、Diff、Audit 和 Activity 视图可以通过 MCP Apps bridge 把选中�
 
 为了让终端和事件流保持低延迟，渲染后的 MCP App 会从 sandbox 直接连接到配置的服务源站。因此，`LOCAL_SHELL_MCP_PUBLIC_BASE_URL` 必须是 ChatGPT 浏览器可以访问的 HTTPS 源站地址。MCP 端点仍然是 `https://your-public-host.example.com/mcp`。
 
-打开工作区时会创建随机、短生命周期的 Live Workspace bearer token。该 token 只放在供渲染 App 使用的 MCP result metadata 中，不进入模型可见的 structured content，并且只会被 human/live UI API 接受。重新打开工作区会轮换 token。嵌入式 App 不使用浏览器 cookie 或环境中的隐式凭据。
+打开工作区时会签发随机、短生命周期的 Live Workspace bearer token。该 token 只放在供渲染 App 使用的 MCP result metadata 中，不进入模型可见的 structured content，并且只会被 human/live UI API 接受。App 使用同一个 `live_id` 自动重附着时会复用当前凭据，避免重连中的视图互相使 token 失效；显式再次调用 `open_live_workspace` 时仍会轮换 token。嵌入式 App 不使用浏览器 cookie 或环境中的隐式凭据。
 
 不支持 MCP Apps 的客户端可以忽略这些 UI metadata。所有普通 MCP 数据工具仍然可用，行为保持不变。
 

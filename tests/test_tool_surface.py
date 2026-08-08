@@ -50,6 +50,10 @@ CORE_TOOL_NAMES = {
     "audit_tail",
 }
 
+APP_ONLY_TOOL_NAMES = {
+    "live_workspace_reconnect",
+}
+
 REMOTE_DEPENDENT_TOOL_NAMES = {
     "remote_manage",
     "remote_transfer",
@@ -90,9 +94,16 @@ async def test_mcp_tool_surface_is_stable(tmp_path, monkeypatch):
 
     tools = {tool.name: tool for tool in await build_mcp().list_tools()}
 
-    assert set(tools) == CORE_TOOL_NAMES | REMOTE_DEPENDENT_TOOL_NAMES
+    assert set(tools) == CORE_TOOL_NAMES | REMOTE_DEPENDENT_TOOL_NAMES | APP_ONLY_TOOL_NAMES
     assert set(tools).isdisjoint(REMOVED_TOOL_NAMES)
     assert all(tool.outputSchema is not None for tool in tools.values())
+    model_visible = {
+        name
+        for name, tool in tools.items()
+        if "model" in (tool.meta.get("ui", {}).get("visibility") or ["model", "app"])
+    }
+    assert model_visible == CORE_TOOL_NAMES | REMOTE_DEPENDENT_TOOL_NAMES
+    assert tools["live_workspace_reconnect"].meta["ui"]["visibility"] == ["app"]
 
 
 @pytest.mark.asyncio
@@ -103,7 +114,7 @@ async def test_remote_admin_tools_can_be_disabled_from_surface(tmp_path, monkeyp
 
     tools = {tool.name for tool in await build_mcp().list_tools()}
 
-    assert tools == CORE_TOOL_NAMES
+    assert tools == CORE_TOOL_NAMES | APP_ONLY_TOOL_NAMES
     assert tools.isdisjoint(REMOTE_DEPENDENT_TOOL_NAMES)
 
 

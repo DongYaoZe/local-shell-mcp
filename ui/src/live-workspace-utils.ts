@@ -1,4 +1,4 @@
-export type ControlMode = "agent" | "shared" | "human"
+export type DisplayMode = "fullscreen" | "pip"
 
 export type LiveEvent = {
   seq: number
@@ -6,6 +6,29 @@ export type LiveEvent = {
   type: string
   actor: string
   data: Record<string, unknown>
+}
+
+type JsonRecord = Record<string, unknown>
+
+function jsonRecord(value: unknown): JsonRecord | null {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return null
+  return value as JsonRecord
+}
+
+export function toolResultFromOpenAiGlobals(globals: unknown): JsonRecord | null {
+  const openai = jsonRecord(globals)
+  if (!openai) return null
+
+  const metadata = jsonRecord(openai.toolResponseMetadata)
+  if (!metadata) return null
+
+  const envelope = jsonRecord(metadata.mcp_tool_result) || jsonRecord(metadata.call_tool_result)
+  if (!envelope) return null
+
+  if (jsonRecord(envelope.structuredContent)) return envelope
+
+  const structuredContent = jsonRecord(openai.toolOutput)
+  return structuredContent ? { ...envelope, structuredContent } : envelope
 }
 
 export function escapeHtml(value: unknown): string {
@@ -78,16 +101,68 @@ export function joinPath(parent: string, child: string): string {
   return `${parent.replace(/[\\/]+$/, "")}${separator}${child}`
 }
 
-export function controlLabel(mode: ControlMode): string {
-  if (mode === "shared") return "Collaborate"
-  if (mode === "human") return "Take over"
-  return "Observe"
+export function toggleWorkspaceDisplayMode(current: DisplayMode): DisplayMode {
+  return current === "fullscreen" ? "pip" : "fullscreen"
 }
 
-export function controlDescription(mode: ControlMode): string {
-  if (mode === "shared") return "You and ChatGPT can both operate LSM."
-  if (mode === "human") return "Human has write control; ChatGPT remains read-only."
-  return "ChatGPT operates; human controls are read-only."
+export function reconnectDelayMs(attempt: number): number {
+  const exponent = Math.min(5, Math.max(0, Math.floor(attempt)))
+  return Math.min(15_000, 500 * (2 ** exponent))
+}
+
+export function activityEventKey(event: LiveEvent): string {
+  return String(event.seq)
+}
+
+export function isOperationalActivityEvent(event: LiveEvent): boolean {
+  if (event.type === "channel.opened") return false
+  if (event.type === "human.action" && event.data.action === "terminal.input") return false
+  return !["open_live_workspace", "live_workspace_reconnect"].includes(String(event.data.tool || ""))
+}
+
+export function activityIntent(event: LiveEvent): string {
+  const tool = String(event.data.tool || "")
+  const purpose = typeof event.data.purpose === "string" ? event.data.purpose.trim() : ""
+  const path = typeof event.data.path === "string" ? event.data.path : ""
+  const name = typeof event.data.name === "string" ? event.data.name : ""
+  if (purpose) return purpose
+  if (tool === "run_shell_tool") return "Running command"
+  if (tool === "shell_start") return name ? `Opening ${name}` : "Opening terminal"
+  if (tool === "shell_send") return "Sending terminal input"
+  if (tool === "shell_read") return "Reading terminal output"
+  if (tool === "shell_kill") return "Closing terminal"
+  if (tool === "job_start") return name ? `Starting ${name}` : "Starting background job"
+  if (tool === "job_tail") return "Reading job output"
+  if (tool === "job_stop") return "Stopping background job"
+  if (tool === "job_retry") return "Retrying background job"
+  if (tool === "remote_transfer") return "Transferring files"
+  if (tool === "read_file") return path ? `Reading ${basename(path)}` : "Reading file"
+  if (tool === "write_file") return path ? `Writing ${basename(path)}` : "Writing file"
+  if (tool === "edit_file") return path ? `Editing ${basename(path)}` : "Editing file"
+  if (tool === "delete_file_or_dir") return path ? `Deleting ${basename(path)}` : "Deleting file"
+  if (tool === "apply_patch") return "Applying patch"
+  if (tool === "grep_search" || tool === "glob_search" || tool === "tree_view" || tool === "search") return "Searching workspace"
+  if (tool === "browser_session" || tool === "browser_act" || tool === "browser_snapshot" || tool === "browser_run_script") return "Using browser"
+  if (tool === "remote_manage") return "Managing remote machines"
+  if (tool === "audit_tail") return "Reading audit log"
+  if (!tool) return eventTitle(event)
+  return tool.replaceAll("_", " ")
+}
+
+export type ActivityDestination = "terminal" | "jobs" | "files" | "diff" | "remotes" | "audit" | "detail" | null
+
+export function activityDestination(event: LiveEvent): ActivityDestination {
+  const tool = String(event.data.tool || "")
+  if (["shell_start", "shell_send", "shell_read", "shell_kill"].includes(tool)) {
+    return event.data.session_id ? "terminal" : event.data.call_id ? "detail" : null
+  }
+  if (["job_start", "job_list", "job_tail", "job_stop", "job_retry", "remote_transfer"].includes(tool)) return "jobs"
+  if (["read_file", "write_file", "edit_file", "delete_file_or_dir", "list_files", "glob_search", "grep_search", "tree_view", "search"].includes(tool)) return "files"
+  if (tool === "apply_patch") return "diff"
+  if (tool === "remote_manage") return "remotes"
+  if (tool === "audit_tail") return "audit"
+  if (tool === "run_shell_tool" || tool === "run_python_tool") return "detail"
+  return event.data.call_id ? "detail" : null
 }
 
 export function eventTitle(event: LiveEvent): string {
@@ -96,9 +171,8 @@ export function eventTitle(event: LiveEvent): string {
   if (event.type === "tool.started") return tool ? `Running ${tool}` : "Tool started"
   if (event.type === "tool.completed") return tool ? `${tool} completed` : "Tool completed"
   if (event.type === "tool.failed") return tool ? `${tool} failed` : "Tool failed"
-  if (event.type === "tool.blocked") return tool ? `${tool} blocked by takeover` : "Tool blocked"
-  if (event.type === "control.changed") return `Control → ${controlLabel(String(event.data.control) as ControlMode)}`
-  if (event.type === "workspace.opened") return "Live workspace connected"
+  if (event.type === "tool.blocked") return tool ? `${tool} blocked` : "Tool blocked"
+  if (event.type === "channel.opened") return "Live workspace connected"
   if (event.type === "human.inspected_diff") return "Human inspected diff"
   if (event.type === "human.action") return action ? `Human: ${action}` : "Human action"
   return event.type.replaceAll(".", " ")

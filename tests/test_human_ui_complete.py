@@ -18,7 +18,7 @@ from starlette.testclient import TestClient
 
 import local_shell_mcp.human_ui as ui
 from local_shell_mcp.auth import AuthMiddleware, Principal
-from local_shell_mcp.live_workspace import get_live_workspace_manager
+from local_shell_mcp.live_channel import get_live_channel_manager
 from local_shell_mcp.oauth import ALL_OAUTH_SCOPES
 from local_shell_mcp.settings import get_settings
 
@@ -1082,7 +1082,7 @@ async def test_native_shell_websocket_rejects_unauthorized_full_and_invalid_requ
 @pytest.mark.asyncio
 async def test_native_shell_websocket_rejects_rotated_live_token(tmp_path, monkeypatch):
     _configure(tmp_path, monkeypatch, auth="oauth")
-    manager = get_live_workspace_manager()
+    manager = get_live_channel_manager()
     session_key = "mcp:websocket-rotation"
     workspace, token = manager.open(
         session_key=session_key,
@@ -1160,7 +1160,7 @@ async def test_native_shell_websocket_rejects_rotated_live_token(tmp_path, monke
 
 def test_websocket_auth_none_rejects_rotated_live_bearer(tmp_path, monkeypatch):
     _configure(tmp_path, monkeypatch, auth="none")
-    manager = get_live_workspace_manager()
+    manager = get_live_channel_manager()
     session_key = "mcp:websocket-auth-none"
     _, token = manager.open(
         session_key=session_key,
@@ -1189,7 +1189,7 @@ async def test_shell_websocket_retains_live_identity_when_token_rotates_during_a
     tmp_path, monkeypatch
 ):
     _configure(tmp_path, monkeypatch, auth="none")
-    manager = get_live_workspace_manager()
+    manager = get_live_channel_manager()
     session_key = "mcp:websocket-auth-race"
     _, token = manager.open(
         session_key=session_key,

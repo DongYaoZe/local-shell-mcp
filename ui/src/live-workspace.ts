@@ -7,24 +7,48 @@ import {
 import { FitAddon } from "@xterm/addon-fit"
 import { Terminal } from "@xterm/xterm"
 import {
+  activityDestination,
+  activityEventKey,
+  activityIntent,
   basename,
-  controlDescription,
-  controlLabel,
   escapeHtml,
   eventDetail,
   eventTitle,
   eventTone,
   formatBytes,
   formatClock,
+  isOperationalActivityEvent,
   joinPath,
+  toggleWorkspaceDisplayMode,
   parentPath,
+  reconnectDelayMs,
   renderDiffHtml,
+  toolResultFromOpenAiGlobals,
   truncateContext,
-  type ControlMode,
+  type DisplayMode,
   type LiveEvent,
 } from "./live-workspace-utils"
 
 type JsonRecord = Record<string, unknown>
+
+class LiveApiError extends Error {
+  readonly status: number
+
+  constructor(message: string, status: number) {
+    super(message)
+    this.name = "LiveApiError"
+    this.status = status
+  }
+}
+
+function isLiveCredentialError(error: unknown): boolean {
+  return error instanceof LiveApiError && (error.status === 401 || error.status === 403)
+}
+
+function waitForRetry(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds))
+}
+
 type Machine = { name: string; status?: string; workdir?: string; version?: string; platform?: string }
 type TerminalSession = { session_id: string; backend?: string; created?: number; attached?: number; cwd?: string; name?: string }
 type FileEntry = { name: string; path: string; type: string; size?: number; modified?: number; hidden?: boolean }
@@ -33,7 +57,7 @@ type LiveConfig = {
   token: string
   apiBase: string
   uiPath: string
-  workspaceId: string
+  liveId: string
   machine: string
   cwd: string
 }
@@ -53,7 +77,7 @@ type Dashboard = {
 
 const app = new App(
   { name: "local-shell-mcp-live-workspace", version: "1.0.0" },
-  { availableDisplayModes: ["inline", "fullscreen", "pip"] },
+  { availableDisplayModes: ["pip", "fullscreen"] },
 )
 
 const root = document.createElement("div")
@@ -61,19 +85,27 @@ root.id = "live-workspace-root"
 document.body.append(root)
 
 let config: LiveConfig | null = null
-let control: ControlMode = "agent"
 let events: LiveEvent[] = []
 let cursor = 0
 let pollGeneration = 0
 let connected = false
 let connectionMessage = "Waiting for Live Workspace…"
 let activeTab = "activity"
+let displayMode: DisplayMode = "pip"
 let bootstrap: JsonRecord | null = null
 let dashboard: Dashboard | null = null
 let machines: Machine[] = []
 let lastPassiveRefresh = 0
 let passiveRefreshing = false
 let coreRefreshQueued = false
+let activityExpandedEventKey = ""
+const activityAuditDetails = new Map<string, JsonRecord>()
+let activityDetailRevision = 0
+let activityDiscoveryInitialized = false
+let knownActiveJobs = new Set<string>()
+let knownStandaloneSessions = new Set<string>()
+let shuttingDown = false
+let passiveRefreshTimer: number | null = null
 
 let terminal: Terminal | null = null
 let fitAddon: FitAddon | null = null
@@ -92,6 +124,9 @@ let fileEditing = false
 let fileEditContent = ""
 let fileEditSha = ""
 
+let workloadMachine = "local"
+let diffMachine = "local"
+let diffCwd = "."
 let gitSnapshot: { machine?: string; cwd: string; status: JsonRecord; diff: JsonRecord } | null = null
 let auditEntries: JsonRecord[] = []
 let remoteSnapshot: JsonRecord | null = null
@@ -126,18 +161,13 @@ function shell(): void {
           </div>
         </div>
         <div class="top-actions">
-          <div class="control-switch" role="group" aria-label="Execution control">
-            ${controlButton("agent", "Observe")}${controlButton("shared", "Collaborate")}${controlButton("human", "Take over")}
-          </div>
-          <button class="icon-button" data-action="pip" title="Picture in picture">${icon("pip")}</button>
           <button class="icon-button" data-action="expand" title="Fullscreen">${icon("expand")}</button>
         </div>
       </header>
       <section class="status-strip">
         <div class="current-operation"><span class="pulse" data-role="op-pulse"></span><div><small>Current</small><strong data-role="current-op">No active tool call</strong><span data-role="current-detail">Waiting for activity</span></div></div>
-        <div class="status-stat"><small>Control</small><strong data-role="control-label">${controlLabel(control)}</strong><span data-role="control-description">${controlDescription(control)}</span></div>
-        <div class="status-stat compact-stat"><small>Machines</small><strong data-role="machine-count">—</strong><span data-role="machine-status">loading</span></div>
-        <div class="status-stat compact-stat"><small>Workload</small><strong data-role="workload-count">—</strong><span data-role="workload-status">jobs + terminals</span></div>
+        <div class="status-stat compact-stat"><small>Machines</small><strong data-role="machine-count">—</strong></div>
+        <div class="status-stat compact-stat"><small>Workload</small><strong data-role="workload-count">—</strong></div>
       </section>
       <nav class="tabs" aria-label="Workspace views">
         ${tabButton("activity", "Activity")}${tabButton("terminal", "Terminal")}${tabButton("files", "Files")}${tabButton("diff", "Diff")}${tabButton("jobs", "Jobs")}${tabButton("remotes", "Remotes")}${tabButton("audit", "Audit")}
@@ -148,10 +178,6 @@ function shell(): void {
     </div>`
   root.addEventListener("click", onRootClick)
   updateChrome()
-}
-
-function controlButton(mode: ControlMode, label: string): string {
-  return `<button data-control="${mode}" class="${control === mode ? "active" : ""}">${label}</button>`
 }
 
 function tabButton(name: string, label: string): string {
@@ -204,68 +230,122 @@ function updateChrome(): void {
   qs<HTMLElement>("[data-role=connection-dot]")?.classList.toggle("connected", connected)
   const connectionLabel = qs<HTMLElement>("[data-role=connection-label]")
   if (connectionLabel) connectionLabel.textContent = connectionMessage
-  root.querySelectorAll<HTMLButtonElement>("[data-control]").forEach((button) => {
-    button.classList.toggle("active", button.dataset.control === control)
-  })
   root.querySelectorAll<HTMLButtonElement>("[data-tab]").forEach((button) => {
     button.classList.toggle("active", button.dataset.tab === activeTab)
   })
-  const controlNode = qs<HTMLElement>("[data-role=control-label]")
-  if (controlNode) controlNode.textContent = controlLabel(control)
-  const description = qs<HTMLElement>("[data-role=control-description]")
-  if (description) description.textContent = controlDescription(control)
+  const expandButton = qs<HTMLButtonElement>("[data-action=expand]")
+  if (expandButton) {
+    const fullscreen = displayMode === "fullscreen"
+    const targetMode = toggleWorkspaceDisplayMode(displayMode)
+    const available = app.getHostContext()?.availableDisplayModes || []
+    const supported = available.includes(targetMode)
+    expandButton.classList.toggle("active", fullscreen)
+    expandButton.disabled = !supported
+    expandButton.title = supported
+      ? fullscreen ? "Return to floating window" : "Fullscreen"
+      : fullscreen ? "Floating window unavailable in this host" : "Fullscreen unavailable in this host"
+    expandButton.setAttribute("aria-label", expandButton.title)
+  }
 
   const running = currentRunningEvent()
+  const activeJob = dashboard?.jobs?.[0]
+  const activeSession = dashboard?.sessions?.[0]
   const current = qs<HTMLElement>("[data-role=current-op]")
   const detail = qs<HTMLElement>("[data-role=current-detail]")
   const pulse = qs<HTMLElement>("[data-role=op-pulse]")
-  if (current) current.textContent = running ? eventTitle(running) : "No active tool call"
-  if (detail) detail.textContent = running ? eventDetail(running) || "In progress" : latestCompletedSummary()
-  pulse?.classList.toggle("active", Boolean(running))
+  if (current) {
+    if (running) current.textContent = activityIntent(running)
+    else if (activeJob) current.textContent = `Background: ${String(activeJob.name || activeJob.job_id || "job")}`
+    else if (activeSession) current.textContent = `Terminal: ${String(activeSession.name || activeSession.session_id || "session")}`
+    else current.textContent = "Idle"
+  }
+  if (detail) {
+    if (running) detail.textContent = eventDetail(running) || "In progress"
+    else if (activeJob) detail.textContent = String(activeJob.command || activeJob.status || "running")
+    else if (activeSession) detail.textContent = String(activeSession.cwd || activeSession.backend || "ready")
+    else detail.textContent = latestCompletedSummary()
+  }
+  pulse?.classList.toggle("active", Boolean(running || activeJob))
 
   const machineCount = qs<HTMLElement>("[data-role=machine-count]")
-  if (machineCount) machineCount.textContent = machines.length ? String(machines.length) : "1"
   const online = machines.filter((item) => item.status === "online" || item.name === "local").length
-  const machineStatus = qs<HTMLElement>("[data-role=machine-status]")
-  if (machineStatus) machineStatus.textContent = `${online || 1} online`
+  if (machineCount) machineCount.textContent = `${machines.length || 1} · ${online || 1} online`
   const workload = (dashboard?.jobs?.length || 0) + (dashboard?.session_count || dashboard?.sessions?.length || 0)
   const workloadCount = qs<HTMLElement>("[data-role=workload-count]")
-  if (workloadCount) workloadCount.textContent = String(workload)
+  if (workloadCount) workloadCount.textContent = workload ? `${workload} active` : "0"
 
-  if (terminal) terminal.options.disableStdin = control === "agent"
+}
+
+function operationalEvents(): LiveEvent[] {
+  return events.filter(isOperationalActivityEvent)
 }
 
 function currentRunningEvent(): LiveEvent | null {
-  const completed = new Set(events.filter((event) => event.type === "tool.completed" || event.type === "tool.failed").map((event) => String(event.data.call_id || "")))
-  for (let index = events.length - 1; index >= 0; index -= 1) {
-    const event = events[index]
+  const visible = operationalEvents()
+  const completed = new Set(visible.filter((event) => event.type === "tool.completed" || event.type === "tool.failed").map((event) => String(event.data.call_id || "")))
+  for (let index = visible.length - 1; index >= 0; index -= 1) {
+    const event = visible[index]
     if (event.type === "tool.started" && !completed.has(String(event.data.call_id || ""))) return event
   }
   return null
 }
 
 function latestCompletedSummary(): string {
-  for (let index = events.length - 1; index >= 0; index -= 1) {
-    const event = events[index]
-    if (["tool.completed", "tool.failed", "human.action"].includes(event.type)) return eventTitle(event)
+  const visible = operationalEvents()
+  for (let index = visible.length - 1; index >= 0; index -= 1) {
+    const event = visible[index]
+    if (["tool.completed", "tool.failed", "human.action"].includes(event.type)) return activityIntent(event)
   }
   return connected ? "Ready" : "Waiting for connection"
 }
 
 function onRootClick(event: MouseEvent): void {
-  const target = (event.target as HTMLElement).closest<HTMLElement>("[data-tab],[data-control],[data-action]")
+  if ((event.target as HTMLElement).closest(".timeline-detail")) return
+  const target = (event.target as HTMLElement).closest<HTMLElement>("[data-tab],[data-action]")
   if (!target) return
   if (target.dataset.tab) void switchTab(target.dataset.tab)
-  if (target.dataset.control) void setControl(target.dataset.control as ControlMode)
   if (target.dataset.action) void handleAction(target.dataset.action, target)
 }
 
 async function handleAction(action: string, target: HTMLElement): Promise<void> {
   try {
-    if (action === "expand") await requestDisplayMode("fullscreen")
-    else if (action === "pip") await requestDisplayMode("pip")
+    if (action === "expand") await requestDisplayMode(toggleWorkspaceDisplayMode(displayMode))
     else if (action === "refresh") await refreshCurrent(true)
     else if (action === "activity-ask") await askAboutLatestActivity()
+    else if (action === "activity-open-detail") await toggleActivityDetail(target.dataset.eventKey || "", target.dataset.callId || "")
+    else if (action === "activity-open-terminal") {
+      terminalMachine = target.dataset.machine || "local"
+      selectedSession = target.dataset.session || ""
+      await switchTab("terminal")
+    }
+    else if (action === "activity-open-jobs") {
+      workloadMachine = target.dataset.machine || "local"
+      await switchTab("jobs")
+    }
+    else if (action === "activity-open-files") {
+      const path = target.dataset.path || ""
+      const tool = target.dataset.tool || ""
+      fileMachine = target.dataset.machine || "local"
+      if (path) {
+        if (["list_files", "tree_view", "glob_search", "grep_search", "search"].includes(tool)) {
+          filePath = path
+          selectedFile = ""
+        } else {
+          filePath = parentPath(path)
+          selectedFile = path
+        }
+      }
+      await switchTab("files")
+      if (selectedFile && fileEntries.some((entry) => entry.path === selectedFile)) await selectFile(selectedFile)
+    }
+    else if (action === "activity-open-diff") {
+      diffMachine = target.dataset.machine || "local"
+      diffCwd = target.dataset.cwd || config?.cwd || "."
+      gitSnapshot = null
+      await switchTab("diff")
+    }
+    else if (action === "activity-open-remotes") await switchTab("remotes")
+    else if (action === "activity-open-audit") await switchTab("audit")
     else if (action === "terminal-new") await newTerminal()
     else if (action === "terminal-kill") await killTerminal()
     else if (action === "terminal-copy") await copyTerminal()
@@ -291,24 +371,15 @@ async function handleAction(action: string, target: HTMLElement): Promise<void> 
   }
 }
 
-async function requestDisplayMode(mode: "fullscreen" | "pip" | "inline"): Promise<void> {
+async function requestDisplayMode(mode: "fullscreen" | "pip"): Promise<void> {
   try {
-    await app.requestDisplayMode({ mode })
+    const result = await app.requestDisplayMode({ mode })
+    if (result.mode === "pip" || result.mode === "fullscreen") displayMode = result.mode
+    document.documentElement.dataset.displayMode = displayMode
+    updateChrome()
   } catch (error) {
     notify(`Host did not change display mode: ${error instanceof Error ? error.message : String(error)}`, "warning")
   }
-}
-
-async function setControl(next: ControlMode): Promise<void> {
-  if (!config || next === control) return
-  const payload = await api<{ control: ControlMode }>("/api/live/control", {
-    method: "POST",
-    body: JSON.stringify({ control: next }),
-  })
-  control = payload.control
-  updateChrome()
-  renderCurrentTab()
-  notify(`${controlLabel(control)} mode enabled`, control === "human" ? "warning" : "success")
 }
 
 async function switchTab(next: string): Promise<void> {
@@ -341,34 +412,127 @@ function renderCurrentTab(): void {
 }
 
 function renderActivity(): void {
-  const recent = [...events].reverse().slice(0, 120)
+  const visible = operationalEvents()
+  const recent = [...visible].reverse().slice(0, 120)
   const running = currentRunningEvent()
-  const completed = events.filter((event) => event.type === "tool.completed").length
-  const failed = events.filter((event) => event.type === "tool.failed").length
-  const human = events.filter((event) => event.actor === "human").length
+  const completed = visible.filter((event) => event.type === "tool.completed").length
+  const failed = visible.filter((event) => event.type === "tool.failed").length
+  const human = visible.filter((event) => event.actor === "human").length
   mainNode().innerHTML = `
     <section class="view activity-view">
-      <div class="view-toolbar"><div><h2>Operational activity</h2><p>Observable tool and human actions. Model private reasoning is never exposed.</p></div><div class="toolbar-actions"><button class="button" data-action="activity-ask">${icon("chat")}Ask about latest</button><button class="button" data-action="refresh">${icon("refresh")}Refresh</button></div></div>
+      <div class="view-toolbar"><div><h2>Operational activity</h2><p>What ChatGPT is doing in LSM, with direct paths to the relevant workspace view.</p></div><div class="toolbar-actions"><button class="button" data-action="activity-ask">${icon("chat")}Ask about latest</button><button class="button" data-action="refresh">${icon("refresh")}Refresh</button></div></div>
+      ${activityFocusCards()}
       <div class="metric-row">
-        <div><small>Current</small><strong>${running ? escapeHtml(String(running.data.tool || "tool")) : "Idle"}</strong><span>${running ? escapeHtml(eventDetail(running) || "running") : "No active call"}</span></div>
-        <div><small>Completed</small><strong>${completed}</strong><span>this workspace</span></div>
+        <div><small>Current</small><strong>${running ? escapeHtml(activityIntent(running)) : dashboard?.jobs?.length ? "Background work" : dashboard?.sessions?.length ? "Terminal ready" : "Idle"}</strong><span>${running ? escapeHtml(eventDetail(running) || "running") : dashboard?.jobs?.length ? escapeHtml(String(dashboard.jobs[0]?.name || dashboard.jobs[0]?.job_id || "job")) : dashboard?.sessions?.length ? escapeHtml(String(dashboard.sessions[0]?.name || dashboard.sessions[0]?.session_id || "session")) : "Ready"}</span></div>
+        <div><small>Completed</small><strong>${completed}</strong><span>operations</span></div>
         <div><small>Failures</small><strong>${failed}</strong><span>${failed ? "needs attention" : "none"}</span></div>
-        <div><small>Human actions</small><strong>${human}</strong><span>collaboration events</span></div>
+        <div><small>Human actions</small><strong>${human}</strong><span>interventions</span></div>
       </div>
       <div class="panel activity-panel">
         <div class="panel-head"><strong>Timeline</strong><span>${recent.length} recent events</span></div>
-        <div class="timeline">${recent.length ? recent.map(activityRow).join("") : '<div class="empty-state">No execution activity yet.</div>'}</div>
+        <div class="timeline">${recent.length ? recent.map(activityRow).join("") : '<div class="empty-state">No execution activity yet. Start a task and this view will follow it.</div>'}</div>
       </div>
     </section>`
 }
 
+function activityFocusCards(): string {
+  const jobs = dashboard?.jobs || []
+  const sessions = dashboard?.sessions || []
+  if (!jobs.length && !sessions.length) return ""
+  const cards: string[] = []
+  for (const job of jobs.slice(0, 2)) {
+    const sessionId = String(job.session_id || "")
+    const action = sessionId ? "activity-open-terminal" : "activity-open-jobs"
+    cards.push(`<button class="focus-card job" data-action="${action}" data-session="${escapeHtml(sessionId)}" data-machine="${escapeHtml(String(job.machine || workloadMachine || "local"))}"><small>Background job</small><strong>${escapeHtml(String(job.name || job.job_id || "job"))}</strong><span>${escapeHtml(String(job.status || "running"))} · ${sessionId ? "View output" : "Open jobs"}</span></button>`)
+  }
+  for (const session of sessions.slice(0, Math.max(0, 3 - cards.length))) {
+    cards.push(`<button class="focus-card terminal" data-action="activity-open-terminal" data-session="${escapeHtml(String(session.session_id || ""))}" data-machine="${escapeHtml(String(session.machine || workloadMachine || "local"))}"><small>Persistent terminal</small><strong>${escapeHtml(String(session.name || session.session_id || "terminal"))}</strong><span>Open terminal</span></button>`)
+  }
+  return `<div class="activity-focus">${cards.join("")}</div>`
+}
+
 function activityRow(event: LiveEvent): string {
   const detail = eventDetail(event)
-  return `<div class="timeline-row ${eventTone(event)}"><div class="timeline-marker"><span></span></div><div class="timeline-copy"><div><strong>${escapeHtml(eventTitle(event))}</strong><span class="actor ${escapeHtml(event.actor)}">${escapeHtml(event.actor)}</span></div>${detail ? `<p>${escapeHtml(detail)}</p>` : ""}</div><time>${escapeHtml(formatClock(event.ts))}</time></div>`
+  const destination = activityDestination(event)
+  const callId = String(event.data.call_id || "")
+  const eventKey = activityEventKey(event)
+  let action = ""
+  let actionLabel = ""
+  if (destination === "terminal") {
+    action = `data-action="activity-open-terminal" data-session="${escapeHtml(String(event.data.session_id || ""))}" data-machine="${escapeHtml(String(event.data.machine || "local"))}"`
+    actionLabel = "Open terminal"
+  } else if (destination === "jobs") {
+    action = `data-action="activity-open-jobs" data-machine="${escapeHtml(String(event.data.machine || "local"))}"`
+    actionLabel = "Open jobs"
+  } else if (destination === "files") {
+    const rawPath = event.data.path ?? event.data.cwd
+    const path = Array.isArray(rawPath) ? String(rawPath[0] || "") : String(rawPath || "")
+    action = `data-action="activity-open-files" data-tool="${escapeHtml(String(event.data.tool || ""))}" data-path="${escapeHtml(path)}" data-machine="${escapeHtml(String(event.data.machine || "local"))}"`
+    actionLabel = "Open files"
+  } else if (destination === "diff") {
+    action = `data-action="activity-open-diff" data-machine="${escapeHtml(String(event.data.machine || "local"))}" data-cwd="${escapeHtml(String(event.data.cwd || config?.cwd || "."))}"`
+    actionLabel = "View diff"
+  } else if (destination === "remotes") {
+    action = `data-action="activity-open-remotes"`
+    actionLabel = "Open remotes"
+  } else if (destination === "audit") {
+    action = `data-action="activity-open-audit"`
+    actionLabel = "Open audit"
+  } else if (destination === "detail" && callId) {
+    action = `data-action="activity-open-detail" data-event-key="${escapeHtml(eventKey)}" data-call-id="${escapeHtml(callId)}"`
+    actionLabel = activityExpandedEventKey === eventKey ? "Hide output" : "View output"
+  }
+  const expanded = callId && activityExpandedEventKey === eventKey ? activityDetailHtml(callId) : ""
+  return `<div class="timeline-row ${eventTone(event)} ${action ? "clickable" : ""}" ${action}><div class="timeline-marker"><span></span></div><div class="timeline-copy"><div><strong>${escapeHtml(eventTitle(event))}</strong><span class="actor ${escapeHtml(event.actor)}">${escapeHtml(event.actor)}</span>${actionLabel ? `<span class="timeline-action">${escapeHtml(actionLabel)}</span>` : ""}</div>${detail ? `<p>${escapeHtml(detail)}</p>` : ""}</div><time>${escapeHtml(formatClock(event.ts))}</time>${expanded}</div>`
+}
+
+function activityDetailHtml(callId: string): string {
+  const detail = activityAuditDetails.get(callId)
+  if (!detail) return '<div class="timeline-detail loading-detail">Loading output…</div>'
+  const output = detail.output as JsonRecord | undefined
+  const structured = (output?.structuredContent || output?.structured_content) as JsonRecord | undefined
+  const payload = (structured?.data || output?.data || structured || output || detail) as unknown
+  if (payload && typeof payload === "object" && !Array.isArray(payload)) {
+    const record = payload as JsonRecord
+    const chunks: string[] = []
+    if (record.command) chunks.push(`$ ${String(record.command)}`)
+    if (record.stdout) chunks.push(String(record.stdout))
+    if (record.stderr) chunks.push(`stderr:\n${String(record.stderr)}`)
+    if (chunks.length) return `<pre class="timeline-detail">${escapeHtml(truncateContext(chunks.join("\n"), 24_000))}</pre>`
+  }
+  return `<pre class="timeline-detail">${escapeHtml(truncateContext(JSON.stringify(payload, null, 2), 24_000))}</pre>`
+}
+
+async function toggleActivityDetail(eventKey: string, callId: string): Promise<void> {
+  if (!eventKey || !callId) return
+  if (activityExpandedEventKey === eventKey) {
+    activityExpandedEventKey = ""
+    renderActivity()
+    return
+  }
+  activityExpandedEventKey = eventKey
+  renderActivity()
+  if (activityAuditDetails.has(callId)) return
+  try {
+    const generation = pollGeneration
+    while (activityExpandedEventKey === eventKey && generation === pollGeneration) {
+      const revision = activityDetailRevision
+      const detail = await api<JsonRecord>(`/api/ui/audit/detail?id=${encodeURIComponent(`call:${callId}`)}`)
+      if (activityExpandedEventKey !== eventKey || generation !== pollGeneration) return
+      if (revision !== activityDetailRevision) continue
+      activityAuditDetails.set(callId, detail)
+      if (activeTab === "activity") renderActivity()
+      return
+    }
+  } catch (error) {
+    if (activityExpandedEventKey === eventKey) activityExpandedEventKey = ""
+    if (activeTab === "activity") renderActivity()
+    notify(error instanceof Error ? error.message : String(error), "warning")
+  }
 }
 
 async function askAboutLatestActivity(): Promise<void> {
-  const recent = events.slice(-20)
+  const recent = operationalEvents().slice(-20)
   await app.updateModelContext({
     content: [{ type: "text", text: `Live Workspace recent operational activity:\n${recent.map((event) => `${formatClock(event.ts)} ${eventTitle(event)} — ${eventDetail(event)}`).join("\n")}` }],
     structuredContent: { liveWorkspaceEvents: recent },
@@ -377,15 +541,14 @@ async function askAboutLatestActivity(): Promise<void> {
 }
 
 function renderTerminal(): void {
-  const canWrite = control !== "agent"
   const session = terminalSessions.find((item) => item.session_id === selectedSession)
   mainNode().innerHTML = `
     <section class="view terminal-view">
-      <div class="view-toolbar terminal-toolbar"><div class="toolbar-left"><label>Machine<select data-role="terminal-machine">${machineOptions(terminalMachine)}</select></label><label>Session<select data-role="terminal-session"><option value="">${terminalSessions.length ? "Select session" : "No sessions"}</option>${terminalSessions.map((item) => `<option value="${escapeHtml(item.session_id)}"${item.session_id === selectedSession ? " selected" : ""}>${escapeHtml(item.name || item.session_id)}</option>`).join("")}</select></label><span class="mode-pill ${control}">${canWrite ? "Interactive" : "Observe only"}</span></div><div class="toolbar-actions"><button class="button" data-action="terminal-new" ${canWrite ? "" : "disabled"}>New</button><button class="button" data-action="terminal-kill" ${canWrite && selectedSession ? "" : "disabled"}>Kill</button><button class="button" data-action="terminal-copy">${icon("copy")}Copy</button><button class="button" data-action="terminal-ctrl-c" ${canWrite && selectedSession ? "" : "disabled"}>Ctrl-C</button><button class="button" data-action="terminal-reconnect">Reconnect</button></div></div>
+      <div class="view-toolbar terminal-toolbar"><div class="toolbar-left"><label>Machine<select data-role="terminal-machine">${machineOptions(terminalMachine)}</select></label><label>Session<select data-role="terminal-session"><option value="">${terminalSessions.length ? "Select session" : "No sessions"}</option>${terminalSessions.map((item) => `<option value="${escapeHtml(item.session_id)}"${item.session_id === selectedSession ? " selected" : ""}>${escapeHtml(item.name || item.session_id)}</option>`).join("")}</select></label></div><div class="toolbar-actions"><button class="button" data-action="terminal-new">New</button><button class="button" data-action="terminal-kill" ${selectedSession ? "" : "disabled"}>Kill</button><button class="button" data-action="terminal-copy">${icon("copy")}Copy</button><button class="button" data-action="terminal-ctrl-c" ${selectedSession ? "" : "disabled"}>Ctrl-C</button><button class="button" data-action="terminal-reconnect">Reconnect</button></div></div>
       <div class="terminal-card">
-        <div class="terminal-title"><div><span class="terminal-led ${selectedSession ? "online" : ""}"></span><strong>${escapeHtml(session?.name || selectedSession || "Persistent terminal")}</strong><small>${escapeHtml(terminalMachine)}${session?.backend ? ` · ${escapeHtml(session.backend)}` : ""}</small></div><span>${canWrite ? "Human input enabled" : "Switch to Collaborate or Take over to type"}</span></div>
+        <div class="terminal-title"><div><span class="terminal-led ${selectedSession ? "online" : ""}"></span><strong>${escapeHtml(session?.name || selectedSession || "Persistent terminal")}</strong><small>${escapeHtml(terminalMachine)}${session?.backend ? ` · ${escapeHtml(session.backend)}` : ""}</small></div><span>Collaborative input</span></div>
         <div class="terminal-host" data-role="terminal-host"></div>
-        <form class="command-dock" data-role="command-form"><span>$</span><input data-role="command-input" autocomplete="off" placeholder="${canWrite ? "Send command to attached session" : "Observe mode — input disabled"}" ${canWrite && selectedSession ? "" : "disabled"}/><button ${canWrite && selectedSession ? "" : "disabled"}>Send</button></form>
+        <form class="command-dock" data-role="command-form"><span>$</span><input data-role="command-input" autocomplete="off" placeholder="Send command to attached session" ${selectedSession ? "" : "disabled"}/><button ${selectedSession ? "" : "disabled"}>Send</button></form>
       </div>
     </section>`
   wireTerminalControls()
@@ -425,9 +588,9 @@ function mountTerminal(): void {
   if (!host) return
   terminal = new Terminal({
     allowTransparency: true,
-    cursorBlink: control !== "agent",
+    cursorBlink: true,
     cursorStyle: "bar",
-    disableStdin: control === "agent",
+    disableStdin: false,
     fontFamily: 'var(--font-mono, "SFMono-Regular", "Cascadia Code", Consolas, monospace)',
     fontSize: 13,
     lineHeight: 1.18,
@@ -506,7 +669,7 @@ function bearerProtocol(token: string): string {
 }
 
 function sendTerminal(data: string): void {
-  if (control === "agent" || !selectedSession) return
+  if (!selectedSession) return
   if (terminalSocket?.readyState === WebSocket.OPEN) terminalSocket.send(new TextEncoder().encode(data))
 }
 
@@ -521,7 +684,6 @@ async function refreshTerminals(): Promise<void> {
 }
 
 async function newTerminal(): Promise<void> {
-  if (control === "agent") return
   const name = await promptValue("New terminal", "Optional name", "", `Create a persistent shell on ${terminalMachine}.`)
   if (name === null) return
   const requestMachine = terminalMachine
@@ -533,7 +695,7 @@ async function newTerminal(): Promise<void> {
 }
 
 async function killTerminal(): Promise<void> {
-  if (control === "agent" || !selectedSession) return
+  if (!selectedSession) return
   const requestMachine = terminalMachine
   const requestSession = selectedSession
   await api("/api/ui/terminals/kill", { method: "POST", body: JSON.stringify({ machine: requestMachine, session_id: requestSession }) })
@@ -550,14 +712,13 @@ async function copyTerminal(): Promise<void> {
 }
 
 function renderFiles(): void {
-  const canWrite = control !== "agent"
   const selected = fileEntries.find((entry) => entry.path === selectedFile)
   mainNode().innerHTML = `
     <section class="view files-view">
-      <div class="view-toolbar files-toolbar"><div class="path-controls"><label>Machine<select data-role="file-machine">${machineOptions(fileMachine)}</select></label><button class="button" data-action="file-up">Up</button><input data-role="file-path" value="${escapeHtml(filePath)}" aria-label="Path"/></div><div class="toolbar-actions"><button class="button" data-action="file-new" ${canWrite ? "" : "disabled"}>New file</button><button class="button" data-action="file-new-dir" ${canWrite ? "" : "disabled"}>New folder</button><button class="button" data-action="refresh">${icon("refresh")}Refresh</button></div></div>
+      <div class="view-toolbar files-toolbar"><div class="path-controls"><label>Machine<select data-role="file-machine">${machineOptions(fileMachine)}</select></label><button class="button" data-action="file-up">Up</button><input data-role="file-path" value="${escapeHtml(filePath)}" aria-label="Path"/></div><div class="toolbar-actions"><button class="button" data-action="file-new">New file</button><button class="button" data-action="file-new-dir">New folder</button><button class="button" data-action="refresh">${icon("refresh")}Refresh</button></div></div>
       <div class="files-grid">
         <section class="panel file-list-panel"><div class="panel-head"><strong>${escapeHtml(fileMachine)}:${escapeHtml(filePath)}</strong><span>${fileEntries.length} entries</span></div><div class="file-list">${fileEntries.length ? fileEntries.map(fileRow).join("") : '<div class="empty-state">Directory is empty.</div>'}</div></section>
-        <section class="panel preview-panel"><div class="panel-head"><div><strong>${escapeHtml(selected?.name || "Preview")}</strong><span>${selected ? `${escapeHtml(selected.type)} · ${formatBytes(selected.size)}` : "Choose a file"}</span></div><div class="preview-actions">${selected?.type === "file" ? `<button class="text-button" data-action="file-context">Send context</button><button class="text-button" data-action="file-ask">Ask ChatGPT</button><button class="text-button" data-action="file-edit" ${canWrite ? "" : "disabled"}>Edit</button><button class="text-button danger" data-action="file-delete" ${canWrite ? "" : "disabled"}>Delete</button>` : ""}</div></div><div class="file-preview" data-role="file-preview">${renderFilePreview()}</div></section>
+        <section class="panel preview-panel"><div class="panel-head"><div><strong>${escapeHtml(selected?.name || "Preview")}</strong><span>${selected ? `${escapeHtml(selected.type)} · ${formatBytes(selected.size)}` : "Choose a file"}</span></div><div class="preview-actions">${selected?.type === "file" ? `<button class="text-button" data-action="file-context">Send context</button><button class="text-button" data-action="file-ask">Ask ChatGPT</button><button class="text-button" data-action="file-edit">Edit</button><button class="text-button danger" data-action="file-delete">Delete</button>` : ""}</div></div><div class="file-preview" data-role="file-preview">${renderFilePreview()}</div></section>
       </div>
     </section>`
   wireFileControls()
@@ -640,7 +801,6 @@ async function refreshFiles(): Promise<void> {
 }
 
 async function createFile(directory: boolean): Promise<void> {
-  if (control === "agent") return
   const name = await promptValue(directory ? "New folder" : "New file", "Name", "", `Create inside ${filePath}.`)
   if (!name?.trim()) return
   const requestMachine = fileMachine
@@ -653,7 +813,7 @@ async function createFile(directory: boolean): Promise<void> {
 }
 
 async function deleteSelectedFile(): Promise<void> {
-  if (control === "agent" || !selectedFile) return
+  if (!selectedFile) return
   const requestMachine = fileMachine
   const requestPath = selectedFile
   const entry = fileEntries.find((item) => item.path === requestPath)
@@ -666,7 +826,7 @@ async function deleteSelectedFile(): Promise<void> {
 }
 
 async function beginFileEdit(): Promise<void> {
-  if (control === "agent" || !selectedFile) return
+  if (!selectedFile) return
   const requestMachine = fileMachine
   const requestPath = selectedFile
   const content = await api<JsonRecord>(`/api/ui/files/content?machine=${encodeURIComponent(requestMachine)}&path=${encodeURIComponent(requestPath)}`)
@@ -678,7 +838,7 @@ async function beginFileEdit(): Promise<void> {
 }
 
 async function saveFileEdit(): Promise<void> {
-  if (control === "agent" || !selectedFile) return
+  if (!selectedFile) return
   const editor = qs<HTMLTextAreaElement>("[data-role=file-editor]")
   if (!editor) return
   const requestMachine = fileMachine
@@ -708,18 +868,18 @@ function renderDiff(): void {
   const status = gitSnapshot ? String(gitSnapshot.status.stdout || gitSnapshot.status.stderr || "") : ""
   const diff = gitSnapshot ? String(gitSnapshot.diff.stdout || gitSnapshot.diff.stderr || "") : ""
   mainNode().innerHTML = `
-    <section class="view diff-view"><div class="view-toolbar"><div><h2>Working tree diff</h2><p>${escapeHtml(gitSnapshot?.machine || config?.machine || "local")}:${escapeHtml(config?.cwd || ".")} · unstaged and staged changes</p></div><div class="toolbar-actions"><button class="button" data-action="diff-context">Send context</button><button class="button" data-action="diff-ask">${icon("chat")}Ask for review</button><button class="button" data-action="refresh">${icon("refresh")}Refresh</button></div></div>
-      <div class="diff-layout"><section class="panel status-panel"><div class="panel-head"><strong>Git status</strong><span>${escapeHtml(gitSnapshot?.cwd || config?.cwd || ".")}</span></div><pre>${escapeHtml(status || "Clean")}</pre></section><section class="panel diff-panel"><div class="panel-head"><strong>Changes</strong><span>${diff ? `${diff.split("\n").length} lines` : "clean"}</span></div><div class="diff-code">${gitSnapshot ? renderDiffHtml(diff) : '<div class="loading small"><span></span>Loading diff…</div>'}</div></section></div>
+    <section class="view diff-view"><div class="view-toolbar"><div><h2>Working tree diff</h2><p>${escapeHtml(gitSnapshot?.machine || diffMachine)}:${escapeHtml(gitSnapshot?.cwd || diffCwd)} · unstaged and staged changes</p></div><div class="toolbar-actions"><button class="button" data-action="diff-context">Send context</button><button class="button" data-action="diff-ask">${icon("chat")}Ask for review</button><button class="button" data-action="refresh">${icon("refresh")}Refresh</button></div></div>
+      <div class="diff-layout"><section class="panel status-panel"><div class="panel-head"><strong>Git status</strong><span>${escapeHtml(gitSnapshot?.cwd || diffCwd)}</span></div><pre>${escapeHtml(status || "Clean")}</pre></section><section class="panel diff-panel"><div class="panel-head"><strong>Changes</strong><span>${diff ? `${diff.split("\n").length} lines` : "clean"}</span></div><div class="diff-code">${gitSnapshot ? renderDiffHtml(diff) : '<div class="loading small"><span></span>Loading diff…</div>'}</div></section></div>
     </section>`
 }
 
 async function refreshDiff(): Promise<void> {
   if (!config) return
-  const requestWorkspace = config.workspaceId
-  const requestMachine = config.machine
-  const requestCwd = config.cwd
+  const requestLiveId = config.liveId
+  const requestMachine = diffMachine
+  const requestCwd = diffCwd
   const snapshot = await api<{ machine?: string; cwd: string; status: JsonRecord; diff: JsonRecord }>(`/api/live/git?machine=${encodeURIComponent(requestMachine)}&cwd=${encodeURIComponent(requestCwd)}`)
-  if (!config || config.workspaceId !== requestWorkspace || config.machine !== requestMachine || config.cwd !== requestCwd) return
+  if (!config || config.liveId !== requestLiveId || diffMachine !== requestMachine || diffCwd !== requestCwd) return
   gitSnapshot = snapshot
   if (activeTab === "diff") renderDiff()
 }
@@ -728,7 +888,7 @@ async function shareDiff(ask: boolean): Promise<void> {
   if (!gitSnapshot) await refreshDiff()
   const status = String(gitSnapshot?.status.stdout || "")
   const diff = truncateContext(String(gitSnapshot?.diff.stdout || ""), 28_000)
-  await app.updateModelContext({ content: [{ type: "text", text: `Live Workspace git status (${gitSnapshot?.machine || config?.machine || "local"}):\n${status}\n\nDiff:\n${diff}` }], structuredContent: { git: { machine: gitSnapshot?.machine || config?.machine || "local", cwd: gitSnapshot?.cwd, status } } })
+  await app.updateModelContext({ content: [{ type: "text", text: `Live Workspace git status (${gitSnapshot?.machine || diffMachine}):\n${status}\n\nDiff:\n${diff}` }], structuredContent: { git: { machine: gitSnapshot?.machine || diffMachine, cwd: gitSnapshot?.cwd || diffCwd, status } } })
   notify("Diff added to model context", "success")
   if (ask) await app.sendMessage({ role: "user", content: [{ type: "text", text: "Review the current Live Workspace git diff. Identify correctness risks, regressions, missing tests, and concrete improvements. Make fixes when appropriate." }] })
 }
@@ -744,7 +904,11 @@ function renderJobs(): void {
 
 function jobRow(job: JsonRecord): string {
   const status = String(job.status || "unknown")
-  return `<div class="object-row"><span class="state-dot ${escapeHtml(status)}"></span><div><strong>${escapeHtml(String(job.name || job.job_id || "job"))}</strong><p>${escapeHtml(String(job.command || job.kind || ""))}</p></div><div class="object-meta"><span>${escapeHtml(status)}</span><small>${escapeHtml(String(job.machine || "local"))}</small></div></div>`
+  const sessionId = String(job.session_id || "")
+  const body = `<span class="state-dot ${escapeHtml(status)}"></span><div><strong>${escapeHtml(String(job.name || job.job_id || "job"))}</strong><p>${escapeHtml(String(job.command || job.kind || ""))}</p></div><div class="object-meta"><span>${escapeHtml(status)}</span><small>${sessionId ? "view output" : escapeHtml(String(job.machine || "local"))}</small></div>`
+  return sessionId
+    ? `<button class="object-row clickable" data-open-session="${escapeHtml(sessionId)}" data-machine="${escapeHtml(String(job.machine || "local"))}">${body}</button>`
+    : `<div class="object-row">${body}</div>`
 }
 
 function sessionRow(session: JsonRecord): string {
@@ -755,24 +919,47 @@ function wireJobRows(): void {
   root.querySelectorAll<HTMLButtonElement>("[data-open-session]").forEach((row) => {
     row.addEventListener("click", () => {
       selectedSession = row.dataset.openSession || ""
-      terminalMachine = String((dashboard?.sessions || []).find((item) => item.session_id === selectedSession)?.machine || "local")
+      const source = [...(dashboard?.jobs || []), ...(dashboard?.sessions || [])].find((item) => item.session_id === selectedSession)
+      terminalMachine = row.dataset.machine || String(source?.machine || workloadMachine || "local")
       void switchTab("terminal")
     })
   })
 }
 
+function trackActivityDiscoveries(next: Dashboard): void {
+  const jobs = next.jobs || []
+  const sessions = next.sessions || []
+  const nextJobs = new Set(jobs.map((job) => `${String(job.machine || "local")}:${String(job.job_id || job.session_id || job.name || "job")}`))
+  const nextSessions = new Set(sessions.map((session) => `${String(session.machine || "local")}:${String(session.session_id || session.name || "terminal")}`))
+  if (!activityDiscoveryInitialized) {
+    knownActiveJobs = nextJobs
+    knownStandaloneSessions = nextSessions
+    activityDiscoveryInitialized = true
+    return
+  }
+  for (const job of jobs) {
+    const key = `${String(job.machine || "local")}:${String(job.job_id || job.session_id || job.name || "job")}`
+    if (!knownActiveJobs.has(key)) notify(`Background job started: ${String(job.name || job.job_id || "job")}`, "info")
+  }
+  for (const session of sessions) {
+    const key = `${String(session.machine || "local")}:${String(session.session_id || session.name || "terminal")}`
+    if (!knownStandaloneSessions.has(key)) notify(`Terminal ready: ${String(session.name || session.session_id || "terminal")}`, "info")
+  }
+  knownActiveJobs = nextJobs
+  knownStandaloneSessions = nextSessions
+}
+
 function renderRemotes(): void {
   const enabled = bootstrap ? Boolean((bootstrap.features as JsonRecord | undefined)?.remote) : true
   const rows = (remoteSnapshot?.machines as Machine[] | undefined) || []
-  const canWrite = control !== "agent"
   mainNode().innerHTML = `
-    <section class="view remotes-view"><div class="view-toolbar"><div><h2>Remote machines</h2><p>Worker connectivity, workdirs and administrative actions.</p></div><div class="toolbar-actions"><button class="button primary" data-action="remote-invite" ${enabled && canWrite ? "" : "disabled"}>Invite machine</button><button class="button" data-action="refresh">${icon("refresh")}Refresh</button></div></div>
-      <div class="panel remote-panel"><div class="panel-head"><strong>Machines</strong><span>${enabled ? `${rows.length} registered` : "remote support disabled"}</span></div><div class="remote-grid">${rows.length ? rows.map((machine) => remoteCard(machine, canWrite)).join("") : `<div class="empty-state">${enabled ? "No remote workers registered." : "Remote worker support is disabled."}</div>`}</div></div>
+    <section class="view remotes-view"><div class="view-toolbar"><div><h2>Remote machines</h2><p>Worker connectivity, workdirs and administrative actions.</p></div><div class="toolbar-actions"><button class="button primary" data-action="remote-invite" ${enabled ? "" : "disabled"}>Invite machine</button><button class="button" data-action="refresh">${icon("refresh")}Refresh</button></div></div>
+      <div class="panel remote-panel"><div class="panel-head"><strong>Machines</strong><span>${enabled ? `${rows.length} registered` : "remote support disabled"}</span></div><div class="remote-grid">${rows.length ? rows.map(remoteCard).join("") : `<div class="empty-state">${enabled ? "No remote workers registered." : "Remote worker support is disabled."}</div>`}</div></div>
     </section>`
 }
 
-function remoteCard(machine: Machine, canWrite: boolean): string {
-  return `<article class="remote-card"><div class="remote-head"><span class="machine-icon">${icon("remotes")}</span><div><strong>${escapeHtml(machine.name)}</strong><span class="status-chip ${machine.status === "online" ? "online" : "offline"}">${escapeHtml(machine.status || "unknown")}</span></div></div><dl><div><dt>Workdir</dt><dd>${escapeHtml(machine.workdir || "—")}</dd></div><div><dt>Version</dt><dd>${escapeHtml(machine.version || "—")}</dd></div><div><dt>Platform</dt><dd>${escapeHtml(machine.platform || "—")}</dd></div></dl><footer><button class="text-button" data-action="remote-rename" data-machine="${escapeHtml(machine.name)}" ${canWrite ? "" : "disabled"}>Rename</button><button class="text-button danger" data-action="remote-revoke" data-machine="${escapeHtml(machine.name)}" ${canWrite ? "" : "disabled"}>Revoke</button></footer></article>`
+function remoteCard(machine: Machine): string {
+  return `<article class="remote-card"><div class="remote-head"><span class="machine-icon">${icon("remotes")}</span><div><strong>${escapeHtml(machine.name)}</strong><span class="status-chip ${machine.status === "online" ? "online" : "offline"}">${escapeHtml(machine.status || "unknown")}</span></div></div><dl><div><dt>Workdir</dt><dd>${escapeHtml(machine.workdir || "—")}</dd></div><div><dt>Version</dt><dd>${escapeHtml(machine.version || "—")}</dd></div><div><dt>Platform</dt><dd>${escapeHtml(machine.platform || "—")}</dd></div></dl><footer><button class="text-button" data-action="remote-rename" data-machine="${escapeHtml(machine.name)}">Rename</button><button class="text-button danger" data-action="remote-revoke" data-machine="${escapeHtml(machine.name)}">Revoke</button></footer></article>`
 }
 
 async function refreshRemotes(): Promise<void> {
@@ -782,7 +969,6 @@ async function refreshRemotes(): Promise<void> {
 }
 
 async function createRemoteInvite(): Promise<void> {
-  if (control === "agent") return
   const name = await promptValue("Invite remote machine", "Machine name (optional)", "", "A one-time join command will be generated.")
   if (name === null) return
   const result = await api<JsonRecord>("/api/ui/remotes", { method: "POST", body: JSON.stringify({ name: name || null }) })
@@ -814,8 +1000,16 @@ function resetTerminalTarget(machine: string): void {
 }
 
 function resetWorkspaceTarget(machine: string, cwd: string): void {
+  workloadMachine = machine
+  diffMachine = machine
+  diffCwd = cwd
   gitSnapshot = null
   dashboard = null
+  activityDiscoveryInitialized = false
+  knownActiveJobs.clear()
+  knownStandaloneSessions.clear()
+  activityExpandedEventKey = ""
+  activityAuditDetails.clear()
   resetFileTarget(machine, cwd)
   resetTerminalTarget(machine)
 }
@@ -832,10 +1026,16 @@ function replaceMachineSelection(machine: string, replacement: string, replaceme
   if (terminalMachine === machine) {
     resetTerminalTarget(replacement)
   }
+  if (workloadMachine === machine) workloadMachine = replacement
+  if (diffMachine === machine) {
+    diffMachine = replacement
+    if (replacementCwd) diffCwd = replacementCwd
+    gitSnapshot = null
+  }
 }
 
 async function renameRemote(machine: string): Promise<void> {
-  if (control === "agent" || !machine) return
+  if (!machine) return
   const name = await promptValue("Rename remote", "New name", machine)
   if (!name?.trim() || name === machine) return
   const newName = name.trim()
@@ -846,7 +1046,7 @@ async function renameRemote(machine: string): Promise<void> {
 }
 
 async function revokeRemote(machine: string): Promise<void> {
-  if (control === "agent" || !machine) return
+  if (!machine) return
   const confirmation = await promptValue("Revoke remote", `Type ${machine} to confirm`, "", "The worker will need a new invitation to reconnect.")
   if (confirmation !== machine) return
   await api("/api/ui/remotes/revoke", { method: "POST", body: JSON.stringify({ machine }) })
@@ -885,10 +1085,11 @@ async function askAboutAudit(id: string): Promise<void> {
 
 async function refreshJobs(): Promise<void> {
   if (!config) return
-  const requestWorkspace = config.workspaceId
-  const requestMachine = config.machine
+  const requestLiveId = config.liveId
+  const requestMachine = workloadMachine
   const result = await api<Dashboard>(`/api/ui/dashboard?machine=${encodeURIComponent(requestMachine)}`)
-  if (!config || config.workspaceId !== requestWorkspace || config.machine !== requestMachine) return
+  if (!config || config.liveId !== requestLiveId || workloadMachine !== requestMachine) return
+  trackActivityDiscoveries(result)
   dashboard = result
   updateChrome()
   if (activeTab === "jobs") { renderJobs(); wireJobRows() }
@@ -901,12 +1102,12 @@ async function refreshAllCore(): Promise<void> {
     return
   }
   passiveRefreshing = true
-  const requestWorkspace = config.workspaceId
+  const requestLiveId = config.liveId
   const requestApiBase = config.apiBase
   let selectionChanged = false
   try {
     const boot = await api<JsonRecord>("/api/ui/bootstrap")
-    if (!config || config.workspaceId !== requestWorkspace || config.apiBase !== requestApiBase) {
+    if (!config || config.liveId !== requestLiveId || config.apiBase !== requestApiBase) {
       coreRefreshQueued = true
       return
     }
@@ -929,16 +1130,29 @@ async function refreshAllCore(): Promise<void> {
       resetTerminalTarget(preferred)
       selectionChanged = true
     }
+    if (!available.has(workloadMachine)) {
+      workloadMachine = preferred
+      dashboard = null
+      selectionChanged = true
+    }
+    if (!available.has(diffMachine)) {
+      diffMachine = preferred
+      diffCwd = config.machine === preferred ? config.cwd : "."
+      gitSnapshot = null
+      selectionChanged = true
+    }
     if (selectionChanged) renderCurrentTab()
-    const dashboardMachine = config.machine
+    const dashboardMachine = workloadMachine
     const dash = await api<Dashboard>(`/api/ui/dashboard?machine=${encodeURIComponent(dashboardMachine || "local")}`)
-    if (!config || config.workspaceId !== requestWorkspace || config.apiBase !== requestApiBase || config.machine !== dashboardMachine) {
+    if (!config || config.liveId !== requestLiveId || config.apiBase !== requestApiBase || workloadMachine !== dashboardMachine) {
       coreRefreshQueued = true
       return
     }
+    trackActivityDiscoveries(dash)
     dashboard = dash
     lastPassiveRefresh = Date.now()
     updateChrome()
+    if (activeTab === "activity") renderActivity()
   } finally {
     passiveRefreshing = false
     if (coreRefreshQueued) {
@@ -974,29 +1188,37 @@ async function api<T = JsonRecord>(path: string, init: RequestInit = {}): Promis
   if (init.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json")
   const response = await fetch(url, { ...init, headers, credentials: "omit", cache: "no-store" })
   let payload: JsonRecord
-  try { payload = await response.json() as JsonRecord } catch { throw new Error(`Live API returned HTTP ${response.status}`) }
-  if (!response.ok || payload.ok === false) throw new Error(String(payload.message || payload.detail || `HTTP ${response.status}`))
+  try { payload = await response.json() as JsonRecord } catch { throw new LiveApiError(`Live API returned HTTP ${response.status}`, response.status) }
+  if (!response.ok || payload.ok === false) throw new LiveApiError(String(payload.message || payload.detail || `HTTP ${response.status}`), response.status)
   return (payload.data ?? payload) as T
 }
 
 function mergeEvents(incoming: LiveEvent[]): void {
   if (!incoming.length) return
   const bySeq = new Map(events.map((event) => [event.seq, event]))
-  for (const event of incoming) bySeq.set(event.seq, event)
+  for (const event of incoming) {
+    bySeq.set(event.seq, event)
+    if (event.type === "tool.completed" || event.type === "tool.failed") {
+      const callId = String(event.data.call_id || "")
+      if (callId) {
+        activityAuditDetails.delete(callId)
+        activityDetailRevision += 1
+      }
+    }
+  }
   events = [...bySeq.values()].sort((a, b) => a.seq - b.seq).slice(-800)
   cursor = Math.max(cursor, ...incoming.map((event) => event.seq))
-  const latestControl = [...incoming].reverse().find((event) => event.type === "control.changed")
-  if (latestControl?.data.control && ["agent", "shared", "human"].includes(String(latestControl.data.control))) control = String(latestControl.data.control) as ControlMode
   updateChrome()
   if (activeTab === "activity") renderActivity()
 }
 
 async function loadSnapshot(generation: number): Promise<boolean> {
-  const payload = await api<{ workspace: JsonRecord; events: LiveEvent[] }>("/api/live/snapshot")
+  const payload = await api<{ channel: JsonRecord; events: LiveEvent[] }>("/api/live/snapshot")
   if (generation !== pollGeneration) return false
-  control = String(payload.workspace.control || "agent") as ControlMode
+  activityAuditDetails.clear()
+  activityDetailRevision += 1
   events = payload.events || []
-  cursor = Number(payload.workspace.seq || events.at(-1)?.seq || 0)
+  cursor = Number(payload.channel.seq || events.at(-1)?.seq || 0)
   connected = true
   connectionMessage = "Live"
   updateChrome()
@@ -1005,69 +1227,215 @@ async function loadSnapshot(generation: number): Promise<boolean> {
 }
 
 async function pollEvents(generation: number): Promise<void> {
-  while (config && generation === pollGeneration) {
+  while (!shuttingDown && config && generation === pollGeneration) {
+    const payload = await api<{ events: LiveEvent[]; cursor: number }>(`/api/live/events?after=${cursor}&timeout=25`)
+    if (generation !== pollGeneration) return
+    mergeEvents(payload.events || [])
+    cursor = Math.max(cursor, Number(payload.cursor || 0))
+    connected = true
+    connectionMessage = "Live"
+    updateChrome()
+    if (payload.events?.some((event) => ["tool.completed", "tool.failed", "human.action"].includes(event.type)) && Date.now() - lastPassiveRefresh > 1500) void refreshAllCore()
+  }
+}
+
+async function runConnectionLoop(generation: number): Promise<void> {
+  let attempt = 0
+  let announcedRetry = false
+  while (!shuttingDown && config && generation === pollGeneration) {
     try {
-      const payload = await api<{ events: LiveEvent[]; cursor: number; control: ControlMode }>(`/api/live/events?after=${cursor}&timeout=25`)
-      if (generation !== pollGeneration) return
-      if (payload.control) control = payload.control
-      mergeEvents(payload.events || [])
-      cursor = Math.max(cursor, Number(payload.cursor || 0))
-      connected = true
-      connectionMessage = "Live"
+      connectionMessage = attempt ? "Reconnecting" : "Connecting"
       updateChrome()
-      if (payload.events?.some((event) => ["tool.completed", "tool.failed", "human.action"].includes(event.type)) && Date.now() - lastPassiveRefresh > 1500) void refreshAllCore()
-    } catch (error) {
+      renderCurrentTab()
+      if (!await loadSnapshot(generation)) return
+      await refreshAllCore()
       if (generation !== pollGeneration) return
+      await refreshCurrent(false)
+      if (generation !== pollGeneration) return
+      attempt = 0
+      announcedRetry = false
+      await pollEvents(generation)
+      return
+    } catch (caught) {
+      if (shuttingDown || !config || generation !== pollGeneration) return
+      let error = caught
+      if (isLiveCredentialError(error)) {
+        const stale = config
+        try {
+          await refreshLiveCredentials({ machine: stale.machine, cwd: stale.cwd, live_id: stale.liveId }, true)
+          return
+        } catch (credentialError) {
+          error = credentialError
+        }
+      }
       connected = false
       connectionMessage = "Reconnecting"
       updateChrome()
-      await new Promise((resolve) => setTimeout(resolve, 1200))
+      renderCurrentTab()
+      if (!announcedRetry) {
+        announcedRetry = true
+        notify(`Connection lost; retrying automatically (${error instanceof Error ? error.message : String(error)})`, "warning")
+      }
+      const delay = reconnectDelayMs(attempt)
+      attempt += 1
+      await waitForRetry(delay)
     }
   }
 }
 
-function configureFromToolResult(result: unknown): void {
-  const value = result as { _meta?: JsonRecord; structuredContent?: JsonRecord }
-  const hidden = value?._meta?.["local-shell-mcp/live"] as JsonRecord | undefined
-  const structured = value?.structuredContent || {}
-  const token = String(hidden?.token || "")
-  const apiBase = String(hidden?.apiBase || structured.api_base || "")
-  if (!token || !apiBase) {
-    connectionMessage = "Live credentials unavailable"
-    renderCurrentTab()
-    return
-  }
-  const nextConfig: LiveConfig = {
-    token,
-    apiBase,
-    uiPath: String(hidden?.uiPath || structured.ui_path || "/ui"),
-    workspaceId: String(hidden?.workspaceId || structured.workspace_id || ""),
-    machine: String(structured.machine || "local"),
-    cwd: String(structured.cwd || "."),
-  }
+function activateLiveConfig(nextConfig: LiveConfig): void {
+  if (shuttingDown) return
+  if (
+    config
+    && config.token === nextConfig.token
+    && config.apiBase === nextConfig.apiBase
+    && config.liveId === nextConfig.liveId
+    && config.machine === nextConfig.machine
+    && config.cwd === nextConfig.cwd
+  ) return
+  const channelChanged = !config || config.liveId !== nextConfig.liveId
   const targetChanged = !config || config.machine !== nextConfig.machine || config.cwd !== nextConfig.cwd
+  if (channelChanged) {
+    events = []
+    cursor = 0
+    connected = false
+    activityExpandedEventKey = ""
+    activityAuditDetails.clear()
+    activityDetailRevision += 1
+  }
   if (targetChanged) resetWorkspaceTarget(nextConfig.machine, nextConfig.cwd)
   config = nextConfig
   pollGeneration += 1
   const generation = pollGeneration
   connectionMessage = "Connecting"
   renderCurrentTab()
-  void (async () => {
+  void runConnectionLoop(generation)
+}
+
+const credentialRefreshes = new Map<string, Promise<void>>()
+
+async function requestLiveConfig(structured: JsonRecord, allowCreate: boolean): Promise<LiveConfig> {
+  const machine = String(structured.machine || "local")
+  const cwd = String(structured.cwd || ".")
+  const liveId = String(structured.live_id || "")
+  const invoke = (id: string) => app.callServerTool({
+    name: "live_workspace_reconnect",
+    arguments: id ? { machine, cwd, live_id: id } : { machine, cwd },
+  })
+  const response = await invoke(liveId)
+  let resolvedResponse = response
+  if (response.isError && allowCreate && liveId) {
+    const message = response.content.find((item) => item.type === "text")
+    const text = message?.type === "text" ? message.text : ""
+    if (/different principal/i.test(text)) resolvedResponse = await invoke("")
+  }
+  if (resolvedResponse.isError) {
+    const message = resolvedResponse.content.find((item) => item.type === "text")
+    throw new Error(message?.type === "text" ? message.text : "Live Workspace authorization failed")
+  }
+  const responseStructured = (resolvedResponse.structuredContent || {}) as JsonRecord
+  const hidden = resolvedResponse._meta?.["local-shell-mcp/live"] as JsonRecord | undefined
+  const token = String(hidden?.token || "")
+  const apiBase = String(hidden?.apiBase || responseStructured.api_base || structured.api_base || "")
+  if (!token || !apiBase) {
+    throw new Error("ChatGPT omitted Live Workspace credentials from the app-initiated tool result")
+  }
+  return {
+    token,
+    apiBase,
+    uiPath: String(hidden?.uiPath || responseStructured.ui_path || structured.ui_path || "/ui"),
+    liveId: String(hidden?.liveId || responseStructured.live_id || structured.live_id || ""),
+    machine: String(responseStructured.machine || machine),
+    cwd: String(responseStructured.cwd || cwd),
+  }
+}
+
+function refreshLiveCredentials(structured: JsonRecord, allowCreate = false): Promise<void> {
+  const machine = String(structured.machine || "local")
+  const cwd = String(structured.cwd || ".")
+  const liveId = String(structured.live_id || "")
+  const key = `${liveId}\u0000${machine}\u0000${cwd}\u0000${allowCreate ? "create" : "reattach"}`
+  const existing = credentialRefreshes.get(key)
+  if (existing) return existing
+  const refresh = (async () => {
+    connectionMessage = "Authorizing Live Workspace…"
+    renderCurrentTab()
+    activateLiveConfig(await requestLiveConfig(structured, allowCreate))
+  })().finally(() => {
+    credentialRefreshes.delete(key)
+  })
+  credentialRefreshes.set(key, refresh)
+  return refresh
+}
+
+async function recoverCredentialsForever(structured: JsonRecord): Promise<void> {
+  let attempt = 0
+  const announcedLiveId = String(structured.live_id || "")
+  const announcedMachine = String(structured.machine || config?.machine || "local")
+  const announcedCwd = String(structured.cwd || config?.cwd || ".")
+  const needsRefresh = () => !config
+    || Boolean(announcedLiveId && config.liveId !== announcedLiveId)
+    || config.machine !== announcedMachine
+    || config.cwd !== announcedCwd
+  while (!shuttingDown && needsRefresh()) {
     try {
-      if (!await loadSnapshot(generation)) return
-      await refreshAllCore()
-      if (generation !== pollGeneration) return
-      await refreshCurrent(false)
-      if (generation !== pollGeneration) return
-      void pollEvents(generation)
+      await refreshLiveCredentials(structured, true)
+      return
     } catch (error) {
       connected = false
-      connectionMessage = "Connection failed"
+      connectionMessage = "Reconnecting"
       updateChrome()
       renderCurrentTab()
-      notify(error instanceof Error ? error.message : String(error), "danger")
+      if (attempt === 0) notify(`Live authorization unavailable; retrying automatically (${error instanceof Error ? error.message : String(error)})`, "warning")
+      const delay = reconnectDelayMs(attempt)
+      attempt += 1
+      await waitForRetry(delay)
     }
-  })()
+  }
+}
+
+async function configureFromToolResult(result: unknown): Promise<void> {
+  if (shuttingDown) return
+  const value = result as { _meta?: JsonRecord; structuredContent?: JsonRecord }
+  const hidden = value?._meta?.["local-shell-mcp/live"] as JsonRecord | undefined
+  const structured = value?.structuredContent || {}
+  const token = String(hidden?.token || "")
+  const apiBase = String(hidden?.apiBase || structured.api_base || "")
+  if (!token || !apiBase) {
+    const announcedLiveId = String(structured.live_id || "")
+    const announcedMachine = String(structured.machine || config?.machine || "local")
+    const announcedCwd = String(structured.cwd || config?.cwd || ".")
+    if (
+      config
+      && (!announcedLiveId || announcedLiveId === config.liveId)
+      && announcedMachine === config.machine
+      && announcedCwd === config.cwd
+    ) return
+    await recoverCredentialsForever(structured)
+    return
+  }
+  activateLiveConfig({
+    token,
+    apiBase,
+    uiPath: String(hidden?.uiPath || structured.ui_path || "/ui"),
+    liveId: String(hidden?.liveId || structured.live_id || ""),
+    machine: String(structured.machine || "local"),
+    cwd: String(structured.cwd || "."),
+  })
+}
+
+async function enterPreferredDisplayMode(): Promise<void> {
+  const context = app.getHostContext()
+  const available = context?.availableDisplayModes || []
+  if (available.includes("pip")) {
+    if (context?.displayMode !== "pip") await requestDisplayMode("pip")
+    return
+  }
+  if (available.includes("fullscreen")) {
+    if (context?.displayMode !== "fullscreen") await requestDisplayMode("fullscreen")
+    return
+  }
+  notify("Host does not support floating or fullscreen Live Workspace", "warning")
 }
 
 function applyHostContext(context: unknown): void {
@@ -1078,19 +1446,105 @@ function applyHostContext(context: unknown): void {
   if (styles?.variables && typeof styles.variables === "object") applyHostStyleVariables(styles.variables as never)
   const css = styles?.css as JsonRecord | undefined
   if (typeof css?.fonts === "string") applyHostFonts(css.fonts)
-  const mode = String(value.displayMode || "inline")
-  document.documentElement.dataset.displayMode = mode
+  const mode = String(value.displayMode || "")
+  if (mode === "fullscreen" || mode === "pip") displayMode = mode
+  document.documentElement.dataset.displayMode = displayMode
+  updateChrome()
 }
 
-app.ontoolresult = (result) => configureFromToolResult(result)
+type OpenAiGlobalsWindow = Window & {
+  openai?: unknown
+}
+
+function configureFromOpenAiGlobals(globals?: unknown): boolean {
+  if (shuttingDown) return false
+  const result = toolResultFromOpenAiGlobals(globals ?? (window as OpenAiGlobalsWindow).openai)
+  if (!result) return false
+  void configureFromToolResult(result)
+  return true
+}
+
+function onOpenAiGlobalsChanged(event: Event): void {
+  if (shuttingDown) return
+  const detail = (event as CustomEvent<{ globals?: unknown }>).detail
+  configureFromOpenAiGlobals(detail?.globals)
+}
+
+let bridgeReady = false
+let pendingToolResult: unknown = null
+let initialToolResultResolve: ((result: unknown | null) => void) | null = null
+
+function waitForInitialToolResult(timeoutMs: number): Promise<unknown | null> {
+  if (pendingToolResult) {
+    const result = pendingToolResult
+    pendingToolResult = null
+    return Promise.resolve(result)
+  }
+  return new Promise((resolve) => {
+    const timer = window.setTimeout(() => {
+      if (initialToolResultResolve === finish) initialToolResultResolve = null
+      resolve(null)
+    }, timeoutMs)
+    const finish = (result: unknown | null) => {
+      window.clearTimeout(timer)
+      if (initialToolResultResolve === finish) initialToolResultResolve = null
+      resolve(result)
+    }
+    initialToolResultResolve = finish
+  })
+}
+
+app.ontoolresult = (result) => {
+  if (shuttingDown) return
+  if (initialToolResultResolve) {
+    const resolve = initialToolResultResolve
+    initialToolResultResolve = null
+    resolve(result)
+    return
+  }
+  if (!bridgeReady) {
+    pendingToolResult = result
+    return
+  }
+  void configureFromToolResult(result)
+}
 app.onhostcontextchanged = (context) => applyHostContext(context)
+
+function stopLiveWorkspace(): void {
+  if (shuttingDown) return
+  shuttingDown = true
+  pollGeneration += 1
+  config = null
+  connected = false
+  destroyTerminal()
+  window.removeEventListener("openai:set_globals", onOpenAiGlobalsChanged)
+  if (passiveRefreshTimer !== null) {
+    window.clearInterval(passiveRefreshTimer)
+    passiveRefreshTimer = null
+  }
+}
+
+app.onteardown = async () => {
+  stopLiveWorkspace()
+  return {}
+}
+
+window.addEventListener("openai:set_globals", onOpenAiGlobalsChanged)
 
 shell()
 
 void (async () => {
   try {
     await app.connect()
+    if (shuttingDown) return
+    bridgeReady = true
     applyHostContext(app.getHostContext())
+    await enterPreferredDisplayMode()
+    if (shuttingDown) return
+    const initialResult = await waitForInitialToolResult(300)
+    if (shuttingDown) return
+    if (initialResult) await configureFromToolResult(initialResult)
+    else if (!configureFromOpenAiGlobals()) await recoverCredentialsForever({})
   } catch (error) {
     connected = false
     connectionMessage = "Host bridge unavailable"
@@ -1100,12 +1554,11 @@ void (async () => {
   }
 })()
 
-setInterval(() => {
-  if (config && Date.now() - lastPassiveRefresh > 6_000) void refreshAllCore()
+passiveRefreshTimer = window.setInterval(() => {
+  if (!shuttingDown && config && Date.now() - lastPassiveRefresh > 6_000) void refreshAllCore()
 }, 6_000)
 
 window.addEventListener("beforeunload", () => {
-  pollGeneration += 1
-  destroyTerminal()
+  stopLiveWorkspace()
   void app.close()
 })

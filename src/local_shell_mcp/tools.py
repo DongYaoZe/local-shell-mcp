@@ -55,10 +55,12 @@ from .jobs import (
     stop_job,
     tail_job,
 )
-from .live_workspace import (
+from .live_channel import (
     LIVE_RESOURCE_MIME,
+    LIVE_RESOURCE_TEMPLATE_URI,
     LIVE_RESOURCE_URI,
-    get_live_workspace_manager,
+    LIVE_RESOURCE_VERSIONED_URI,
+    get_live_channel_manager,
     mcp_session_key,
 )
 from .models import ToolResult
@@ -132,14 +134,13 @@ class ViewImageResult(BaseModel):
     error_type: str | None = None
 
 
-class LiveWorkspaceResult(BaseModel):
+class LiveChannelResult(BaseModel):
     """Model-visible state returned when the interactive workspace is opened."""
 
     model_config = ConfigDict(extra="forbid")
 
     ok: bool = True
-    workspace_id: str
-    control: str
+    live_id: str
     api_base: str
     ui_path: str
     machine: str
@@ -360,7 +361,7 @@ def _live_workspace_resource_meta() -> dict[str, Any]:
         },
         "openai/widgetDescription": (
             "A live local-shell-mcp execution workspace with activity, terminal, files, "
-            "diffs, jobs, remotes, audit, and human/agent collaboration controls."
+            "diffs, jobs, remotes, audit, and shared human/agent interaction."
         ),
         "openai/widgetDomain": origin,
         "openai/widgetPrefersBorder": False,
@@ -426,7 +427,9 @@ def _serialize_audit_value(value: Any) -> Any:
 
 def _safe_audit_result(tool_name: str, value: Any) -> Any:
     serialized = _serialize_audit_value(value)
-    if tool_name != "open_live_workspace" or not isinstance(serialized, dict):
+    if tool_name not in {"open_live_workspace", "live_workspace_reconnect"} or not isinstance(
+        serialized, dict
+    ):
         return serialized
     sanitized = dict(serialized)
     sanitized.pop("meta", None)
@@ -502,6 +505,8 @@ def _live_event_arguments(tool_name: str, arguments: dict[str, Any]) -> dict[str
             data[key] = value
         elif isinstance(value, list):
             data[key] = [str(item)[:160] for item in value[:8]]
+    if tool_name == "search" and "cwd" not in data:
+        data["cwd"] = "."
     command = arguments.get("command")
     if isinstance(command, str) and command:
         data["command"] = command[:500]
@@ -534,12 +539,6 @@ def _live_result_summary(result: Any) -> dict[str, Any]:
         if isinstance(item, (str, int, float, bool)):
             summary[key] = item
     return summary
-
-
-def _live_tool_mutates(tool_name: str, read_only: bool, arguments: dict[str, Any]) -> bool:
-    if not read_only:
-        return True
-    return tool_name == "browser_snapshot" and bool(arguments.get("screenshot", True))
 
 
 def _audit_tool_purpose(
@@ -584,7 +583,6 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
     for tool in mcp._tool_manager._tools.values():  # noqa: SLF001
         original = tool.fn
         tool_name = tool.name
-        read_only = bool(tool.annotations and tool.annotations.readOnlyHint)
         required_scopes: list[str] = []
         for scheme in (tool.meta or {}).get("securitySchemes", []):
             if scheme.get("type") == "oauth2":
@@ -599,7 +597,6 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
             __signature=signature,
             __tool_name=tool_name,
             __required_scopes=tool_required_scopes,
-            __read_only=read_only,
             **kwargs,
         ):
             require_current_scopes(__required_scopes)
@@ -625,8 +622,17 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
             call_id = uuid.uuid4().hex
             started_at = time.monotonic()
             live_session_key = mcp_session_key(mcp)
+            live_manager = get_live_channel_manager()
+            if __tool_name not in {"open_live_workspace", "live_workspace_reconnect"}:
+                principal = current_principal()
+                live_subject = (
+                    principal.subject or principal.email or "mcp-client"
+                    if principal is not None
+                    else "local-mcp-client"
+                )
+                live_manager.claim_recovery_session(live_session_key, live_subject)
             live_arguments = _live_event_arguments(__tool_name, safe_call_arguments)
-            get_live_workspace_manager().publish_for_session(
+            live_manager.publish_for_session(
                 live_session_key,
                 "tool.started",
                 data={"call_id": call_id, **live_arguments},
@@ -639,11 +645,6 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
                 **audit_context,
             )
             try:
-                if _live_tool_mutates(__tool_name, __read_only, call_arguments):
-                    get_live_workspace_manager().require_agent_mutation_allowed(
-                        live_session_key,
-                        __tool_name,
-                    )
                 with audit_call_context(call_id) as call_state:
                     if __tool_name in NON_CANCELLABLE_TOOL_NAMES:
                         result = await __original(*args, **kwargs)
@@ -668,7 +669,7 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
                     **failure_context,
                     **audit_context,
                 )
-                get_live_workspace_manager().publish_for_session(
+                live_manager.publish_for_session(
                     live_session_key,
                     "tool.completed" if call_ok else "tool.failed",
                     data={
@@ -703,7 +704,7 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
                     result=_serialize_audit_value(result),
                     **audit_context,
                 )
-                get_live_workspace_manager().publish_for_session(
+                live_manager.publish_for_session(
                     live_session_key,
                     "tool.failed",
                     data={
@@ -726,7 +727,7 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
                     error_type=type(exc).__name__,
                     **audit_context,
                 )
-                get_live_workspace_manager().publish_for_session(
+                live_manager.publish_for_session(
                     live_session_key,
                     "tool.failed",
                     data={
@@ -2489,43 +2490,54 @@ def _register_live_workspace_tools(
     mcp: FastMCP,
     settings: Any,
 ) -> None:
+    resource_options = {
+        "name": "local-shell-mcp-live-workspace",
+        "title": "LSM Live Workspace",
+        "description": "Interactive human/agent workspace for local-shell-mcp execution.",
+        "mime_type": LIVE_RESOURCE_MIME,
+        "meta": _live_workspace_resource_meta(),
+    }
+
     @mcp.resource(
         LIVE_RESOURCE_URI,
-        name="local-shell-mcp-live-workspace",
-        title="LSM Live Workspace",
-        description="Interactive human/agent workspace for local-shell-mcp execution.",
-        mime_type=LIVE_RESOURCE_MIME,
-        meta=_live_workspace_resource_meta(),
+        **resource_options,
     )
     def live_workspace_resource() -> str:
         return _live_workspace_html()
 
+    @mcp.resource(
+        LIVE_RESOURCE_VERSIONED_URI,
+        **resource_options,
+    )
+    def versioned_live_workspace_resource() -> str:
+        return _live_workspace_html()
+
+    @mcp.resource(
+        LIVE_RESOURCE_TEMPLATE_URI,
+        **resource_options,
+    )
+    def cached_live_workspace_resource(version: str) -> str:
+        del version
+        return _live_workspace_html()
+
     tool_meta = {
         **_oauth_meta(list(ALL_OAUTH_SCOPES)),
-        "ui": {"resourceUri": LIVE_RESOURCE_URI},
-        # Keep the standardized flat key and the older OpenAI key for hosts that
-        # have not yet moved to the nested MCP Apps metadata shape.
-        "ui/resourceUri": LIVE_RESOURCE_URI,
-        "openai/outputTemplate": LIVE_RESOURCE_URI,
+        "ui": {"resourceUri": LIVE_RESOURCE_VERSIONED_URI},
+        # Use the content-versioned URI as the render cache key. Keep the stable
+        # resource registered as a compatibility alias for direct readers.
+        "ui/resourceUri": LIVE_RESOURCE_VERSIONED_URI,
+        "openai/outputTemplate": LIVE_RESOURCE_VERSIONED_URI,
+        "openai/widgetAccessible": True,
         "openai/toolInvocation/invoking": "Opening live workspace",
         "openai/toolInvocation/invoked": "Live workspace ready",
     }
 
-    @mcp.tool(
-        structured_output=True,
-        annotations=ToolAnnotations(
-            readOnlyHint=False,
-            destructiveHint=False,
-            idempotentHint=False,
-            openWorldHint=False,
-        ),
-        meta=tool_meta,
-    )
-    async def open_live_workspace(
-        machine: str | None = None,
-        cwd: str = ".",
-    ) -> LiveWorkspaceResult:
-        """Open or reuse the interactive Live Workspace for real-time human monitoring and collaboration. Use it for tasks where terminal output, files/diffs, jobs, remotes, audit activity, or human takeover would materially improve the workflow."""
+    async def build_live_channel_result(
+        *,
+        machine: str | None,
+        cwd: str,
+        live_id: str | None,
+    ) -> LiveChannelResult:
         principal = current_principal()
         if principal is None:
             subject = "local-mcp-client"
@@ -2533,46 +2545,84 @@ def _register_live_workspace_tools(
         else:
             subject = principal.subject or principal.email or "mcp-client"
             scopes = tuple(sorted(principal_scopes(principal))) or tuple(ALL_OAUTH_SCOPES)
-        workspace, live_token = get_live_workspace_manager().open(
+        channel, live_token = get_live_channel_manager().open(
             session_key=mcp_session_key(mcp),
             subject=subject,
             scopes=scopes,
+            live_id=live_id,
             parent_expires_at=(
                 float(principal.claims["exp"])
                 if principal is not None and principal.claims.get("exp") is not None
                 else None
             ),
         )
-        result = LiveWorkspaceResult(
-            workspace_id=workspace.workspace_id,
-            control=workspace.control,
+        result = LiveChannelResult(
+            live_id=channel.live_id,
             api_base=_live_workspace_api_base(),
             ui_path=settings.ui_path,
             machine=machine or "local",
             cwd=cwd,
         )
         return cast(
-            LiveWorkspaceResult,
+            LiveChannelResult,
             CallToolResult(
                 _meta={
                     "local-shell-mcp/live": {
                         "token": live_token,
                         "apiBase": result.api_base,
                         "uiPath": result.ui_path,
-                        "workspaceId": result.workspace_id,
+                        "liveId": result.live_id,
                     }
                 },
-                content=[
-                    TextContent(
-                        type="text",
-                        text=(
-                            "Live Workspace ready. The user can monitor execution, inspect files "
-                            "and diffs, use a persistent terminal, and change collaboration mode."
-                        ),
-                    )
-                ],
+                content=[TextContent(type="text", text="Live Workspace channel ready.")],
                 structuredContent=result.model_dump(mode="json"),
             ),
+        )
+
+    @mcp.tool(
+        structured_output=True,
+        annotations=ToolAnnotations(
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=False,
+        ),
+        meta=tool_meta,
+    )
+    async def open_live_workspace(
+        machine: str | None = None,
+        cwd: str = ".",
+    ) -> LiveChannelResult:
+        """Open or reuse the interactive Live Workspace for real-time human/agent collaboration. Call it once for an active task and reuse the self-reconnecting floating workspace instead of reopening it repeatedly. Use it when terminal output, files/diffs, jobs, remotes, or audit activity would materially improve the workflow."""
+        return await build_live_channel_result(
+            machine=machine,
+            cwd=cwd,
+            live_id=None,
+        )
+
+    @mcp.tool(
+        structured_output=True,
+        annotations=ToolAnnotations(
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=False,
+        ),
+        meta={
+            **_oauth_meta(list(ALL_OAUTH_SCOPES)),
+            "ui": {"visibility": ["app"]},
+        },
+    )
+    async def live_workspace_reconnect(
+        machine: str | None = None,
+        cwd: str = ".",
+        live_id: str | None = None,
+    ) -> LiveChannelResult:
+        """Internal app-only Live Workspace credential attachment endpoint."""
+        return await build_live_channel_result(
+            machine=machine,
+            cwd=cwd,
+            live_id=live_id,
         )
 
 
