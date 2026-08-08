@@ -16,7 +16,9 @@ import local_shell_mcp.live_channel_routes as live_routes
 from local_shell_mcp.auth import Principal
 from local_shell_mcp.live_channel import (
     LIVE_EVENT_LIMIT,
+    LIVE_RESOURCE_LEGACY_URI,
     LIVE_RESOURCE_MIME,
+    LIVE_RESOURCE_TEMPLATE_URI,
     LIVE_RESOURCE_URI,
     LiveChannelManager,
 )
@@ -243,6 +245,7 @@ async def test_mcp_app_resource_and_render_result_hide_live_token(tmp_path, monk
 
     resources = {str(resource.uri): resource for resource in await mcp.list_resources()}
     resource = resources[LIVE_RESOURCE_URI]
+    assert LIVE_RESOURCE_LEGACY_URI in resources
     assert resource.mimeType == LIVE_RESOURCE_MIME
     assert resource.meta["ui"]["domain"] == "https://lsm.example.test"
     assert resource.meta["ui"]["csp"]["connectDomains"] == [
@@ -261,9 +264,19 @@ async def test_mcp_app_resource_and_render_result_hide_live_token(tmp_path, monk
     assert hidden["apiBase"] == "https://lsm.example.test"
     assert hidden["token"] not in (tmp_path / "audit.jsonl").read_text(encoding="utf-8")
 
-    contents = list(await mcp.read_resource(LIVE_RESOURCE_URI))
-    assert contents[0].mime_type == LIVE_RESOURCE_MIME
-    assert "local-shell-mcp-live-workspace" in str(contents[0].content)
+    templates = {
+        str(template.uriTemplate): template for template in await mcp.list_resource_templates()
+    }
+    assert LIVE_RESOURCE_TEMPLATE_URI in templates
+
+    for uri in (
+        LIVE_RESOURCE_URI,
+        LIVE_RESOURCE_LEGACY_URI,
+        "ui://local-shell-mcp/live-workspace-previous-cache-key.html",
+    ):
+        contents = list(await mcp.read_resource(uri))
+        assert contents[0].mime_type == LIVE_RESOURCE_MIME
+        assert "local-shell-mcp-live-workspace" in str(contents[0].content)
 
 
 @pytest.mark.asyncio

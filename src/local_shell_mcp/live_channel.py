@@ -13,6 +13,8 @@ from pathlib import Path
 from typing import Any
 
 _LIVE_RESOURCE_PATH = Path(__file__).resolve().parent / "ui_static" / "live-workspace.html"
+LIVE_RESOURCE_LEGACY_URI = "ui://local-shell-mcp/live-workspace.html"
+LIVE_RESOURCE_TEMPLATE_URI = "ui://local-shell-mcp/live-workspace-{version}.html"
 
 
 def _versioned_live_resource_uri() -> str:
@@ -20,7 +22,7 @@ def _versioned_live_resource_uri() -> str:
         digest = hashlib.sha256(_LIVE_RESOURCE_PATH.read_bytes()).hexdigest()[:16]
     except OSError:
         digest = "unbuilt"
-    return f"ui://local-shell-mcp/live-workspace-{digest}.html"
+    return LIVE_RESOURCE_TEMPLATE_URI.format(version=digest)
 
 
 LIVE_RESOURCE_URI = _versioned_live_resource_uri()

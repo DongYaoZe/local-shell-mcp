@@ -56,7 +56,9 @@ from .jobs import (
     tail_job,
 )
 from .live_channel import (
+    LIVE_RESOURCE_LEGACY_URI,
     LIVE_RESOURCE_MIME,
+    LIVE_RESOURCE_TEMPLATE_URI,
     LIVE_RESOURCE_URI,
     get_live_channel_manager,
     mcp_session_key,
@@ -2484,15 +2486,34 @@ def _register_live_workspace_tools(
     mcp: FastMCP,
     settings: Any,
 ) -> None:
+    resource_options = {
+        "name": "local-shell-mcp-live-workspace",
+        "title": "LSM Live Workspace",
+        "description": "Interactive human/agent workspace for local-shell-mcp execution.",
+        "mime_type": LIVE_RESOURCE_MIME,
+        "meta": _live_workspace_resource_meta(),
+    }
+
     @mcp.resource(
         LIVE_RESOURCE_URI,
-        name="local-shell-mcp-live-workspace",
-        title="LSM Live Workspace",
-        description="Interactive human/agent workspace for local-shell-mcp execution.",
-        mime_type=LIVE_RESOURCE_MIME,
-        meta=_live_workspace_resource_meta(),
+        **resource_options,
     )
     def live_workspace_resource() -> str:
+        return _live_workspace_html()
+
+    @mcp.resource(
+        LIVE_RESOURCE_LEGACY_URI,
+        **resource_options,
+    )
+    def legacy_live_workspace_resource() -> str:
+        return _live_workspace_html()
+
+    @mcp.resource(
+        LIVE_RESOURCE_TEMPLATE_URI,
+        **resource_options,
+    )
+    def cached_live_workspace_resource(version: str) -> str:
+        del version
         return _live_workspace_html()
 
     tool_meta = {
