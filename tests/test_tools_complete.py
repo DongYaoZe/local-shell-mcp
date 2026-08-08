@@ -166,6 +166,7 @@ async def test_all_public_tool_wrappers_local_and_remote(tmp_path, monkeypatch):
         "search": {"query": "needle"},
         "fetch": {"id": "found.txt"},
         "open_live_workspace": {},
+        "live_workspace_reconnect": {},
         "environment_info": {},
         "skills_list": {},
         "skill_load": {"name": "skill"},
