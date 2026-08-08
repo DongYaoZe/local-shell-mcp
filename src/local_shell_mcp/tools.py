@@ -55,10 +55,10 @@ from .jobs import (
     stop_job,
     tail_job,
 )
-from .live_workspace import (
+from .live_channel import (
     LIVE_RESOURCE_MIME,
     LIVE_RESOURCE_URI,
-    get_live_workspace_manager,
+    get_live_channel_manager,
     mcp_session_key,
 )
 from .models import ToolResult
@@ -132,13 +132,13 @@ class ViewImageResult(BaseModel):
     error_type: str | None = None
 
 
-class LiveWorkspaceResult(BaseModel):
+class LiveChannelResult(BaseModel):
     """Model-visible state returned when the interactive workspace is opened."""
 
     model_config = ConfigDict(extra="forbid")
 
     ok: bool = True
-    workspace_id: str
+    live_id: str
     control: str
     api_base: str
     ui_path: str
@@ -626,7 +626,7 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
             started_at = time.monotonic()
             live_session_key = mcp_session_key(mcp)
             live_arguments = _live_event_arguments(__tool_name, safe_call_arguments)
-            get_live_workspace_manager().publish_for_session(
+            get_live_channel_manager().publish_for_session(
                 live_session_key,
                 "tool.started",
                 data={"call_id": call_id, **live_arguments},
@@ -640,7 +640,7 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
             )
             try:
                 if _live_tool_mutates(__tool_name, __read_only, call_arguments):
-                    get_live_workspace_manager().require_agent_mutation_allowed(
+                    get_live_channel_manager().require_agent_mutation_allowed(
                         live_session_key,
                         __tool_name,
                     )
@@ -668,7 +668,7 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
                     **failure_context,
                     **audit_context,
                 )
-                get_live_workspace_manager().publish_for_session(
+                get_live_channel_manager().publish_for_session(
                     live_session_key,
                     "tool.completed" if call_ok else "tool.failed",
                     data={
@@ -703,7 +703,7 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
                     result=_serialize_audit_value(result),
                     **audit_context,
                 )
-                get_live_workspace_manager().publish_for_session(
+                get_live_channel_manager().publish_for_session(
                     live_session_key,
                     "tool.failed",
                     data={
@@ -726,7 +726,7 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
                     error_type=type(exc).__name__,
                     **audit_context,
                 )
-                get_live_workspace_manager().publish_for_session(
+                get_live_channel_manager().publish_for_session(
                     live_session_key,
                     "tool.failed",
                     data={
@@ -2525,8 +2525,8 @@ def _register_live_workspace_tools(
     async def open_live_workspace(
         machine: str | None = None,
         cwd: str = ".",
-        workspace_id: str | None = None,
-    ) -> LiveWorkspaceResult:
+        live_id: str | None = None,
+    ) -> LiveChannelResult:
         """Open or reuse the interactive Live Workspace for real-time human monitoring and collaboration. Use it for tasks where terminal output, files/diffs, jobs, remotes, audit activity, or human takeover would materially improve the workflow."""
         principal = current_principal()
         if principal is None:
@@ -2535,34 +2535,34 @@ def _register_live_workspace_tools(
         else:
             subject = principal.subject or principal.email or "mcp-client"
             scopes = tuple(sorted(principal_scopes(principal))) or tuple(ALL_OAUTH_SCOPES)
-        workspace, live_token = get_live_workspace_manager().open(
+        channel, live_token = get_live_channel_manager().open(
             session_key=mcp_session_key(mcp),
             subject=subject,
             scopes=scopes,
-            workspace_id=workspace_id,
+            live_id=live_id,
             parent_expires_at=(
                 float(principal.claims["exp"])
                 if principal is not None and principal.claims.get("exp") is not None
                 else None
             ),
         )
-        result = LiveWorkspaceResult(
-            workspace_id=workspace.workspace_id,
-            control=workspace.control,
+        result = LiveChannelResult(
+            live_id=channel.live_id,
+            control=channel.control,
             api_base=_live_workspace_api_base(),
             ui_path=settings.ui_path,
             machine=machine or "local",
             cwd=cwd,
         )
         return cast(
-            LiveWorkspaceResult,
+            LiveChannelResult,
             CallToolResult(
                 _meta={
                     "local-shell-mcp/live": {
                         "token": live_token,
                         "apiBase": result.api_base,
                         "uiPath": result.ui_path,
-                        "workspaceId": result.workspace_id,
+                        "liveId": result.live_id,
                     }
                 },
                 content=[

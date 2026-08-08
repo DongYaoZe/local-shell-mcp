@@ -32,9 +32,8 @@ class HumanCollaborationRequiredError(RuntimeError):
 
 
 @dataclass(slots=True)
-class LiveWorkspace:
-    workspace_id: str
-    session_key: str
+class LiveChannel:
+    live_id: str
     subject: str
     scopes: tuple[str, ...]
     token_digest: str
@@ -49,7 +48,7 @@ class LiveWorkspace:
 
     def public_state(self) -> dict[str, Any]:
         return {
-            "workspace_id": self.workspace_id,
+            "live_id": self.live_id,
             "created_at": self.created_at,
             "expires_at": self.expires_at,
             "control": self.control,
@@ -57,11 +56,11 @@ class LiveWorkspace:
         }
 
 
-class LiveWorkspaceManager:
+class LiveChannelManager:
     def __init__(self) -> None:
         self._lock = threading.RLock()
-        self._workspaces: dict[str, LiveWorkspace] = {}
-        self._session_workspaces: dict[str, str] = {}
+        self._channels: dict[str, LiveChannel] = {}
+        self._session_channels: dict[str, str] = {}
 
     @staticmethod
     def _digest(token: str) -> str:
@@ -70,18 +69,18 @@ class LiveWorkspaceManager:
     def _prune_locked(self, now: float | None = None) -> None:
         current = time.time() if now is None else now
         expired = [
-            workspace_id
-            for workspace_id, workspace in self._workspaces.items()
-            if workspace.expires_at <= current
+            live_id
+            for live_id, channel in self._channels.items()
+            if channel.expires_at <= current
         ]
-        for workspace_id in expired:
-            self._workspaces.pop(workspace_id, None)
+        for live_id in expired:
+            self._channels.pop(live_id, None)
         if expired:
             expired_ids = set(expired)
-            self._session_workspaces = {
-                session_key: workspace_id
-                for session_key, workspace_id in self._session_workspaces.items()
-                if workspace_id not in expired_ids
+            self._session_channels = {
+                session_key: live_id
+                for session_key, live_id in self._session_channels.items()
+                if live_id not in expired_ids
             }
 
     def open(
@@ -91,8 +90,8 @@ class LiveWorkspaceManager:
         subject: str,
         scopes: tuple[str, ...],
         parent_expires_at: float | None = None,
-        workspace_id: str | None = None,
-    ) -> tuple[LiveWorkspace, str]:
+        live_id: str | None = None,
+    ) -> tuple[LiveChannel, str]:
         now = time.time()
         expires_at = now + LIVE_TOKEN_TTL_S
         if parent_expires_at is not None:
@@ -101,77 +100,76 @@ class LiveWorkspaceManager:
         digest = self._digest(token)
         with self._lock:
             self._prune_locked(now)
-            session_workspace_id = self._session_workspaces.get(session_key)
-            workspace = self._workspaces.get(workspace_id or session_workspace_id or "")
-            if workspace_id and workspace is not None and workspace.subject != subject:
+            session_live_id = self._session_channels.get(session_key)
+            channel = self._channels.get(live_id or session_live_id or "")
+            if live_id and channel is not None and channel.subject != subject:
                 raise PermissionError("Live workspace belongs to a different principal")
-            if workspace_id and workspace is None:
+            if live_id and channel is None:
                 raise LookupError("Live workspace is no longer available")
-            if workspace is None:
-                workspace = LiveWorkspace(
-                    workspace_id=uuid.uuid4().hex,
-                    session_key=session_key,
+            if channel is None:
+                channel = LiveChannel(
+                    live_id=uuid.uuid4().hex,
                     subject=subject,
                     scopes=scopes,
                     token_digest=digest,
                     created_at=now,
                     expires_at=expires_at,
                 )
-                self._workspaces[workspace.workspace_id] = workspace
-            self._session_workspaces[session_key] = workspace.workspace_id
-            workspace.subject = subject
-            workspace.scopes = scopes
-            workspace.token_digest = digest
-            workspace.expires_at = expires_at
+                self._channels[channel.live_id] = channel
+            self._session_channels[session_key] = channel.live_id
+            channel.subject = subject
+            channel.scopes = scopes
+            channel.token_digest = digest
+            channel.expires_at = expires_at
             self._publish_locked(
-                workspace,
-                "workspace.opened",
+                channel,
+                "channel.opened",
                 actor="system",
-                data={"control": workspace.control},
+                data={"control": channel.control},
             )
-            return workspace, token
+            return channel, token
 
-    def authenticate(self, token: str | None) -> LiveWorkspace | None:
+    def authenticate(self, token: str | None) -> LiveChannel | None:
         if not token:
             return None
         digest = self._digest(token)
         now = time.time()
         with self._lock:
             self._prune_locked(now)
-            for workspace in self._workspaces.values():
-                if secrets.compare_digest(workspace.token_digest, digest):
-                    return workspace
+            for channel in self._channels.values():
+                if secrets.compare_digest(channel.token_digest, digest):
+                    return channel
         return None
 
-    def active_for_session(self, session_key: str) -> LiveWorkspace | None:
+    def active_for_session(self, session_key: str) -> LiveChannel | None:
         with self._lock:
             self._prune_locked()
-            workspace_id = self._session_workspaces.get(session_key)
-            return self._workspaces.get(workspace_id or "")
+            live_id = self._session_channels.get(session_key)
+            return self._channels.get(live_id or "")
 
-    def by_id(self, workspace_id: str) -> LiveWorkspace | None:
+    def by_id(self, live_id: str) -> LiveChannel | None:
         with self._lock:
             self._prune_locked()
-            return self._workspaces.get(workspace_id)
+            return self._channels.get(live_id)
 
     def _publish_locked(
         self,
-        workspace: LiveWorkspace,
+        channel: LiveChannel,
         event_type: str,
         *,
         actor: str,
         data: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        workspace.seq += 1
+        channel.seq += 1
         event = {
-            "seq": workspace.seq,
+            "seq": channel.seq,
             "ts": time.time(),
             "type": event_type,
             "actor": actor,
             "data": data or {},
         }
-        workspace.events.append(event)
-        workspace.signal.set()
+        channel.events.append(event)
+        channel.signal.set()
         return event
 
     def publish_for_session(
@@ -183,70 +181,70 @@ class LiveWorkspaceManager:
         data: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
         with self._lock:
-            workspace = self.active_for_session(session_key)
-            if workspace is None:
+            channel = self.active_for_session(session_key)
+            if channel is None:
                 return None
-            return self._publish_locked(workspace, event_type, actor=actor, data=data)
+            return self._publish_locked(channel, event_type, actor=actor, data=data)
 
-    def publish_workspace(
+    def publish_channel(
         self,
-        workspace_id: str,
+        live_id: str,
         event_type: str,
         *,
         actor: str,
         data: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
         with self._lock:
-            workspace = self._workspaces.get(workspace_id)
-            if workspace is None:
+            channel = self._channels.get(live_id)
+            if channel is None:
                 return None
-            return self._publish_locked(workspace, event_type, actor=actor, data=data)
+            return self._publish_locked(channel, event_type, actor=actor, data=data)
 
     def events_since(
         self,
-        workspace: LiveWorkspace,
+        channel: LiveChannel,
         after: int,
         limit: int = LIVE_EVENT_BATCH,
     ) -> list[dict[str, Any]]:
         with self._lock:
-            return [event for event in workspace.events if int(event["seq"]) > after][:limit]
+            return [event for event in channel.events if int(event["seq"]) > after][:limit]
 
     async def wait_events(
         self,
-        workspace: LiveWorkspace,
+        channel: LiveChannel,
         after: int,
         timeout_s: float = LIVE_LONG_POLL_S,
     ) -> list[dict[str, Any]]:
-        events = self.events_since(workspace, after)
+        events = self.events_since(channel, after)
         if events:
             return events
-        workspace.signal.clear()
-        events = self.events_since(workspace, after)
+        channel.signal.clear()
+        events = self.events_since(channel, after)
         if events:
             return events
         try:
-            await asyncio.wait_for(workspace.signal.wait(), timeout=max(0.1, timeout_s))
+            await asyncio.wait_for(channel.signal.wait(), timeout=max(0.1, timeout_s))
         except TimeoutError:
             return []
-        return self.events_since(workspace, after)
+        return self.events_since(channel, after)
 
-    def set_control(self, workspace: LiveWorkspace, control: str) -> dict[str, Any]:
+    def set_control(self, channel: LiveChannel, control: str) -> dict[str, Any]:
         if control not in CONTROL_MODES:
             raise ValueError(f"Unsupported control mode: {control}")
         with self._lock:
-            previous = workspace.control
-            workspace.control = control
+            previous = channel.control
+            channel.control = control
             self._publish_locked(
-                workspace,
+                channel,
                 "control.changed",
                 actor="human",
                 data={"previous": previous, "control": control},
             )
-            return workspace.public_state()
+            return channel.public_state()
 
     def require_agent_mutation_allowed(self, session_key: str, tool_name: str) -> None:
-        workspace = self.active_for_session(session_key)
-        if workspace is None or workspace.control != "human":
+        channel = self.active_for_session(session_key)
+        if channel is None or channel.control != "human":
             return
         self.publish_for_session(
             session_key,
@@ -259,21 +257,21 @@ class LiveWorkspaceManager:
             "wait for the user to switch control back to Collaborate or Agent before making changes."
         )
 
-    def require_human_mutation_allowed(self, workspace_id: str) -> None:
-        workspace = self.by_id(workspace_id)
-        if workspace is None:
+    def require_human_mutation_allowed(self, live_id: str) -> None:
+        channel = self.by_id(live_id)
+        if channel is None:
             raise HumanCollaborationRequiredError("Live workspace is no longer available")
-        if workspace.control in {"shared", "human"}:
+        if channel.control in {"shared", "human"}:
             return
         raise HumanCollaborationRequiredError(
             "The live workspace is in Observe mode. Switch to Collaborate or Take over before editing."
         )
 
 
-_MANAGER = LiveWorkspaceManager()
+_MANAGER = LiveChannelManager()
 
 
-def get_live_workspace_manager() -> LiveWorkspaceManager:
+def get_live_channel_manager() -> LiveChannelManager:
     return _MANAGER
 
 
@@ -307,6 +305,6 @@ def mcp_session_key(mcp: Any) -> str:
     return f"mcp-session:{key}"
 
 
-def workspace_id_from_claims(claims: dict[str, Any]) -> str | None:
-    value = claims.get("live_workspace_id")
+def live_id_from_claims(claims: dict[str, Any]) -> str | None:
+    value = claims.get("live_id")
     return str(value) if value else None

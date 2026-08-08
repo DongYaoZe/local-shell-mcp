@@ -9,7 +9,7 @@ from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
 from .auth import Principal, current_principal, require_scopes, verify_request
-from .live_workspace import LIVE_API_PREFIX, get_live_workspace_manager, workspace_id_from_claims
+from .live_channel import LIVE_API_PREFIX, get_live_channel_manager, live_id_from_claims
 from .models import CommandResult
 from .remote import remote_manager
 from .settings import get_settings
@@ -23,15 +23,15 @@ def _principal(request: Request) -> Principal:
     return principal
 
 
-def _live_workspace(request: Request):  # noqa: ANN202
+def _live_channel(request: Request):  # noqa: ANN202
     principal = _principal(request)
-    workspace_id = workspace_id_from_claims(principal.claims)
-    if not workspace_id:
+    live_id = live_id_from_claims(principal.claims)
+    if not live_id:
         raise HTTPException(status_code=403, detail="A live-workspace token is required")
-    workspace = get_live_workspace_manager().by_id(workspace_id)
-    if workspace is None:
+    channel = get_live_channel_manager().by_id(live_id)
+    if channel is None:
         raise HTTPException(status_code=401, detail="Live workspace expired")
-    return principal, workspace
+    return principal, channel
 
 
 def _ok(data: Any) -> JSONResponse:
@@ -92,14 +92,14 @@ async def _run_machine_shell(
 
 async def live_snapshot(request: Request) -> Response:
     try:
-        principal, workspace = _live_workspace(request)
+        principal, channel = _live_channel(request)
         require_scopes(principal, ("shell:read",))
-        manager = get_live_workspace_manager()
-        after = max(0, workspace.seq - 300)
+        manager = get_live_channel_manager()
+        after = max(0, channel.seq - 300)
         return _ok(
             {
-                "workspace": workspace.public_state(),
-                "events": manager.events_since(workspace, after, 300),
+                "channel": channel.public_state(),
+                "events": manager.events_since(channel, after, 300),
             }
         )
     except Exception as exc:
@@ -108,19 +108,19 @@ async def live_snapshot(request: Request) -> Response:
 
 async def live_events(request: Request) -> Response:
     try:
-        principal, workspace = _live_workspace(request)
+        principal, channel = _live_channel(request)
         require_scopes(principal, ("shell:read",))
         try:
             after = max(0, int(request.query_params.get("after", "0")))
             timeout_s = min(30.0, max(1.0, float(request.query_params.get("timeout", "25"))))
         except ValueError as exc:
             raise HTTPException(status_code=400, detail="Invalid event cursor") from exc
-        events = await get_live_workspace_manager().wait_events(workspace, after, timeout_s)
+        events = await get_live_channel_manager().wait_events(channel, after, timeout_s)
         return _ok(
             {
                 "events": events,
                 "cursor": events[-1]["seq"] if events else after,
-                "control": workspace.control,
+                "control": channel.control,
             }
         )
     except Exception as exc:
@@ -129,17 +129,17 @@ async def live_events(request: Request) -> Response:
 
 async def live_control(request: Request) -> Response:
     try:
-        _, workspace = _live_workspace(request)
+        _, channel = _live_channel(request)
         body = await request.json()
         control = str(body.get("control") or "")
-        return _ok(get_live_workspace_manager().set_control(workspace, control))
+        return _ok(get_live_channel_manager().set_control(channel, control))
     except Exception as exc:
         return _error(exc)
 
 
 async def live_git(request: Request) -> Response:
     try:
-        principal, workspace = _live_workspace(request)
+        principal, channel = _live_channel(request)
         machine = str(request.query_params.get("machine") or "local")
         required_scopes = ("shell:read", "remote:use") if machine != "local" else ("shell:read",)
         require_scopes(principal, required_scopes)
@@ -188,8 +188,8 @@ async def live_git(request: Request) -> Response:
                 "truncated": diff.truncated or staged_diff.truncated,
             }
         )
-        get_live_workspace_manager().publish_workspace(
-            workspace.workspace_id,
+        get_live_channel_manager().publish_channel(
+            channel.live_id,
             "human.inspected_diff",
             actor="human",
             data={"machine": machine, "cwd": cwd},
@@ -206,7 +206,7 @@ async def live_git(request: Request) -> Response:
         return _error(exc)
 
 
-def live_workspace_routes() -> list[Any]:
+def live_channel_routes() -> list[Any]:
     return [
         Route(LIVE_API_PREFIX + "/snapshot", live_snapshot, methods=["GET"]),
         Route(LIVE_API_PREFIX + "/events", live_events, methods=["GET"]),

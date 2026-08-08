@@ -63,7 +63,7 @@ describe("live workspace utilities", () => {
   })
 
   test("activity hides workspace bootstrap noise and routes useful operations", () => {
-    const opened: LiveEvent = { seq: 1, ts: 1, type: "workspace.opened", actor: "system", data: {} }
+    const opened: LiveEvent = { seq: 1, ts: 1, type: "channel.opened", actor: "system", data: {} }
     const bootstrap: LiveEvent = { seq: 2, ts: 1, type: "tool.completed", actor: "agent", data: { tool: "open_live_workspace" } }
     const edit: LiveEvent = { seq: 3, ts: 1, type: "tool.completed", actor: "agent", data: { tool: "edit_file", path: "/workspace/src/app.ts" } }
     const job: LiveEvent = { seq: 4, ts: 1, type: "tool.completed", actor: "agent", data: { tool: "job_start", name: "tests" } }
@@ -95,7 +95,7 @@ describe("live workspace utilities", () => {
 
   test("ChatGPT compatibility globals preserve hidden live credentials", () => {
     const result = toolResultFromOpenAiGlobals({
-      toolOutput: { workspace_id: "workspace-1", machine: "local", cwd: "." },
+      toolOutput: { live_id: "live-1", machine: "local", cwd: "." },
       toolResponseMetadata: {
         status: "finished",
         mcp_tool_result: {
@@ -115,7 +115,7 @@ describe("live workspace utilities", () => {
         apiBase: "https://lsm.example.test",
       },
     })
-    expect(result?.structuredContent).toEqual({ workspace_id: "workspace-1", machine: "local", cwd: "." })
+    expect(result?.structuredContent).toEqual({ live_id: "live-1", machine: "local", cwd: "." })
   })
 
   test("ChatGPT compatibility globals accept call_tool_result fallback", () => {
@@ -123,11 +123,11 @@ describe("live workspace utilities", () => {
       toolResponseMetadata: {
         call_tool_result: {
           _meta: { "local-shell-mcp/live": { token: "token", apiBase: "https://lsm.example.test" } },
-          structuredContent: { workspace_id: "workspace-2" },
+          structuredContent: { live_id: "live-2" },
         },
       },
     })
 
-    expect(result?.structuredContent).toEqual({ workspace_id: "workspace-2" })
+    expect(result?.structuredContent).toEqual({ live_id: "live-2" })
   })
 })

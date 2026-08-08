@@ -10,16 +10,16 @@ from fastapi.testclient import TestClient
 from mcp.types import CallToolResult
 from starlette.requests import Request
 
-import local_shell_mcp.live_workspace as live_module
-import local_shell_mcp.live_workspace_routes as live_routes
+import local_shell_mcp.live_channel as live_channel_module
+import local_shell_mcp.live_channel_routes as live_routes
 from local_shell_mcp.auth import Principal
-from local_shell_mcp.live_workspace import (
+from local_shell_mcp.live_channel import (
     LIVE_EVENT_LIMIT,
     LIVE_RESOURCE_MIME,
     LIVE_RESOURCE_URI,
     HumanCollaborationRequiredError,
     HumanControlActiveError,
-    LiveWorkspaceManager,
+    LiveChannelManager,
 )
 from local_shell_mcp.main import _build_mcp_http_app
 from local_shell_mcp.oauth import ALL_OAUTH_SCOPES
@@ -35,47 +35,47 @@ def _configure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, auth: str = "
     monkeypatch.setenv("LOCAL_SHELL_MCP_REMOTE_ENABLED", "false")
     monkeypatch.setenv("LOCAL_SHELL_MCP_PUBLIC_BASE_URL", "https://lsm.example.test")
     get_settings.cache_clear()
-    monkeypatch.setattr(live_module, "_MANAGER", LiveWorkspaceManager())
+    monkeypatch.setattr(live_channel_module, "_MANAGER", LiveChannelManager())
 
 
 def test_live_workspace_tokens_rotate_and_events_are_bounded():
-    manager = LiveWorkspaceManager()
+    manager = LiveChannelManager()
     parent_deadline = time.time() + 60
-    workspace, first_token = manager.open(
+    channel, first_token = manager.open(
         session_key="mcp:test",
         subject="user",
         scopes=tuple(ALL_OAUTH_SCOPES),
         parent_expires_at=parent_deadline,
     )
-    same_workspace, second_token = manager.open(
+    same_channel, second_token = manager.open(
         session_key="mcp:test",
         subject="user",
         scopes=tuple(ALL_OAUTH_SCOPES),
         parent_expires_at=parent_deadline,
     )
 
-    assert same_workspace.workspace_id == workspace.workspace_id
+    assert same_channel.live_id == channel.live_id
     assert first_token != second_token
     assert manager.authenticate(first_token) is None
-    assert manager.authenticate(second_token) is workspace
-    assert workspace.expires_at <= parent_deadline
+    assert manager.authenticate(second_token) is channel
+    assert channel.expires_at <= parent_deadline
 
     for index in range(LIVE_EVENT_LIMIT + 50):
-        manager.publish_workspace(
-            workspace.workspace_id,
+        manager.publish_channel(
+            channel.live_id,
             "test.event",
             actor="system",
             data={"index": index},
         )
 
-    assert len(workspace.events) == LIVE_EVENT_LIMIT
-    assert workspace.events[-1]["data"]["index"] == LIVE_EVENT_LIMIT + 49
-    assert workspace.events[0]["seq"] == workspace.seq - LIVE_EVENT_LIMIT + 1
+    assert len(channel.events) == LIVE_EVENT_LIMIT
+    assert channel.events[-1]["data"]["index"] == LIVE_EVENT_LIMIT + 49
+    assert channel.events[0]["seq"] == channel.seq - LIVE_EVENT_LIMIT + 1
 
 
-def test_live_workspace_can_reattach_a_second_mcp_session_by_workspace_id():
-    manager = LiveWorkspaceManager()
-    workspace, first_token = manager.open(
+def test_live_workspace_can_reattach_a_second_mcp_session_by_live_id():
+    manager = LiveChannelManager()
+    channel, first_token = manager.open(
         session_key="mcp:model-session",
         subject="user",
         scopes=tuple(ALL_OAUTH_SCOPES),
@@ -85,79 +85,79 @@ def test_live_workspace_can_reattach_a_second_mcp_session_by_workspace_id():
         session_key="mcp:app-session",
         subject="user",
         scopes=tuple(ALL_OAUTH_SCOPES),
-        workspace_id=workspace.workspace_id,
+        live_id=channel.live_id,
     )
 
-    assert attached is workspace
-    assert manager.active_for_session("mcp:model-session") is workspace
-    assert manager.active_for_session("mcp:app-session") is workspace
+    assert attached is channel
+    assert manager.active_for_session("mcp:model-session") is channel
+    assert manager.active_for_session("mcp:app-session") is channel
     assert manager.authenticate(first_token) is None
-    assert manager.authenticate(app_token) is workspace
+    assert manager.authenticate(app_token) is channel
 
     manager.publish_for_session(
         "mcp:model-session",
         "tool.completed",
         data={"tool": "run_shell_tool", "call_id": "model-call"},
     )
-    assert workspace.events[-1]["data"]["call_id"] == "model-call"
+    assert channel.events[-1]["data"]["call_id"] == "model-call"
 
     with pytest.raises(PermissionError, match="different principal"):
         manager.open(
             session_key="mcp:other-user",
             subject="other",
             scopes=tuple(ALL_OAUTH_SCOPES),
-            workspace_id=workspace.workspace_id,
+            live_id=channel.live_id,
         )
 
 
 @pytest.mark.asyncio
 async def test_live_workspace_expiry_publish_and_wait_paths():
-    manager = LiveWorkspaceManager()
-    workspace, token = manager.open(
+    manager = LiveChannelManager()
+    channel, token = manager.open(
         session_key="mcp:events",
         subject="user",
         scopes=tuple(ALL_OAUTH_SCOPES),
     )
 
     assert manager.authenticate(None) is None
-    assert manager.publish_workspace("missing", "ignored", actor="system") is None
+    assert manager.publish_channel("missing", "ignored", actor="system") is None
 
-    immediate = await manager.wait_events(workspace, 0, timeout_s=0.1)
-    assert immediate and immediate[0]["type"] == "workspace.opened"
+    immediate = await manager.wait_events(channel, 0, timeout_s=0.1)
+    assert immediate and immediate[0]["type"] == "channel.opened"
 
-    after = workspace.seq
-    assert await manager.wait_events(workspace, after, timeout_s=0.01) == []
+    after = channel.seq
+    assert await manager.wait_events(channel, after, timeout_s=0.01) == []
 
     async def publish_later() -> None:
         await asyncio.sleep(0.01)
-        manager.publish_workspace(
-            workspace.workspace_id,
+        manager.publish_channel(
+            channel.live_id,
             "job.progress",
             actor="system",
             data={"progress": 50},
         )
 
     publisher = asyncio.create_task(publish_later())
-    waited = await manager.wait_events(workspace, after, timeout_s=0.5)
+    waited = await manager.wait_events(channel, after, timeout_s=0.5)
     await publisher
     assert waited[-1]["type"] == "job.progress"
 
-    workspace.expires_at = 0
+    channel.expires_at = 0
     assert manager.authenticate(token) is None
     assert manager.active_for_session("mcp:events") is None
-    assert manager.by_id(workspace.workspace_id) is None
+    assert manager.by_id(channel.live_id) is None
 
 
 def test_live_workspace_rejects_invalid_control_and_missing_workspace():
-    manager = LiveWorkspaceManager()
-    workspace, _ = manager.open(
+    manager = LiveChannelManager()
+    channel, _ = manager.open(
         session_key="mcp:control-errors",
         subject="user",
         scopes=tuple(ALL_OAUTH_SCOPES),
     )
 
     with pytest.raises(ValueError, match="Unsupported control mode"):
-        manager.set_control(workspace, "invalid")
+        manager.set_control(channel, "invalid")
     with pytest.raises(HumanCollaborationRequiredError, match="no longer available"):
         manager.require_human_mutation_allowed("missing")
 
@@ -187,37 +187,37 @@ def test_mcp_session_key_uses_request_session_identity():
                 },
             )()
 
-    assert live_module.mcp_session_key(FakeMcp(Session(), {"mcp-session-id": "abc123"})) == (
+    assert live_channel_module.mcp_session_key(FakeMcp(Session(), {"mcp-session-id": "abc123"})) == (
         "mcp-http:abc123"
     )
     first_session = Session()
     second_session = Session()
-    first_key = live_module.mcp_session_key(FakeMcp(first_session))
-    assert live_module.mcp_session_key(FakeMcp(first_session)) == first_key
-    assert live_module.mcp_session_key(FakeMcp(second_session)) != first_key
+    first_key = live_channel_module.mcp_session_key(FakeMcp(first_session))
+    assert live_channel_module.mcp_session_key(FakeMcp(first_session)) == first_key
+    assert live_channel_module.mcp_session_key(FakeMcp(second_session)) != first_key
 
 
 def test_control_modes_enforce_both_sides():
-    manager = LiveWorkspaceManager()
-    workspace, _ = manager.open(
+    manager = LiveChannelManager()
+    channel, _ = manager.open(
         session_key="mcp:test",
         subject="user",
         scopes=tuple(ALL_OAUTH_SCOPES),
     )
 
     with pytest.raises(HumanCollaborationRequiredError):
-        manager.require_human_mutation_allowed(workspace.workspace_id)
+        manager.require_human_mutation_allowed(channel.live_id)
 
-    manager.set_control(workspace, "shared")
-    manager.require_human_mutation_allowed(workspace.workspace_id)
+    manager.set_control(channel, "shared")
+    manager.require_human_mutation_allowed(channel.live_id)
     manager.require_agent_mutation_allowed("mcp:test", "write_file")
 
-    manager.set_control(workspace, "human")
-    manager.require_human_mutation_allowed(workspace.workspace_id)
+    manager.set_control(channel, "human")
+    manager.require_human_mutation_allowed(channel.live_id)
     with pytest.raises(HumanControlActiveError):
         manager.require_agent_mutation_allowed("mcp:test", "write_file")
 
-    manager.set_control(workspace, "agent")
+    manager.set_control(channel, "agent")
     manager.require_agent_mutation_allowed("mcp:test", "write_file")
 
 
@@ -233,7 +233,7 @@ async def test_mcp_app_resource_and_render_result_hide_live_token(tmp_path, monk
     assert render_tool.meta["openai/outputTemplate"] == LIVE_RESOURCE_URI
     assert render_tool.meta["openai/widgetAccessible"] is True
     assert render_tool.meta["securitySchemes"][0]["scopes"] == list(ALL_OAUTH_SCOPES)
-    assert render_tool.outputSchema["title"] == "LiveWorkspaceResult"
+    assert render_tool.outputSchema["title"] == "LiveChannelResult"
     assert render_tool.annotations.readOnlyHint is True
     assert render_tool.annotations.destructiveHint is False
     assert render_tool.annotations.idempotentHint is True
@@ -251,7 +251,7 @@ async def test_mcp_app_resource_and_render_result_hide_live_token(tmp_path, monk
 
     result = await mcp.call_tool("open_live_workspace", {"machine": "local", "cwd": "."})
     assert isinstance(result, CallToolResult)
-    assert result.structuredContent["workspace_id"]
+    assert result.structuredContent["live_id"]
     assert "token" not in result.structuredContent
     hidden = result.meta["local-shell-mcp/live"]
     assert hidden["token"]
@@ -270,9 +270,9 @@ async def test_human_takeover_blocks_model_mutation_but_not_reads(tmp_path, monk
     result = await mcp.call_tool("open_live_workspace", {"cwd": "."})
     assert isinstance(result, CallToolResult)
     live_token = result.meta["local-shell-mcp/live"]["token"]
-    workspace = live_module.get_live_workspace_manager().active_for_session("direct")
-    assert workspace is not None
-    live_module.get_live_workspace_manager().set_control(workspace, "human")
+    channel = live_channel_module.get_live_channel_manager().active_for_session("direct")
+    assert channel is not None
+    live_channel_module.get_live_channel_manager().set_control(channel, "human")
 
     reopened = await mcp.call_tool("open_live_workspace", {"cwd": "."})
     assert isinstance(reopened, CallToolResult)
@@ -291,9 +291,9 @@ async def test_human_takeover_blocks_model_mutation_but_not_reads(tmp_path, monk
         {"session_id": "missing", "screenshot": False},
     )
     assert snapshot_without_screenshot is not None
-    assert live_module.get_live_workspace_manager().authenticate(live_token) is None
-    assert live_module.get_live_workspace_manager().authenticate(refreshed_live_token) is workspace
-    event_types = [event["type"] for event in workspace.events]
+    assert live_channel_module.get_live_channel_manager().authenticate(live_token) is None
+    assert live_channel_module.get_live_channel_manager().authenticate(refreshed_live_token) is channel
+    event_types = [event["type"] for event in channel.events]
     assert "tool.blocked" in event_types
     assert "tool.failed" in event_types
     assert "tool.completed" in event_types
@@ -301,8 +301,8 @@ async def test_human_takeover_blocks_model_mutation_but_not_reads(tmp_path, monk
 
 def test_live_http_token_cors_and_human_mutation_modes(tmp_path, monkeypatch):
     _configure(tmp_path, monkeypatch, auth="oauth")
-    manager = live_module.get_live_workspace_manager()
-    workspace, token = manager.open(
+    manager = live_channel_module.get_live_channel_manager()
+    channel, token = manager.open(
         session_key="mcp:http-test",
         subject="user",
         scopes=tuple(ALL_OAUTH_SCOPES),
@@ -325,7 +325,7 @@ def test_live_http_token_cors_and_human_mutation_modes(tmp_path, monkeypatch):
         snapshot = client.get("/api/live/snapshot", headers=headers)
         assert snapshot.status_code == 200
         assert snapshot.headers["access-control-allow-origin"] == "*"
-        assert snapshot.json()["data"]["workspace"]["workspace_id"] == workspace.workspace_id
+        assert snapshot.json()["data"]["channel"]["live_id"] == channel.live_id
 
         bootstrap = client.get("/api/ui/bootstrap", headers=headers)
         assert bootstrap.status_code == 200
@@ -394,7 +394,7 @@ def test_live_http_token_cors_and_human_mutation_modes(tmp_path, monkeypatch):
         assert "tracked.txt" in git_data["status"]["stdout"]
         assert "before" in git_data["diff"]["stdout"]
         assert any(
-            event["type"] == "human.inspected_diff" for event in workspace.events
+            event["type"] == "human.inspected_diff" for event in channel.events
         )
 
         subprocess.run(["git", "checkout", "--", "tracked.txt"], cwd=tmp_path, check=True)
@@ -413,8 +413,8 @@ def test_live_http_token_cors_and_human_mutation_modes(tmp_path, monkeypatch):
 
 def test_live_http_token_authenticates_when_global_auth_is_disabled(tmp_path, monkeypatch):
     _configure(tmp_path, monkeypatch, auth="none")
-    manager = live_module.get_live_workspace_manager()
-    workspace, token = manager.open(
+    manager = live_channel_module.get_live_channel_manager()
+    channel, token = manager.open(
         session_key="mcp:no-auth-http",
         subject="user",
         scopes=tuple(ALL_OAUTH_SCOPES),
@@ -449,23 +449,23 @@ def test_live_http_token_authenticates_when_global_auth_is_disabled(tmp_path, mo
     assert same_origin.status_code == 200
     assert anonymous_cross_origin.status_code == 401
     assert snapshot.status_code == 200
-    assert snapshot.json()["data"]["workspace"]["workspace_id"] == workspace.workspace_id
+    assert snapshot.json()["data"]["channel"]["live_id"] == channel.live_id
     assert stale_ui.status_code == 401
     assert current_ui.status_code == 200
 
 
 def test_live_events_empty_batch_does_not_advance_cursor(tmp_path, monkeypatch):
     _configure(tmp_path, monkeypatch, auth="none")
-    manager = live_module.get_live_workspace_manager()
+    manager = live_channel_module.get_live_channel_manager()
     _, token = manager.open(
         session_key="mcp:cursor-race",
         subject="user",
         scopes=tuple(ALL_OAUTH_SCOPES),
     )
 
-    async def empty_wait(workspace, after, timeout_s):  # noqa: ARG001
-        manager.publish_workspace(
-            workspace.workspace_id,
+    async def empty_wait(channel, after, timeout_s):  # noqa: ARG001
+        manager.publish_channel(
+            channel.live_id,
             "tool.completed",
             actor="agent",
             data={"tool": "late"},
@@ -525,7 +525,7 @@ def test_live_workspace_is_hidden_in_stdio_mode(tmp_path, monkeypatch):
 
 def test_live_git_routes_remote_inspection_to_selected_machine(tmp_path, monkeypatch):
     _configure(tmp_path, monkeypatch, auth="oauth")
-    manager = live_module.get_live_workspace_manager()
+    manager = live_channel_module.get_live_channel_manager()
     _, token = manager.open(
         session_key="mcp:remote-git",
         subject="user",
@@ -582,16 +582,16 @@ def test_live_route_helpers_reject_missing_or_expired_workspace(monkeypatch):
         claims={"scope": "shell:read"},
     )
     with pytest.raises(Exception, match="live-workspace token"):
-        live_routes._live_workspace(request)
+        live_routes._live_channel(request)
 
     request.state.principal = Principal(
         email=None,
         subject="user",
-        claims={"scope": "shell:read", "live_workspace_id": "expired"},
+        claims={"scope": "shell:read", "live_id": "expired"},
     )
-    monkeypatch.setattr(live_routes, "get_live_workspace_manager", lambda: LiveWorkspaceManager())
+    monkeypatch.setattr(live_routes, "get_live_channel_manager", lambda: LiveChannelManager())
     with pytest.raises(Exception, match="Live workspace expired"):
-        live_routes._live_workspace(request)
+        live_routes._live_channel(request)
 
 
 def test_live_route_principal_falls_back_to_request_verification(monkeypatch):

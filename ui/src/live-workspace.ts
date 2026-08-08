@@ -38,7 +38,7 @@ type LiveConfig = {
   token: string
   apiBase: string
   uiPath: string
-  workspaceId: string
+  liveId: string
   machine: string
   cwd: string
 }
@@ -862,11 +862,11 @@ function renderDiff(): void {
 
 async function refreshDiff(): Promise<void> {
   if (!config) return
-  const requestWorkspace = config.workspaceId
+  const requestLiveId = config.liveId
   const requestMachine = config.machine
   const requestCwd = config.cwd
   const snapshot = await api<{ machine?: string; cwd: string; status: JsonRecord; diff: JsonRecord }>(`/api/live/git?machine=${encodeURIComponent(requestMachine)}&cwd=${encodeURIComponent(requestCwd)}`)
-  if (!config || config.workspaceId !== requestWorkspace || config.machine !== requestMachine || config.cwd !== requestCwd) return
+  if (!config || config.liveId !== requestLiveId || config.machine !== requestMachine || config.cwd !== requestCwd) return
   gitSnapshot = snapshot
   if (activeTab === "diff") renderDiff()
 }
@@ -1065,10 +1065,10 @@ async function askAboutAudit(id: string): Promise<void> {
 
 async function refreshJobs(): Promise<void> {
   if (!config) return
-  const requestWorkspace = config.workspaceId
+  const requestLiveId = config.liveId
   const requestMachine = config.machine
   const result = await api<Dashboard>(`/api/ui/dashboard?machine=${encodeURIComponent(requestMachine)}`)
-  if (!config || config.workspaceId !== requestWorkspace || config.machine !== requestMachine) return
+  if (!config || config.liveId !== requestLiveId || config.machine !== requestMachine) return
   trackActivityDiscoveries(result)
   dashboard = result
   updateChrome()
@@ -1082,12 +1082,12 @@ async function refreshAllCore(): Promise<void> {
     return
   }
   passiveRefreshing = true
-  const requestWorkspace = config.workspaceId
+  const requestLiveId = config.liveId
   const requestApiBase = config.apiBase
   let selectionChanged = false
   try {
     const boot = await api<JsonRecord>("/api/ui/bootstrap")
-    if (!config || config.workspaceId !== requestWorkspace || config.apiBase !== requestApiBase) {
+    if (!config || config.liveId !== requestLiveId || config.apiBase !== requestApiBase) {
       coreRefreshQueued = true
       return
     }
@@ -1113,7 +1113,7 @@ async function refreshAllCore(): Promise<void> {
     if (selectionChanged) renderCurrentTab()
     const dashboardMachine = config.machine
     const dash = await api<Dashboard>(`/api/ui/dashboard?machine=${encodeURIComponent(dashboardMachine || "local")}`)
-    if (!config || config.workspaceId !== requestWorkspace || config.apiBase !== requestApiBase || config.machine !== dashboardMachine) {
+    if (!config || config.liveId !== requestLiveId || config.apiBase !== requestApiBase || config.machine !== dashboardMachine) {
       coreRefreshQueued = true
       return
     }
@@ -1175,11 +1175,11 @@ function mergeEvents(incoming: LiveEvent[]): void {
 }
 
 async function loadSnapshot(generation: number): Promise<boolean> {
-  const payload = await api<{ workspace: JsonRecord; events: LiveEvent[] }>("/api/live/snapshot")
+  const payload = await api<{ channel: JsonRecord; events: LiveEvent[] }>("/api/live/snapshot")
   if (generation !== pollGeneration) return false
-  control = String(payload.workspace.control || "agent") as ControlMode
+  control = String(payload.channel.control || "agent") as ControlMode
   events = payload.events || []
-  cursor = Number(payload.workspace.seq || events.at(-1)?.seq || 0)
+  cursor = Number(payload.channel.seq || events.at(-1)?.seq || 0)
   connected = true
   connectionMessage = "Live"
   updateChrome()
@@ -1214,7 +1214,7 @@ function activateLiveConfig(nextConfig: LiveConfig): void {
     config
     && config.token === nextConfig.token
     && config.apiBase === nextConfig.apiBase
-    && config.workspaceId === nextConfig.workspaceId
+    && config.liveId === nextConfig.liveId
     && config.machine === nextConfig.machine
     && config.cwd === nextConfig.cwd
   ) return
@@ -1252,13 +1252,13 @@ function refreshLiveCredentials(structured: JsonRecord): Promise<void> {
     renderCurrentTab()
     const machine = String(structured.machine || "local")
     const cwd = String(structured.cwd || ".")
-    const workspaceId = String(structured.workspace_id || "")
-    if (!workspaceId) {
+    const liveId = String(structured.live_id || "")
+    if (!liveId) {
       throw new Error("ChatGPT omitted the Live Workspace ID needed to recover app credentials")
     }
     const response = await app.callServerTool({
       name: "open_live_workspace",
-      arguments: { machine, cwd, workspace_id: workspaceId },
+      arguments: { machine, cwd, live_id: liveId },
     })
     const responseStructured = (response.structuredContent || {}) as JsonRecord
     const hidden = response._meta?.["local-shell-mcp/live"] as JsonRecord | undefined
@@ -1271,7 +1271,7 @@ function refreshLiveCredentials(structured: JsonRecord): Promise<void> {
       token,
       apiBase,
       uiPath: String(hidden?.uiPath || responseStructured.ui_path || structured.ui_path || "/ui"),
-      workspaceId: String(hidden?.workspaceId || responseStructured.workspace_id || structured.workspace_id || ""),
+      liveId: String(hidden?.liveId || responseStructured.live_id || structured.live_id || ""),
       machine: String(responseStructured.machine || machine),
       cwd: String(responseStructured.cwd || cwd),
     })
@@ -1301,7 +1301,7 @@ async function configureFromToolResult(result: unknown): Promise<void> {
     token,
     apiBase,
     uiPath: String(hidden?.uiPath || structured.ui_path || "/ui"),
-    workspaceId: String(hidden?.workspaceId || structured.workspace_id || ""),
+    liveId: String(hidden?.liveId || structured.live_id || ""),
     machine: String(structured.machine || "local"),
     cwd: String(structured.cwd || "."),
   })

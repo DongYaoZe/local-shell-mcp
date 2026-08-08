@@ -113,7 +113,7 @@ export function nextDisplayMode(current: DisplayMode, requested: Exclude<Display
 }
 
 export function isOperationalActivityEvent(event: LiveEvent): boolean {
-  if (event.type === "workspace.opened") return false
+  if (event.type === "channel.opened") return false
   return String(event.data.tool || "") !== "open_live_workspace"
 }
 
@@ -168,7 +168,7 @@ export function eventTitle(event: LiveEvent): string {
   if (event.type === "tool.failed") return tool ? `${tool} failed` : "Tool failed"
   if (event.type === "tool.blocked") return tool ? `${tool} blocked by takeover` : "Tool blocked"
   if (event.type === "control.changed") return `Control → ${controlLabel(String(event.data.control) as ControlMode)}`
-  if (event.type === "workspace.opened") return "Live workspace connected"
+  if (event.type === "channel.opened") return "Live workspace connected"
   if (event.type === "human.inspected_diff") return "Human inspected diff"
   if (event.type === "human.action") return action ? `Human: ${action}` : "Human action"
   return event.type.replaceAll(".", " ")
