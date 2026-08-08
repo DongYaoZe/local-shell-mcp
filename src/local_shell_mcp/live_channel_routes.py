@@ -120,19 +120,8 @@ async def live_events(request: Request) -> Response:
             {
                 "events": events,
                 "cursor": events[-1]["seq"] if events else after,
-                "control": channel.control,
             }
         )
-    except Exception as exc:
-        return _error(exc)
-
-
-async def live_control(request: Request) -> Response:
-    try:
-        _, channel = _live_channel(request)
-        body = await request.json()
-        control = str(body.get("control") or "")
-        return _ok(get_live_channel_manager().set_control(channel, control))
     except Exception as exc:
         return _error(exc)
 
@@ -210,6 +199,5 @@ def live_channel_routes() -> list[Any]:
     return [
         Route(LIVE_API_PREFIX + "/snapshot", live_snapshot, methods=["GET"]),
         Route(LIVE_API_PREFIX + "/events", live_events, methods=["GET"]),
-        Route(LIVE_API_PREFIX + "/control", live_control, methods=["POST"]),
         Route(LIVE_API_PREFIX + "/git", live_git, methods=["GET"]),
     ]

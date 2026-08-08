@@ -139,7 +139,6 @@ class LiveChannelResult(BaseModel):
 
     ok: bool = True
     live_id: str
-    control: str
     api_base: str
     ui_path: str
     machine: str
@@ -360,7 +359,7 @@ def _live_workspace_resource_meta() -> dict[str, Any]:
         },
         "openai/widgetDescription": (
             "A live local-shell-mcp execution workspace with activity, terminal, files, "
-            "diffs, jobs, remotes, audit, and human/agent collaboration controls."
+            "diffs, jobs, remotes, audit, and shared human/agent interaction."
         ),
         "openai/widgetDomain": origin,
         "openai/widgetPrefersBorder": False,
@@ -536,12 +535,6 @@ def _live_result_summary(result: Any) -> dict[str, Any]:
     return summary
 
 
-def _live_tool_mutates(tool_name: str, read_only: bool, arguments: dict[str, Any]) -> bool:
-    if not read_only:
-        return True
-    return tool_name == "browser_snapshot" and bool(arguments.get("screenshot", True))
-
-
 def _audit_tool_purpose(
     tool_name: str, purpose: str | None = None, explanation: str | None = None
 ) -> dict[str, str]:
@@ -584,7 +577,6 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
     for tool in mcp._tool_manager._tools.values():  # noqa: SLF001
         original = tool.fn
         tool_name = tool.name
-        read_only = bool(tool.annotations and tool.annotations.readOnlyHint)
         required_scopes: list[str] = []
         for scheme in (tool.meta or {}).get("securitySchemes", []):
             if scheme.get("type") == "oauth2":
@@ -599,7 +591,6 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
             __signature=signature,
             __tool_name=tool_name,
             __required_scopes=tool_required_scopes,
-            __read_only=read_only,
             **kwargs,
         ):
             require_current_scopes(__required_scopes)
@@ -633,7 +624,7 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
                     if principal is not None
                     else "local-mcp-client"
                 )
-                live_manager.attach_session_for_subject(live_session_key, live_subject)
+                live_manager.claim_recovery_session(live_session_key, live_subject)
             live_arguments = _live_event_arguments(__tool_name, safe_call_arguments)
             live_manager.publish_for_session(
                 live_session_key,
@@ -648,11 +639,6 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
                 **audit_context,
             )
             try:
-                if _live_tool_mutates(__tool_name, __read_only, call_arguments):
-                    live_manager.require_agent_mutation_allowed(
-                        live_session_key,
-                        __tool_name,
-                    )
                 with audit_call_context(call_id) as call_state:
                     if __tool_name in NON_CANCELLABLE_TOOL_NAMES:
                         result = await __original(*args, **kwargs)
@@ -2536,7 +2522,7 @@ def _register_live_workspace_tools(
         cwd: str = ".",
         live_id: str | None = None,
     ) -> LiveChannelResult:
-        """Open or reuse the interactive Live Workspace for real-time human monitoring and collaboration. Use it for tasks where terminal output, files/diffs, jobs, remotes, audit activity, or human takeover would materially improve the workflow."""
+        """Open or reuse the interactive Live Workspace for real-time human/agent collaboration. Call it once for an active task and reuse the self-reconnecting floating workspace instead of reopening it repeatedly. Use it when terminal output, files/diffs, jobs, remotes, or audit activity would materially improve the workflow."""
         principal = current_principal()
         if principal is None:
             subject = "local-mcp-client"
@@ -2557,7 +2543,6 @@ def _register_live_workspace_tools(
         )
         result = LiveChannelResult(
             live_id=channel.live_id,
-            control=channel.control,
             api_base=_live_workspace_api_base(),
             ui_path=settings.ui_path,
             machine=machine or "local",

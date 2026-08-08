@@ -1,5 +1,4 @@
-export type ControlMode = "agent" | "shared" | "human"
-export type DisplayMode = "inline" | "fullscreen" | "pip"
+export type DisplayMode = "fullscreen" | "pip"
 
 export type LiveEvent = {
   seq: number
@@ -102,14 +101,8 @@ export function joinPath(parent: string, child: string): string {
   return `${parent.replace(/[\\/]+$/, "")}${separator}${child}`
 }
 
-export function controlLabel(mode: ControlMode): string {
-  if (mode === "shared") return "Collaborate"
-  if (mode === "human") return "Take over"
-  return "Observe"
-}
-
-export function nextDisplayMode(current: DisplayMode, requested: Exclude<DisplayMode, "inline">): DisplayMode {
-  return current === requested ? "inline" : requested
+export function toggleWorkspaceDisplayMode(current: DisplayMode): DisplayMode {
+  return current === "fullscreen" ? "pip" : "fullscreen"
 }
 
 export function reconnectDelayMs(attempt: number): number {
@@ -119,6 +112,7 @@ export function reconnectDelayMs(attempt: number): number {
 
 export function isOperationalActivityEvent(event: LiveEvent): boolean {
   if (event.type === "channel.opened") return false
+  if (event.type === "human.action" && event.data.action === "terminal.input") return false
   return String(event.data.tool || "") !== "open_live_workspace"
 }
 
@@ -171,8 +165,7 @@ export function eventTitle(event: LiveEvent): string {
   if (event.type === "tool.started") return tool ? `Running ${tool}` : "Tool started"
   if (event.type === "tool.completed") return tool ? `${tool} completed` : "Tool completed"
   if (event.type === "tool.failed") return tool ? `${tool} failed` : "Tool failed"
-  if (event.type === "tool.blocked") return tool ? `${tool} blocked by takeover` : "Tool blocked"
-  if (event.type === "control.changed") return `Control → ${controlLabel(String(event.data.control) as ControlMode)}`
+  if (event.type === "tool.blocked") return tool ? `${tool} blocked` : "Tool blocked"
   if (event.type === "channel.opened") return "Live workspace connected"
   if (event.type === "human.inspected_diff") return "Human inspected diff"
   if (event.type === "human.action") return action ? `Human: ${action}` : "Human action"

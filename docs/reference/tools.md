@@ -45,7 +45,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 
 ### `open_live_workspace`
 
-Open or reuse the interactive Live Workspace for real-time human monitoring and collaboration. Use it for tasks where terminal output, files/diffs, jobs, remotes, audit activity, or human takeover would materially improve the workflow.
+Open or reuse the interactive Live Workspace for real-time human/agent collaboration. Call it once for an active task and reuse the self-reconnecting floating workspace instead of reopening it repeatedly. Use it when terminal output, files/diffs, jobs, remotes, or audit activity would materially improve the workflow.
 
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|

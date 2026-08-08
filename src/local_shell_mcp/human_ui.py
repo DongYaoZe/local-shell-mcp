@@ -39,11 +39,7 @@ from .fs_ops import (
 )
 from .image_ops import ImageFile, assert_view_image_size, detect_image_type, make_image_preview
 from .jobs import list_jobs
-from .live_channel import (
-    HumanCollaborationRequiredError,
-    get_live_channel_manager,
-    live_id_from_claims,
-)
+from .live_channel import get_live_channel_manager, live_id_from_claims
 from .oauth import ALL_OAUTH_SCOPES
 from .remote import remote_manager
 from .settings import get_settings
@@ -338,14 +334,7 @@ def _live_channel_id(request: Request) -> str | None:
 
 
 def _require_live_human_mutation(request: Request) -> str | None:
-    live_id = _live_channel_id(request)
-    if not live_id:
-        return None
-    try:
-        get_live_channel_manager().require_human_mutation_allowed(live_id)
-    except HumanCollaborationRequiredError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return live_id
+    return _live_channel_id(request)
 
 
 def _record_live_human_action(
@@ -2074,27 +2063,6 @@ async def ui_shell_websocket(websocket: WebSocket) -> None:
         nonlocal cols, rows, last_activity
         idle_timeout = max(0, settings.ui_terminal_idle_timeout_s)
 
-        async def human_input_allowed() -> bool:
-            if not live_id:
-                return True
-            try:
-                get_live_channel_manager().require_human_mutation_allowed(live_id)
-            except HumanCollaborationRequiredError:
-                await websocket.send_bytes(
-                    b"\r\n\x1b[33mObserve mode: switch to Collaborate or Take over to send terminal input.\x1b[0m\r\n"
-                )
-                return False
-            return True
-
-        def record_terminal_input(byte_count: int) -> None:
-            _record_live_human_action(
-                live_id,
-                "terminal.input",
-                machine=machine,
-                session_id=session_id,
-                bytes=byte_count,
-            )
-
         while True:
             if idle_timeout:
                 remaining = _idle_timeout_remaining(last_activity, idle_timeout, loop.time())
@@ -2117,10 +2085,7 @@ async def ui_shell_websocket(websocket: WebSocket) -> None:
                 return
             if message.get("bytes") is not None:
                 data = message["bytes"]
-                if not await human_input_allowed():
-                    continue
                 await process.write(data)
-                record_terminal_input(len(data))
                 continue
             text = message.get("text")
             if not text:
@@ -2128,10 +2093,7 @@ async def ui_shell_websocket(websocket: WebSocket) -> None:
             try:
                 control = json.loads(text)
             except json.JSONDecodeError:
-                if not await human_input_allowed():
-                    continue
                 await process.write(text.encode())
-                record_terminal_input(len(text.encode()))
                 continue
             if not isinstance(control, dict):
                 continue

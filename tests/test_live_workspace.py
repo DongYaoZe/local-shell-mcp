@@ -18,8 +18,6 @@ from local_shell_mcp.live_channel import (
     LIVE_EVENT_LIMIT,
     LIVE_RESOURCE_MIME,
     LIVE_RESOURCE_URI,
-    HumanCollaborationRequiredError,
-    HumanControlActiveError,
     LiveChannelManager,
 )
 from local_shell_mcp.main import _build_mcp_http_app
@@ -98,7 +96,8 @@ def test_live_workspace_can_reattach_a_second_mcp_session_by_live_id():
     assert attached is channel
     assert manager.active_for_session("mcp:model-session") is channel
     assert manager.active_for_session("mcp:app-session") is channel
-    assert manager.authenticate(first_token) is None
+    assert app_token == first_token
+    assert manager.authenticate(first_token) is channel
     assert manager.authenticate(app_token) is channel
 
     manager.publish_for_session(
@@ -117,25 +116,39 @@ def test_live_workspace_can_reattach_a_second_mcp_session_by_live_id():
         )
 
 
-def test_live_workspace_auto_reattaches_only_when_subject_channel_is_unambiguous():
+def test_live_workspace_recovery_is_one_shot_and_does_not_merge_same_subject_sessions():
     manager = LiveChannelManager()
-    channel, _ = manager.open(
-        session_key="mcp:app-after-restart",
+    first, _ = manager.open(
+        session_key="mcp:chat-a",
         subject="user",
         scopes=tuple(ALL_OAUTH_SCOPES),
     )
-
-    assert manager.attach_session_for_subject("mcp:model-after-restart", "user") is channel
-    assert manager.active_for_session("mcp:model-after-restart") is channel
-    assert manager.attach_session_for_subject("mcp:other", "other") is None
-
-    manager.open(
-        session_key="mcp:second-app",
+    second, _ = manager.open(
+        session_key="mcp:chat-b",
         subject="user",
         scopes=tuple(ALL_OAUTH_SCOPES),
     )
-    assert manager.attach_session_for_subject("mcp:ambiguous-model", "user") is None
-    assert manager.active_for_session("mcp:ambiguous-model") is None
+    assert second is not first
+
+    recovered, token = manager.open(
+        session_key="mcp:recovered-app-1",
+        subject="user",
+        scopes=tuple(ALL_OAUTH_SCOPES),
+        live_id="stale-live-id-after-restart",
+    )
+    cached_view, cached_token = manager.open(
+        session_key="mcp:recovered-app-2",
+        subject="user",
+        scopes=tuple(ALL_OAUTH_SCOPES),
+        live_id="stale-live-id-after-restart",
+    )
+    assert cached_view is recovered
+    assert cached_token == token
+
+    assert manager.claim_recovery_session("mcp:model-after-restart", "user") is recovered
+    assert manager.active_for_session("mcp:model-after-restart") is recovered
+    assert manager.claim_recovery_session("mcp:unrelated-chat", "user") is None
+    assert manager.active_for_session("mcp:unrelated-chat") is None
 
 
 @pytest.mark.asyncio
@@ -176,20 +189,6 @@ async def test_live_workspace_expiry_publish_and_wait_paths():
     assert manager.by_id(channel.live_id) is None
 
 
-def test_live_workspace_rejects_invalid_control_and_missing_workspace():
-    manager = LiveChannelManager()
-    channel, _ = manager.open(
-        session_key="mcp:control-errors",
-        subject="user",
-        scopes=tuple(ALL_OAUTH_SCOPES),
-    )
-
-    with pytest.raises(ValueError, match="Unsupported control mode"):
-        manager.set_control(channel, "invalid")
-    with pytest.raises(HumanCollaborationRequiredError, match="no longer available"):
-        manager.require_human_mutation_allowed("missing")
-
-
 def test_mcp_session_key_uses_request_session_identity():
     class Session:
         pass
@@ -223,30 +222,6 @@ def test_mcp_session_key_uses_request_session_identity():
     first_key = live_channel_module.mcp_session_key(FakeMcp(first_session))
     assert live_channel_module.mcp_session_key(FakeMcp(first_session)) == first_key
     assert live_channel_module.mcp_session_key(FakeMcp(second_session)) != first_key
-
-
-def test_control_modes_enforce_both_sides():
-    manager = LiveChannelManager()
-    channel, _ = manager.open(
-        session_key="mcp:test",
-        subject="user",
-        scopes=tuple(ALL_OAUTH_SCOPES),
-    )
-
-    with pytest.raises(HumanCollaborationRequiredError):
-        manager.require_human_mutation_allowed(channel.live_id)
-
-    manager.set_control(channel, "shared")
-    manager.require_human_mutation_allowed(channel.live_id)
-    manager.require_agent_mutation_allowed("mcp:test", "write_file")
-
-    manager.set_control(channel, "human")
-    manager.require_human_mutation_allowed(channel.live_id)
-    with pytest.raises(HumanControlActiveError):
-        manager.require_agent_mutation_allowed("mcp:test", "write_file")
-
-    manager.set_control(channel, "agent")
-    manager.require_agent_mutation_allowed("mcp:test", "write_file")
 
 
 @pytest.mark.asyncio
@@ -292,7 +267,7 @@ async def test_mcp_app_resource_and_render_result_hide_live_token(tmp_path, monk
 
 
 @pytest.mark.asyncio
-async def test_human_takeover_blocks_model_mutation_but_not_reads(tmp_path, monkeypatch):
+async def test_live_workspace_keeps_model_and_human_mutations_collaborative(tmp_path, monkeypatch):
     _configure(tmp_path, monkeypatch, auth="none")
     mcp = build_mcp()
     result = await mcp.call_tool("open_live_workspace", {"cwd": "."})
@@ -300,34 +275,22 @@ async def test_human_takeover_blocks_model_mutation_but_not_reads(tmp_path, monk
     live_token = result.meta["local-shell-mcp/live"]["token"]
     channel = live_channel_module.get_live_channel_manager().active_for_session("direct")
     assert channel is not None
-    live_channel_module.get_live_channel_manager().set_control(channel, "human")
 
     reopened = await mcp.call_tool("open_live_workspace", {"cwd": "."})
     assert isinstance(reopened, CallToolResult)
     refreshed_live_token = reopened.meta["local-shell-mcp/live"]["token"]
     assert refreshed_live_token != live_token
-    with pytest.raises(Exception, match="human takeover mode"):
-        await mcp.call_tool("write_file", {"path": "blocked.txt", "content": "blocked"})
-    with pytest.raises(Exception, match="human takeover mode"):
-        await mcp.call_tool("browser_snapshot", {"session_id": "missing"})
-
-    assert not (tmp_path / "blocked.txt").exists()
+    await mcp.call_tool("write_file", {"path": "shared.txt", "content": "shared"})
+    assert (tmp_path / "shared.txt").read_text(encoding="utf-8") == "shared"
     _, structured = await mcp.call_tool("list_files", {"path": "."})
     assert structured["ok"] is True
-    snapshot_without_screenshot = await mcp.call_tool(
-        "browser_snapshot",
-        {"session_id": "missing", "screenshot": False},
-    )
-    assert snapshot_without_screenshot is not None
     assert live_channel_module.get_live_channel_manager().authenticate(live_token) is None
     assert live_channel_module.get_live_channel_manager().authenticate(refreshed_live_token) is channel
     event_types = [event["type"] for event in channel.events]
-    assert "tool.blocked" in event_types
-    assert "tool.failed" in event_types
     assert "tool.completed" in event_types
 
 
-def test_live_http_token_cors_and_human_mutation_modes(tmp_path, monkeypatch):
+def test_live_http_token_cors_and_collaborative_human_mutation(tmp_path, monkeypatch):
     _configure(tmp_path, monkeypatch, auth="oauth")
     manager = live_channel_module.get_live_channel_manager()
     channel, token = manager.open(
@@ -365,30 +328,6 @@ def test_live_http_token_cors_and_human_mutation_modes(tmp_path, monkeypatch):
         invalid_cursor = client.get("/api/live/events?after=not-a-number", headers=headers)
         assert invalid_cursor.status_code == 400
         assert invalid_cursor.json()["message"] == "Invalid event cursor"
-
-        invalid_control = client.post(
-            "/api/live/control",
-            headers=headers,
-            json={"control": "invalid"},
-        )
-        assert invalid_control.status_code == 400
-        assert "Unsupported control mode" in invalid_control.text
-
-        blocked = client.post(
-            "/api/ui/files/write",
-            headers=headers,
-            json={"machine": "local", "path": "human.txt", "content": "shared"},
-        )
-        assert blocked.status_code == 409
-        assert "Observe mode" in blocked.text
-
-        shared = client.post(
-            "/api/live/control",
-            headers=headers,
-            json={"control": "shared"},
-        )
-        assert shared.status_code == 200
-        assert shared.json()["data"]["control"] == "shared"
 
         written = client.post(
             "/api/ui/files/write",

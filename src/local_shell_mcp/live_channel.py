@@ -30,17 +30,9 @@ LIVE_TOKEN_TTL_S = 12 * 60 * 60
 LIVE_EVENT_LIMIT = 2_000
 LIVE_EVENT_BATCH = 300
 LIVE_LONG_POLL_S = 25.0
-CONTROL_MODES = frozenset({"agent", "shared", "human"})
+LIVE_RECOVERY_CLAIM_TTL_S = 60.0
 _SESSION_KEYS: weakref.WeakKeyDictionary[Any, str] = weakref.WeakKeyDictionary()
 _SESSION_KEYS_LOCK = threading.Lock()
-
-
-class HumanControlActiveError(RuntimeError):
-    pass
-
-
-class HumanCollaborationRequiredError(RuntimeError):
-    pass
 
 
 @dataclass(slots=True)
@@ -49,9 +41,9 @@ class LiveChannel:
     subject: str
     scopes: tuple[str, ...]
     token_digest: str
+    token_value: str = field(repr=False)
     created_at: float
     expires_at: float
-    control: str = "agent"
     seq: int = 0
     events: deque[dict[str, Any]] = field(
         default_factory=lambda: deque(maxlen=LIVE_EVENT_LIMIT)
@@ -63,7 +55,6 @@ class LiveChannel:
             "live_id": self.live_id,
             "created_at": self.created_at,
             "expires_at": self.expires_at,
-            "control": self.control,
             "seq": self.seq,
         }
 
@@ -73,6 +64,8 @@ class LiveChannelManager:
         self._lock = threading.RLock()
         self._channels: dict[str, LiveChannel] = {}
         self._session_channels: dict[str, str] = {}
+        self._recovered_live_ids: dict[str, str] = {}
+        self._recovery_claims: dict[str, tuple[str, float]] = {}
 
     @staticmethod
     def _digest(token: str) -> str:
@@ -94,6 +87,16 @@ class LiveChannelManager:
                 for session_key, live_id in self._session_channels.items()
                 if live_id not in expired_ids
             }
+            self._recovered_live_ids = {
+                stale_id: live_id
+                for stale_id, live_id in self._recovered_live_ids.items()
+                if live_id not in expired_ids
+            }
+        self._recovery_claims = {
+            subject: (live_id, deadline)
+            for subject, (live_id, deadline) in self._recovery_claims.items()
+            if deadline > current and live_id in self._channels
+        }
 
     def open(
         self,
@@ -108,36 +111,51 @@ class LiveChannelManager:
         expires_at = now + LIVE_TOKEN_TTL_S
         if parent_expires_at is not None:
             expires_at = min(expires_at, parent_expires_at)
-        token = secrets.token_urlsafe(32)
-        digest = self._digest(token)
         with self._lock:
             self._prune_locked(now)
             session_live_id = self._session_channels.get(session_key)
-            channel = self._channels.get(live_id or session_live_id or "")
+            requested_live_id = live_id
+            resolved_live_id = self._recovered_live_ids.get(live_id or "", live_id or "")
+            channel = self._channels.get(resolved_live_id or session_live_id or "")
             if live_id and channel is not None and channel.subject != subject:
                 raise PermissionError("Live workspace belongs to a different principal")
-            if live_id and channel is None:
-                raise LookupError("Live workspace is no longer available")
             if channel is None:
+                token = secrets.token_urlsafe(32)
+                digest = self._digest(token)
                 channel = LiveChannel(
                     live_id=uuid.uuid4().hex,
                     subject=subject,
                     scopes=scopes,
                     token_digest=digest,
+                    token_value=token,
                     created_at=now,
                     expires_at=expires_at,
                 )
                 self._channels[channel.live_id] = channel
+                if requested_live_id:
+                    self._recovered_live_ids[requested_live_id] = channel.live_id
+                    self._recovery_claims[subject] = (
+                        channel.live_id,
+                        now + LIVE_RECOVERY_CLAIM_TTL_S,
+                    )
+            elif live_id is not None:
+                # App-side reattachment must not rotate the credential or several
+                # cached/reconnecting views would continually invalidate each other.
+                token = channel.token_value
+            else:
+                # An explicit user/model open is a new authorization boundary.
+                token = secrets.token_urlsafe(32)
+                channel.token_value = token
+                channel.token_digest = self._digest(token)
             self._session_channels[session_key] = channel.live_id
             channel.subject = subject
             channel.scopes = scopes
-            channel.token_digest = digest
             channel.expires_at = expires_at
             self._publish_locked(
                 channel,
                 "channel.opened",
                 actor="system",
-                data={"control": channel.control},
+                data={},
             )
             return channel, token
 
@@ -159,17 +177,22 @@ class LiveChannelManager:
             live_id = self._session_channels.get(session_key)
             return self._channels.get(live_id or "")
 
-    def attach_session_for_subject(self, session_key: str, subject: str) -> LiveChannel | None:
-        """Reattach a fresh MCP session when exactly one live channel belongs to its principal."""
+    def claim_recovery_session(self, session_key: str, subject: str) -> LiveChannel | None:
+        """Attach one fresh model MCP session after a backend restart recovery."""
         with self._lock:
             self._prune_locked()
             existing = self.active_for_session(session_key)
             if existing is not None:
                 return existing
-            matches = [channel for channel in self._channels.values() if channel.subject == subject]
-            if len(matches) != 1:
+            claim = self._recovery_claims.pop(subject, None)
+            if claim is None:
                 return None
-            channel = matches[0]
+            live_id, deadline = claim
+            if deadline <= time.time():
+                return None
+            channel = self._channels.get(live_id)
+            if channel is None:
+                return None
             self._session_channels[session_key] = channel.live_id
             return channel
 
@@ -253,46 +276,6 @@ class LiveChannelManager:
         except TimeoutError:
             return []
         return self.events_since(channel, after)
-
-    def set_control(self, channel: LiveChannel, control: str) -> dict[str, Any]:
-        if control not in CONTROL_MODES:
-            raise ValueError(f"Unsupported control mode: {control}")
-        with self._lock:
-            previous = channel.control
-            channel.control = control
-            self._publish_locked(
-                channel,
-                "control.changed",
-                actor="human",
-                data={"previous": previous, "control": control},
-            )
-            return channel.public_state()
-
-    def require_agent_mutation_allowed(self, session_key: str, tool_name: str) -> None:
-        channel = self.active_for_session(session_key)
-        if channel is None or channel.control != "human":
-            return
-        self.publish_for_session(
-            session_key,
-            "tool.blocked",
-            actor="system",
-            data={"tool": tool_name, "reason": "human_takeover"},
-        )
-        raise HumanControlActiveError(
-            "The live workspace is in human takeover mode. Read-only tools remain available; "
-            "wait for the user to switch control back to Collaborate or Agent before making changes."
-        )
-
-    def require_human_mutation_allowed(self, live_id: str) -> None:
-        channel = self.by_id(live_id)
-        if channel is None:
-            raise HumanCollaborationRequiredError("Live workspace is no longer available")
-        if channel.control in {"shared", "human"}:
-            return
-        raise HumanCollaborationRequiredError(
-            "The live workspace is in Observe mode. Switch to Collaborate or Take over before editing."
-        )
-
 
 _MANAGER = LiveChannelManager()
 

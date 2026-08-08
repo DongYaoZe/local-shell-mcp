@@ -80,18 +80,12 @@ svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width:
 .connection-dot { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 999px; background: var(--ls-warning); box-shadow: 0 0 0 3px var(--ls-warning-soft); }
 .connection-dot.connected { background: var(--ls-success); box-shadow: 0 0 0 3px var(--ls-success-soft); }
 .top-actions { display: flex; align-items: center; gap: 7px; }
-.control-switch { display: inline-flex; border: 1px solid var(--ls-border); background: var(--ls-bg); border-radius: 9px; padding: 2px; }
-.control-switch button { min-height: 29px; padding: 0 9px; border: 0; border-radius: 6px; background: transparent; color: var(--ls-text-3); font-size: 11px; cursor: pointer; transition: 120ms ease; }
-.control-switch button:hover { color: var(--ls-text); background: var(--ls-panel-strong); }
-.control-switch button.active { color: var(--ls-text); background: var(--ls-panel-strong); box-shadow: inset 0 0 0 1px var(--ls-border); }
-.control-switch button[data-control="shared"].active { color: var(--ls-info); background: var(--ls-info-soft); }
-.control-switch button[data-control="human"].active { color: var(--ls-warning); background: var(--ls-warning-soft); }
 .icon-button { display: grid; place-items: center; width: 31px; height: 31px; border: 1px solid var(--ls-border); border-radius: 8px; background: transparent; color: var(--ls-text-2); cursor: pointer; }
 .icon-button:hover { background: var(--ls-panel-strong); color: var(--ls-text); border-color: var(--ls-border-strong); }
 .icon-button.active { background: var(--ls-accent-soft); color: var(--ls-accent-strong); border-color: color-mix(in srgb, var(--ls-accent) 35%, var(--ls-border)); }
 .icon-button svg { width: 15px; height: 15px; }
 
-.status-strip { display: grid; grid-template-columns: minmax(230px, 2fr) minmax(120px, .65fr) minmax(130px, .65fr) minmax(95px, .5fr); border-bottom: 1px solid var(--ls-border); background: color-mix(in srgb, var(--ls-bg) 80%, transparent); }
+.status-strip { display: grid; grid-template-columns: minmax(230px, 2fr) minmax(130px, .65fr) minmax(95px, .5fr); border-bottom: 1px solid var(--ls-border); background: color-mix(in srgb, var(--ls-bg) 80%, transparent); }
 .current-operation, .status-stat { min-width: 0; padding: 9px 13px; border-right: 1px solid var(--ls-border); }
 .status-strip > :last-child { border-right: 0; }
 .current-operation { display: flex; align-items: center; gap: 9px; }
@@ -180,9 +174,6 @@ select:hover, input:hover, textarea:hover { border-color: var(--ls-border-strong
 .actor.human { color: var(--ls-info); background: var(--ls-info-soft); }
 .actor.agent { color: var(--ls-accent-strong); background: var(--ls-accent-soft); }
 
-.mode-pill { padding: 4px 7px; border-radius: 999px; font-size: 9px; background: var(--ls-panel-strong); color: var(--ls-text-3); }
-.mode-pill.shared { color: var(--ls-info); background: var(--ls-info-soft); }
-.mode-pill.human { color: var(--ls-warning); background: var(--ls-warning-soft); }
 .terminal-card { display: flex; flex-direction: column; min-height: 420px; height: min(70vh, 760px); border: 1px solid var(--ls-border); border-radius: 9px; overflow: hidden; background: #090c12; }
 :root[data-theme="light"] .terminal-card { background: #0d1118; }
 :root[data-display-mode="fullscreen"] .terminal-card { height: calc(100vh - 210px); }
@@ -300,7 +291,6 @@ select:hover, input:hover, textarea:hover { border-color: var(--ls-border-strong
   .live-shell { min-height: 500px; }
   .topbar { align-items: flex-start; }
   .top-actions { flex-wrap: wrap; justify-content: flex-end; }
-  .control-switch button { padding-inline: 7px; }
   .status-strip { grid-template-columns: 1fr 1fr; }
   .status-strip > :nth-child(2) { border-right: 0; }
   .status-strip > :nth-child(n+3) { border-top: 1px solid var(--ls-border); }
@@ -329,7 +319,6 @@ select:hover, input:hover, textarea:hover { border-color: var(--ls-border-strong
   .brand-mark { width: 30px; height: 30px; flex-basis: 30px; }
   .subtitle { display: none; }
   .top-actions .icon-button { display: none; }
-  .control-switch button { font-size: 9.5px; }
   .status-strip { grid-template-columns: 1fr; }
   .status-strip > :nth-child(2) { border-top: 1px solid var(--ls-border); }
   .status-strip > * { border-right: 0; }

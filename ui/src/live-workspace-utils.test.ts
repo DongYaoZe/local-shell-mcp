@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test"
 import {
   activityDestination,
   activityIntent,
-  controlLabel,
   eventDetail,
   eventTitle,
   formatBytes,
@@ -10,7 +9,7 @@ import {
   joinPath,
   parentPath,
   renderDiffHtml,
-  nextDisplayMode,
+  toggleWorkspaceDisplayMode,
   reconnectDelayMs,
   toolResultFromOpenAiGlobals,
   truncateContext,
@@ -18,18 +17,9 @@ import {
 } from "./live-workspace-utils"
 
 describe("live workspace utilities", () => {
-  test("control labels explain ownership", () => {
-    expect(controlLabel("agent")).toBe("Observe")
-    expect(controlLabel("shared")).toBe("Collaborate")
-    expect(controlLabel("human")).toBe("Take over")
-  })
-
-  test("display mode buttons toggle back to inline", () => {
-    expect(nextDisplayMode("inline", "fullscreen")).toBe("fullscreen")
-    expect(nextDisplayMode("fullscreen", "fullscreen")).toBe("inline")
-    expect(nextDisplayMode("inline", "pip")).toBe("pip")
-    expect(nextDisplayMode("pip", "pip")).toBe("inline")
-    expect(nextDisplayMode("fullscreen", "pip")).toBe("pip")
+  test("display mode toggles only between floating and fullscreen", () => {
+    expect(toggleWorkspaceDisplayMode("pip")).toBe("fullscreen")
+    expect(toggleWorkspaceDisplayMode("fullscreen")).toBe("pip")
   })
 
   test("reconnect backoff grows but remains bounded", () => {
@@ -74,11 +64,13 @@ describe("live workspace utilities", () => {
   test("activity hides workspace bootstrap noise and routes useful operations", () => {
     const opened: LiveEvent = { seq: 1, ts: 1, type: "channel.opened", actor: "system", data: {} }
     const bootstrap: LiveEvent = { seq: 2, ts: 1, type: "tool.completed", actor: "agent", data: { tool: "open_live_workspace" } }
-    const edit: LiveEvent = { seq: 3, ts: 1, type: "tool.completed", actor: "agent", data: { tool: "edit_file", path: "/workspace/src/app.ts" } }
-    const job: LiveEvent = { seq: 4, ts: 1, type: "tool.completed", actor: "agent", data: { tool: "job_start", name: "tests" } }
+    const terminalInput: LiveEvent = { seq: 3, ts: 1, type: "human.action", actor: "human", data: { action: "terminal.input", bytes: 1 } }
+    const edit: LiveEvent = { seq: 4, ts: 1, type: "tool.completed", actor: "agent", data: { tool: "edit_file", path: "/workspace/src/app.ts" } }
+    const job: LiveEvent = { seq: 5, ts: 1, type: "tool.completed", actor: "agent", data: { tool: "job_start", name: "tests" } }
 
     expect(isOperationalActivityEvent(opened)).toBeFalse()
     expect(isOperationalActivityEvent(bootstrap)).toBeFalse()
+    expect(isOperationalActivityEvent(terminalInput)).toBeFalse()
     expect(isOperationalActivityEvent(edit)).toBeTrue()
     expect(activityIntent(edit)).toBe("Editing app.ts")
     expect(activityDestination(edit)).toBe("files")
