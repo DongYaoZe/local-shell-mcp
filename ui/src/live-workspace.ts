@@ -235,8 +235,14 @@ function updateChrome(): void {
   const expandButton = qs<HTMLButtonElement>("[data-action=expand]")
   if (expandButton) {
     const fullscreen = displayMode === "fullscreen"
+    const targetMode = toggleWorkspaceDisplayMode(displayMode)
+    const available = app.getHostContext()?.availableDisplayModes || []
+    const supported = available.includes(targetMode)
     expandButton.classList.toggle("active", fullscreen)
-    expandButton.title = fullscreen ? "Return to floating window" : "Fullscreen"
+    expandButton.disabled = !supported
+    expandButton.title = supported
+      ? fullscreen ? "Return to floating window" : "Fullscreen"
+      : fullscreen ? "Floating window unavailable in this host" : "Fullscreen unavailable in this host"
     expandButton.setAttribute("aria-label", expandButton.title)
   }
 
@@ -1198,6 +1204,7 @@ function mergeEvents(incoming: LiveEvent[]): void {
 async function loadSnapshot(generation: number): Promise<boolean> {
   const payload = await api<{ channel: JsonRecord; events: LiveEvent[] }>("/api/live/snapshot")
   if (generation !== pollGeneration) return false
+  activityAuditDetails.clear()
   events = payload.events || []
   cursor = Number(payload.channel.seq || events.at(-1)?.seq || 0)
   connected = true
@@ -1284,7 +1291,7 @@ function activateLiveConfig(nextConfig: LiveConfig): void {
   void runConnectionLoop(generation)
 }
 
-let credentialRefresh: Promise<void> | null = null
+const credentialRefreshes = new Map<string, Promise<void>>()
 
 async function requestLiveConfig(structured: JsonRecord, allowCreate: boolean): Promise<LiveConfig> {
   const machine = String(structured.machine || "local")
@@ -1294,20 +1301,19 @@ async function requestLiveConfig(structured: JsonRecord, allowCreate: boolean): 
     name: "live_workspace_reconnect",
     arguments: id ? { machine, cwd, live_id: id } : { machine, cwd },
   })
-  let response
-  try {
-    response = await invoke(liveId)
-  } catch (error) {
-    if (!allowCreate || !liveId) throw error
-    response = await invoke("")
-  }
-  if (response.isError && allowCreate && liveId) response = await invoke("")
-  if (response.isError) {
+  const response = await invoke(liveId)
+  let resolvedResponse = response
+  if (response.isError && allowCreate && liveId) {
     const message = response.content.find((item) => item.type === "text")
+    const text = message?.type === "text" ? message.text : ""
+    if (/different principal/i.test(text)) resolvedResponse = await invoke("")
+  }
+  if (resolvedResponse.isError) {
+    const message = resolvedResponse.content.find((item) => item.type === "text")
     throw new Error(message?.type === "text" ? message.text : "Live Workspace authorization failed")
   }
-  const responseStructured = (response.structuredContent || {}) as JsonRecord
-  const hidden = response._meta?.["local-shell-mcp/live"] as JsonRecord | undefined
+  const responseStructured = (resolvedResponse.structuredContent || {}) as JsonRecord
+  const hidden = resolvedResponse._meta?.["local-shell-mcp/live"] as JsonRecord | undefined
   const token = String(hidden?.token || "")
   const apiBase = String(hidden?.apiBase || responseStructured.api_base || structured.api_base || "")
   if (!token || !apiBase) {
@@ -1324,21 +1330,33 @@ async function requestLiveConfig(structured: JsonRecord, allowCreate: boolean): 
 }
 
 function refreshLiveCredentials(structured: JsonRecord, allowCreate = false): Promise<void> {
-  if (credentialRefresh) return credentialRefresh
-  credentialRefresh = (async () => {
+  const machine = String(structured.machine || "local")
+  const cwd = String(structured.cwd || ".")
+  const liveId = String(structured.live_id || "")
+  const key = `${liveId}\u0000${machine}\u0000${cwd}\u0000${allowCreate ? "create" : "reattach"}`
+  const existing = credentialRefreshes.get(key)
+  if (existing) return existing
+  const refresh = (async () => {
     connectionMessage = "Authorizing Live Workspace…"
     renderCurrentTab()
     activateLiveConfig(await requestLiveConfig(structured, allowCreate))
   })().finally(() => {
-    credentialRefresh = null
+    credentialRefreshes.delete(key)
   })
-  return credentialRefresh
+  credentialRefreshes.set(key, refresh)
+  return refresh
 }
 
 async function recoverCredentialsForever(structured: JsonRecord): Promise<void> {
   let attempt = 0
   const announcedLiveId = String(structured.live_id || "")
-  while (!shuttingDown && (!config || Boolean(announcedLiveId && config.liveId !== announcedLiveId))) {
+  const announcedMachine = String(structured.machine || config?.machine || "local")
+  const announcedCwd = String(structured.cwd || config?.cwd || ".")
+  const needsRefresh = () => !config
+    || Boolean(announcedLiveId && config.liveId !== announcedLiveId)
+    || config.machine !== announcedMachine
+    || config.cwd !== announcedCwd
+  while (!shuttingDown && needsRefresh()) {
     try {
       await refreshLiveCredentials(structured, true)
       return
@@ -1364,7 +1382,14 @@ async function configureFromToolResult(result: unknown): Promise<void> {
   const apiBase = String(hidden?.apiBase || structured.api_base || "")
   if (!token || !apiBase) {
     const announcedLiveId = String(structured.live_id || "")
-    if (config && (!announcedLiveId || announcedLiveId === config.liveId)) return
+    const announcedMachine = String(structured.machine || config?.machine || "local")
+    const announcedCwd = String(structured.cwd || config?.cwd || ".")
+    if (
+      config
+      && (!announcedLiveId || announcedLiveId === config.liveId)
+      && announcedMachine === config.machine
+      && announcedCwd === config.cwd
+    ) return
     await recoverCredentialsForever(structured)
     return
   }

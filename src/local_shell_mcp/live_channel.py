@@ -67,7 +67,7 @@ class LiveChannelManager:
         self._channels: dict[str, LiveChannel] = {}
         self._session_channels: dict[str, str] = {}
         self._recovered_live_ids: dict[str, str] = {}
-        self._recovery_claims: dict[str, tuple[str, float]] = {}
+        self._recovery_claims: dict[str, dict[str, float]] = {}
 
     @staticmethod
     def _digest(token: str) -> str:
@@ -95,9 +95,15 @@ class LiveChannelManager:
                 if live_id not in expired_ids
             }
         self._recovery_claims = {
-            subject: (live_id, deadline)
-            for subject, (live_id, deadline) in self._recovery_claims.items()
-            if deadline > current and live_id in self._channels
+            subject: {
+                live_id: deadline
+                for live_id, deadline in claims.items()
+                if deadline > current and live_id in self._channels
+            }
+            for subject, claims in self._recovery_claims.items()
+        }
+        self._recovery_claims = {
+            subject: claims for subject, claims in self._recovery_claims.items() if claims
         }
 
     def open(
@@ -136,9 +142,8 @@ class LiveChannelManager:
                 self._channels[channel.live_id] = channel
                 if requested_live_id:
                     self._recovered_live_ids[requested_live_id] = channel.live_id
-                    self._recovery_claims[subject] = (
-                        channel.live_id,
-                        now + LIVE_RECOVERY_CLAIM_TTL_S,
+                    self._recovery_claims.setdefault(subject, {})[channel.live_id] = (
+                        now + LIVE_RECOVERY_CLAIM_TTL_S
                     )
             elif live_id is not None:
                 # App-side reattachment must not rotate the credential or several
@@ -186,15 +191,20 @@ class LiveChannelManager:
             existing = self.active_for_session(session_key)
             if existing is not None:
                 return existing
-            claim = self._recovery_claims.pop(subject, None)
-            if claim is None:
+            claims = self._recovery_claims.get(subject)
+            if not claims or len(claims) != 1:
+                # Multiple recovered chats for the same OAuth subject cannot be
+                # correlated safely from a fresh model MCP session alone. Keep
+                # every claim rather than guessing and leaking one chat's live
+                # activity into another.
                 return None
-            live_id, deadline = claim
+            live_id, deadline = next(iter(claims.items()))
             if deadline <= time.time():
                 return None
             channel = self._channels.get(live_id)
             if channel is None:
                 return None
+            self._recovery_claims.pop(subject, None)
             self._session_channels[session_key] = channel.live_id
             return channel
 

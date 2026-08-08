@@ -154,6 +154,30 @@ def test_live_workspace_recovery_is_one_shot_and_does_not_merge_same_subject_ses
     assert manager.active_for_session("mcp:unrelated-chat") is None
 
 
+def test_live_workspace_recovery_refuses_ambiguous_same_subject_workspaces():
+    manager = LiveChannelManager()
+    first, _ = manager.open(
+        session_key="mcp:recovered-app-a",
+        subject="user",
+        scopes=tuple(ALL_OAUTH_SCOPES),
+        live_id="stale-chat-a",
+    )
+    second, _ = manager.open(
+        session_key="mcp:recovered-app-b",
+        subject="user",
+        scopes=tuple(ALL_OAUTH_SCOPES),
+        live_id="stale-chat-b",
+    )
+    assert first is not second
+
+    assert manager.claim_recovery_session("mcp:model-unknown-chat", "user") is None
+    assert manager.active_for_session("mcp:model-unknown-chat") is None
+
+    first.expires_at = 0
+    assert manager.claim_recovery_session("mcp:model-chat-b", "user") is second
+    assert manager.active_for_session("mcp:model-chat-b") is second
+
+
 @pytest.mark.asyncio
 async def test_live_workspace_expiry_publish_and_wait_paths():
     manager = LiveChannelManager()
@@ -235,9 +259,9 @@ async def test_mcp_app_resource_and_render_result_hide_live_token(tmp_path, monk
     tools = {tool.name: tool for tool in await mcp.list_tools()}
     render_tool = tools["open_live_workspace"]
     reconnect_tool = tools["live_workspace_reconnect"]
-    assert render_tool.meta["ui"]["resourceUri"] == LIVE_RESOURCE_URI
-    assert render_tool.meta["ui/resourceUri"] == LIVE_RESOURCE_URI
-    assert render_tool.meta["openai/outputTemplate"] == LIVE_RESOURCE_URI
+    assert render_tool.meta["ui"]["resourceUri"] == LIVE_RESOURCE_VERSIONED_URI
+    assert render_tool.meta["ui/resourceUri"] == LIVE_RESOURCE_VERSIONED_URI
+    assert render_tool.meta["openai/outputTemplate"] == LIVE_RESOURCE_VERSIONED_URI
     assert render_tool.meta["openai/widgetAccessible"] is True
     assert "live_id" not in render_tool.inputSchema["properties"]
     assert render_tool.meta["securitySchemes"][0]["scopes"] == list(ALL_OAUTH_SCOPES)
