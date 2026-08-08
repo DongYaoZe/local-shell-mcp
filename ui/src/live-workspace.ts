@@ -119,6 +119,7 @@ let plan: PlanState | null = null
 let continuationChecking = false
 let activityExpandedEventKey = ""
 const activityAuditDetails = new Map<string, JsonRecord>()
+let activityDetailRevision = 0
 let activityDiscoveryInitialized = false
 let knownActiveJobs = new Set<string>()
 let knownStandaloneSessions = new Set<string>()
@@ -255,8 +256,14 @@ function updateChrome(): void {
   const expandButton = qs<HTMLButtonElement>("[data-action=expand]")
   if (expandButton) {
     const fullscreen = displayMode === "fullscreen"
+    const targetMode = toggleWorkspaceDisplayMode(displayMode)
+    const available = app.getHostContext()?.availableDisplayModes || []
+    const supported = available.includes(targetMode)
     expandButton.classList.toggle("active", fullscreen)
-    expandButton.title = fullscreen ? "Return to floating window" : "Fullscreen"
+    expandButton.disabled = !supported
+    expandButton.title = supported
+      ? fullscreen ? "Return to floating window" : "Fullscreen"
+      : fullscreen ? "Floating window unavailable in this host" : "Fullscreen unavailable in this host"
     expandButton.setAttribute("aria-label", expandButton.title)
   }
 
@@ -561,9 +568,16 @@ async function toggleActivityDetail(eventKey: string, callId: string): Promise<v
   renderActivity()
   if (activityAuditDetails.has(callId)) return
   try {
-    const detail = await api<JsonRecord>(`/api/ui/audit/detail?id=${encodeURIComponent(`call:${callId}`)}`)
-    activityAuditDetails.set(callId, detail)
-    if (activityExpandedEventKey === eventKey && activeTab === "activity") renderActivity()
+    const generation = pollGeneration
+    while (activityExpandedEventKey === eventKey && generation === pollGeneration) {
+      const revision = activityDetailRevision
+      const detail = await api<JsonRecord>(`/api/ui/audit/detail?id=${encodeURIComponent(`call:${callId}`)}`)
+      if (activityExpandedEventKey !== eventKey || generation !== pollGeneration) return
+      if (revision !== activityDetailRevision) continue
+      activityAuditDetails.set(callId, detail)
+      if (activeTab === "activity") renderActivity()
+      return
+    }
   } catch (error) {
     if (activityExpandedEventKey === eventKey) activityExpandedEventKey = ""
     if (activeTab === "activity") renderActivity()
@@ -1240,7 +1254,10 @@ function mergeEvents(incoming: LiveEvent[]): void {
     bySeq.set(event.seq, event)
     if (event.type === "tool.completed" || event.type === "tool.failed") {
       const callId = String(event.data.call_id || "")
-      if (callId) activityAuditDetails.delete(callId)
+      if (callId) {
+        activityAuditDetails.delete(callId)
+        activityDetailRevision += 1
+      }
     }
   }
   events = [...bySeq.values()].sort((a, b) => a.seq - b.seq).slice(-800)
@@ -1253,6 +1270,8 @@ async function loadSnapshot(generation: number): Promise<boolean> {
   const payload = await api<{ channel: JsonRecord & { plan?: PlanState | null }; events: LiveEvent[] }>("/api/live/snapshot")
   if (generation !== pollGeneration) return false
   plan = payload.channel.plan || null
+  activityAuditDetails.clear()
+  activityDetailRevision += 1
   events = payload.events || []
   cursor = Number(payload.channel.seq || events.at(-1)?.seq || 0)
   connected = true
@@ -1391,7 +1410,16 @@ function activateLiveConfig(nextConfig: LiveConfig): void {
     && config.machine === nextConfig.machine
     && config.cwd === nextConfig.cwd
   ) return
+  const channelChanged = !config || config.liveId !== nextConfig.liveId
   const targetChanged = !config || config.machine !== nextConfig.machine || config.cwd !== nextConfig.cwd
+  if (channelChanged) {
+    events = []
+    cursor = 0
+    connected = false
+    activityExpandedEventKey = ""
+    activityAuditDetails.clear()
+    activityDetailRevision += 1
+  }
   if (targetChanged) resetWorkspaceTarget(nextConfig.machine, nextConfig.cwd)
   config = nextConfig
   pollGeneration += 1
@@ -1401,7 +1429,7 @@ function activateLiveConfig(nextConfig: LiveConfig): void {
   void runConnectionLoop(generation)
 }
 
-let credentialRefresh: Promise<void> | null = null
+const credentialRefreshes = new Map<string, Promise<void>>()
 
 async function requestLiveConfig(structured: JsonRecord, allowCreate: boolean): Promise<LiveConfig> {
   const machine = String(structured.machine || "local")
@@ -1411,20 +1439,19 @@ async function requestLiveConfig(structured: JsonRecord, allowCreate: boolean): 
     name: "live_workspace_reconnect",
     arguments: id ? { machine, cwd, live_id: id } : { machine, cwd },
   })
-  let response
-  try {
-    response = await invoke(liveId)
-  } catch (error) {
-    if (!allowCreate || !liveId) throw error
-    response = await invoke("")
-  }
-  if (response.isError && allowCreate && liveId) response = await invoke("")
-  if (response.isError) {
+  const response = await invoke(liveId)
+  let resolvedResponse = response
+  if (response.isError && allowCreate && liveId) {
     const message = response.content.find((item) => item.type === "text")
+    const text = message?.type === "text" ? message.text : ""
+    if (/different principal/i.test(text)) resolvedResponse = await invoke("")
+  }
+  if (resolvedResponse.isError) {
+    const message = resolvedResponse.content.find((item) => item.type === "text")
     throw new Error(message?.type === "text" ? message.text : "Live Workspace authorization failed")
   }
-  const responseStructured = (response.structuredContent || {}) as JsonRecord
-  const hidden = response._meta?.["local-shell-mcp/live"] as JsonRecord | undefined
+  const responseStructured = (resolvedResponse.structuredContent || {}) as JsonRecord
+  const hidden = resolvedResponse._meta?.["local-shell-mcp/live"] as JsonRecord | undefined
   const token = String(hidden?.token || "")
   const apiBase = String(hidden?.apiBase || responseStructured.api_base || structured.api_base || "")
   if (!token || !apiBase) {
@@ -1441,21 +1468,33 @@ async function requestLiveConfig(structured: JsonRecord, allowCreate: boolean): 
 }
 
 function refreshLiveCredentials(structured: JsonRecord, allowCreate = false): Promise<void> {
-  if (credentialRefresh) return credentialRefresh
-  credentialRefresh = (async () => {
+  const machine = String(structured.machine || "local")
+  const cwd = String(structured.cwd || ".")
+  const liveId = String(structured.live_id || "")
+  const key = `${liveId}\u0000${machine}\u0000${cwd}\u0000${allowCreate ? "create" : "reattach"}`
+  const existing = credentialRefreshes.get(key)
+  if (existing) return existing
+  const refresh = (async () => {
     connectionMessage = "Authorizing Live Workspace…"
     renderCurrentTab()
     activateLiveConfig(await requestLiveConfig(structured, allowCreate))
   })().finally(() => {
-    credentialRefresh = null
+    credentialRefreshes.delete(key)
   })
-  return credentialRefresh
+  credentialRefreshes.set(key, refresh)
+  return refresh
 }
 
 async function recoverCredentialsForever(structured: JsonRecord): Promise<void> {
   let attempt = 0
   const announcedLiveId = String(structured.live_id || "")
-  while (!shuttingDown && (!config || Boolean(announcedLiveId && config.liveId !== announcedLiveId))) {
+  const announcedMachine = String(structured.machine || config?.machine || "local")
+  const announcedCwd = String(structured.cwd || config?.cwd || ".")
+  const needsRefresh = () => !config
+    || Boolean(announcedLiveId && config.liveId !== announcedLiveId)
+    || config.machine !== announcedMachine
+    || config.cwd !== announcedCwd
+  while (!shuttingDown && needsRefresh()) {
     try {
       await refreshLiveCredentials(structured, true)
       return
@@ -1481,7 +1520,14 @@ async function configureFromToolResult(result: unknown): Promise<void> {
   const apiBase = String(hidden?.apiBase || structured.api_base || "")
   if (!token || !apiBase) {
     const announcedLiveId = String(structured.live_id || "")
-    if (config && (!announcedLiveId || announcedLiveId === config.liveId)) return
+    const announcedMachine = String(structured.machine || config?.machine || "local")
+    const announcedCwd = String(structured.cwd || config?.cwd || ".")
+    if (
+      config
+      && (!announcedLiveId || announcedLiveId === config.liveId)
+      && announcedMachine === config.machine
+      && announcedCwd === config.cwd
+    ) return
     await recoverCredentialsForever(structured)
     return
   }

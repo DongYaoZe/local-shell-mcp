@@ -503,6 +503,8 @@ def _live_event_arguments(tool_name: str, arguments: dict[str, Any]) -> dict[str
             data[key] = value
         elif isinstance(value, list):
             data[key] = [str(item)[:160] for item in value[:8]]
+    if tool_name == "search" and "cwd" not in data:
+        data["cwd"] = "."
     command = arguments.get("command")
     if isinstance(command, str) and command:
         data["command"] = command[:500]
@@ -619,7 +621,7 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
             started_at = time.monotonic()
             live_session_key = mcp_session_key(mcp)
             live_manager = get_live_channel_manager()
-            if __tool_name != "open_live_workspace":
+            if __tool_name not in {"open_live_workspace", "live_workspace_reconnect"}:
                 principal = current_principal()
                 live_subject = (
                     principal.subject or principal.email or "mcp-client"
@@ -2532,11 +2534,11 @@ def _register_live_workspace_tools(
 
     tool_meta = {
         **_oauth_meta(list(ALL_OAUTH_SCOPES)),
-        "ui": {"resourceUri": LIVE_RESOURCE_URI},
-        # Keep the standardized flat key and the older OpenAI key for hosts that
-        # have not yet moved to the nested MCP Apps metadata shape.
-        "ui/resourceUri": LIVE_RESOURCE_URI,
-        "openai/outputTemplate": LIVE_RESOURCE_URI,
+        "ui": {"resourceUri": LIVE_RESOURCE_VERSIONED_URI},
+        # Use the content-versioned URI as the render cache key. Keep the stable
+        # resource registered as a compatibility alias for direct readers.
+        "ui/resourceUri": LIVE_RESOURCE_VERSIONED_URI,
+        "openai/outputTemplate": LIVE_RESOURCE_VERSIONED_URI,
         "openai/widgetAccessible": True,
         "openai/toolInvocation/invoking": "Opening live workspace",
         "openai/toolInvocation/invoked": "Live workspace ready",

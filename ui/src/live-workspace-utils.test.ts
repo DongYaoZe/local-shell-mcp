@@ -95,6 +95,8 @@ describe("live workspace utilities", () => {
     const terminalInput: LiveEvent = { seq: 4, ts: 1, type: "human.action", actor: "human", data: { action: "terminal.input", bytes: 1 } }
     const edit: LiveEvent = { seq: 5, ts: 1, type: "tool.completed", actor: "agent", data: { tool: "edit_file", path: "/workspace/src/app.ts" } }
     const job: LiveEvent = { seq: 6, ts: 1, type: "tool.completed", actor: "agent", data: { tool: "job_start", name: "tests" } }
+    const shellStarted: LiveEvent = { seq: 7, ts: 1, type: "tool.started", actor: "agent", data: { tool: "shell_start", call_id: "shell-1" } }
+    const shellReady: LiveEvent = { seq: 8, ts: 1, type: "tool.completed", actor: "agent", data: { tool: "shell_start", call_id: "shell-1", session_id: "session-1" } }
 
     expect(isOperationalActivityEvent(opened)).toBeFalse()
     expect(isOperationalActivityEvent(bootstrap)).toBeFalse()
@@ -105,6 +107,8 @@ describe("live workspace utilities", () => {
     expect(activityDestination(edit)).toBe("files")
     expect(activityIntent(job)).toBe("Starting tests")
     expect(activityDestination(job)).toBe("jobs")
+    expect(activityDestination(shellStarted)).toBe("detail")
+    expect(activityDestination(shellReady)).toBe("terminal")
   })
 
   test("diff renderer escapes content and classifies lines", () => {

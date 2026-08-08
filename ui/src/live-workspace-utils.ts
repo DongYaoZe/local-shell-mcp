@@ -153,7 +153,9 @@ export type ActivityDestination = "terminal" | "jobs" | "files" | "diff" | "remo
 
 export function activityDestination(event: LiveEvent): ActivityDestination {
   const tool = String(event.data.tool || "")
-  if (["shell_start", "shell_send", "shell_read", "shell_kill"].includes(tool)) return "terminal"
+  if (["shell_start", "shell_send", "shell_read", "shell_kill"].includes(tool)) {
+    return event.data.session_id ? "terminal" : event.data.call_id ? "detail" : null
+  }
   if (["job_start", "job_list", "job_tail", "job_stop", "job_retry", "remote_transfer"].includes(tool)) return "jobs"
   if (["read_file", "write_file", "edit_file", "delete_file_or_dir", "list_files", "glob_search", "grep_search", "tree_view", "search"].includes(tool)) return "files"
   if (tool === "apply_patch") return "diff"
