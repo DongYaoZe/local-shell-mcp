@@ -8,6 +8,7 @@ import { FitAddon } from "@xterm/addon-fit"
 import { Terminal } from "@xterm/xterm"
 import {
   activityDestination,
+  activityEventKey,
   activityIntent,
   basename,
   escapeHtml,
@@ -97,7 +98,7 @@ let machines: Machine[] = []
 let lastPassiveRefresh = 0
 let passiveRefreshing = false
 let coreRefreshQueued = false
-let activityExpandedCallId = ""
+let activityExpandedEventKey = ""
 const activityAuditDetails = new Map<string, JsonRecord>()
 let activityDiscoveryInitialized = false
 let knownActiveJobs = new Set<string>()
@@ -302,7 +303,7 @@ async function handleAction(action: string, target: HTMLElement): Promise<void> 
     if (action === "expand") await requestDisplayMode(toggleWorkspaceDisplayMode(displayMode))
     else if (action === "refresh") await refreshCurrent(true)
     else if (action === "activity-ask") await askAboutLatestActivity()
-    else if (action === "activity-open-detail") await toggleActivityDetail(target.dataset.callId || "")
+    else if (action === "activity-open-detail") await toggleActivityDetail(target.dataset.eventKey || "", target.dataset.callId || "")
     else if (action === "activity-open-terminal") {
       terminalMachine = target.dataset.machine || "local"
       selectedSession = target.dataset.session || ""
@@ -445,6 +446,7 @@ function activityRow(event: LiveEvent): string {
   const detail = eventDetail(event)
   const destination = activityDestination(event)
   const callId = String(event.data.call_id || "")
+  const eventKey = activityEventKey(event)
   let action = ""
   let actionLabel = ""
   if (destination === "terminal") {
@@ -468,10 +470,10 @@ function activityRow(event: LiveEvent): string {
     action = `data-action="activity-open-audit"`
     actionLabel = "Open audit"
   } else if (destination === "detail" && callId) {
-    action = `data-action="activity-open-detail" data-call-id="${escapeHtml(callId)}"`
-    actionLabel = activityExpandedCallId === callId ? "Hide output" : "View output"
+    action = `data-action="activity-open-detail" data-event-key="${escapeHtml(eventKey)}" data-call-id="${escapeHtml(callId)}"`
+    actionLabel = activityExpandedEventKey === eventKey ? "Hide output" : "View output"
   }
-  const expanded = callId && activityExpandedCallId === callId ? activityDetailHtml(callId) : ""
+  const expanded = callId && activityExpandedEventKey === eventKey ? activityDetailHtml(callId) : ""
   return `<div class="timeline-row ${eventTone(event)} ${action ? "clickable" : ""}" ${action}><div class="timeline-marker"><span></span></div><div class="timeline-copy"><div><strong>${escapeHtml(eventTitle(event))}</strong><span class="actor ${escapeHtml(event.actor)}">${escapeHtml(event.actor)}</span>${actionLabel ? `<span class="timeline-action">${escapeHtml(actionLabel)}</span>` : ""}</div>${detail ? `<p>${escapeHtml(detail)}</p>` : ""}</div><time>${escapeHtml(formatClock(event.ts))}</time>${expanded}</div>`
 }
 
@@ -492,22 +494,22 @@ function activityDetailHtml(callId: string): string {
   return `<pre class="timeline-detail">${escapeHtml(truncateContext(JSON.stringify(payload, null, 2), 24_000))}</pre>`
 }
 
-async function toggleActivityDetail(callId: string): Promise<void> {
-  if (!callId) return
-  if (activityExpandedCallId === callId) {
-    activityExpandedCallId = ""
+async function toggleActivityDetail(eventKey: string, callId: string): Promise<void> {
+  if (!eventKey || !callId) return
+  if (activityExpandedEventKey === eventKey) {
+    activityExpandedEventKey = ""
     renderActivity()
     return
   }
-  activityExpandedCallId = callId
+  activityExpandedEventKey = eventKey
   renderActivity()
   if (activityAuditDetails.has(callId)) return
   try {
     const detail = await api<JsonRecord>(`/api/ui/audit/detail?id=${encodeURIComponent(`call:${callId}`)}`)
     activityAuditDetails.set(callId, detail)
-    if (activityExpandedCallId === callId && activeTab === "activity") renderActivity()
+    if (activityExpandedEventKey === eventKey && activeTab === "activity") renderActivity()
   } catch (error) {
-    if (activityExpandedCallId === callId) activityExpandedCallId = ""
+    if (activityExpandedEventKey === eventKey) activityExpandedEventKey = ""
     if (activeTab === "activity") renderActivity()
     notify(error instanceof Error ? error.message : String(error), "warning")
   }
@@ -990,7 +992,7 @@ function resetWorkspaceTarget(machine: string, cwd: string): void {
   activityDiscoveryInitialized = false
   knownActiveJobs.clear()
   knownStandaloneSessions.clear()
-  activityExpandedCallId = ""
+  activityExpandedEventKey = ""
   activityAuditDetails.clear()
   resetFileTarget(machine, cwd)
   resetTerminalTarget(machine)

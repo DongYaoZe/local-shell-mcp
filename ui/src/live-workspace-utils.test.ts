@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import {
   activityDestination,
+  activityEventKey,
   activityIntent,
   eventDetail,
   eventTitle,
@@ -44,6 +45,25 @@ describe("live workspace utilities", () => {
     expect(parentPath("//server/share")).toBe("//server/share")
     expect(joinPath("/workspace", "src")).toBe("/workspace/src")
     expect(joinPath("C:\\work", "src")).toBe("C:\\work\\src")
+  })
+
+  test("activity row identity stays unique across events from one tool call", () => {
+    const started: LiveEvent = {
+      seq: 40,
+      ts: 1,
+      type: "tool.started",
+      actor: "agent",
+      data: { tool: "run_shell_tool", call_id: "call-1" },
+    }
+    const completed: LiveEvent = {
+      seq: 41,
+      ts: 2,
+      type: "tool.completed",
+      actor: "agent",
+      data: { tool: "run_shell_tool", call_id: "call-1" },
+    }
+
+    expect(activityEventKey(started)).not.toBe(activityEventKey(completed))
   })
 
   test("activity summaries stay operational", () => {

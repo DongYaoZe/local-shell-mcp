@@ -110,6 +110,10 @@ export function reconnectDelayMs(attempt: number): number {
   return Math.min(15_000, 500 * (2 ** exponent))
 }
 
+export function activityEventKey(event: LiveEvent): string {
+  return String(event.seq)
+}
+
 export function isOperationalActivityEvent(event: LiveEvent): boolean {
   if (event.type === "channel.opened") return false
   if (event.type === "human.action" && event.data.action === "terminal.input") return false
