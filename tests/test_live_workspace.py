@@ -110,6 +110,27 @@ def test_live_workspace_can_reattach_a_second_mcp_session_by_live_id():
         )
 
 
+def test_live_workspace_auto_reattaches_only_when_subject_channel_is_unambiguous():
+    manager = LiveChannelManager()
+    channel, _ = manager.open(
+        session_key="mcp:app-after-restart",
+        subject="user",
+        scopes=tuple(ALL_OAUTH_SCOPES),
+    )
+
+    assert manager.attach_session_for_subject("mcp:model-after-restart", "user") is channel
+    assert manager.active_for_session("mcp:model-after-restart") is channel
+    assert manager.attach_session_for_subject("mcp:other", "other") is None
+
+    manager.open(
+        session_key="mcp:second-app",
+        subject="user",
+        scopes=tuple(ALL_OAUTH_SCOPES),
+    )
+    assert manager.attach_session_for_subject("mcp:ambiguous-model", "user") is None
+    assert manager.active_for_session("mcp:ambiguous-model") is None
+
+
 @pytest.mark.asyncio
 async def test_live_workspace_expiry_publish_and_wait_paths():
     manager = LiveChannelManager()

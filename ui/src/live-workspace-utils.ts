@@ -112,6 +112,11 @@ export function nextDisplayMode(current: DisplayMode, requested: Exclude<Display
   return current === requested ? "inline" : requested
 }
 
+export function reconnectDelayMs(attempt: number): number {
+  const exponent = Math.min(5, Math.max(0, Math.floor(attempt)))
+  return Math.min(15_000, 500 * (2 ** exponent))
+}
+
 export function isOperationalActivityEvent(event: LiveEvent): boolean {
   if (event.type === "channel.opened") return false
   return String(event.data.tool || "") !== "open_live_workspace"

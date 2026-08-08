@@ -625,8 +625,17 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
             call_id = uuid.uuid4().hex
             started_at = time.monotonic()
             live_session_key = mcp_session_key(mcp)
+            live_manager = get_live_channel_manager()
+            if __tool_name != "open_live_workspace":
+                principal = current_principal()
+                live_subject = (
+                    principal.subject or principal.email or "mcp-client"
+                    if principal is not None
+                    else "local-mcp-client"
+                )
+                live_manager.attach_session_for_subject(live_session_key, live_subject)
             live_arguments = _live_event_arguments(__tool_name, safe_call_arguments)
-            get_live_channel_manager().publish_for_session(
+            live_manager.publish_for_session(
                 live_session_key,
                 "tool.started",
                 data={"call_id": call_id, **live_arguments},
@@ -640,7 +649,7 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
             )
             try:
                 if _live_tool_mutates(__tool_name, __read_only, call_arguments):
-                    get_live_channel_manager().require_agent_mutation_allowed(
+                    live_manager.require_agent_mutation_allowed(
                         live_session_key,
                         __tool_name,
                     )
@@ -668,7 +677,7 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
                     **failure_context,
                     **audit_context,
                 )
-                get_live_channel_manager().publish_for_session(
+                live_manager.publish_for_session(
                     live_session_key,
                     "tool.completed" if call_ok else "tool.failed",
                     data={
@@ -703,7 +712,7 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
                     result=_serialize_audit_value(result),
                     **audit_context,
                 )
-                get_live_channel_manager().publish_for_session(
+                live_manager.publish_for_session(
                     live_session_key,
                     "tool.failed",
                     data={
@@ -726,7 +735,7 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
                     error_type=type(exc).__name__,
                     **audit_context,
                 )
-                get_live_channel_manager().publish_for_session(
+                live_manager.publish_for_session(
                     live_session_key,
                     "tool.failed",
                     data={

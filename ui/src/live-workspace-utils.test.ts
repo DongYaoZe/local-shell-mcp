@@ -11,6 +11,7 @@ import {
   parentPath,
   renderDiffHtml,
   nextDisplayMode,
+  reconnectDelayMs,
   toolResultFromOpenAiGlobals,
   truncateContext,
   type LiveEvent,
@@ -29,6 +30,14 @@ describe("live workspace utilities", () => {
     expect(nextDisplayMode("inline", "pip")).toBe("pip")
     expect(nextDisplayMode("pip", "pip")).toBe("inline")
     expect(nextDisplayMode("fullscreen", "pip")).toBe("pip")
+  })
+
+  test("reconnect backoff grows but remains bounded", () => {
+    expect(reconnectDelayMs(0)).toBe(500)
+    expect(reconnectDelayMs(1)).toBe(1000)
+    expect(reconnectDelayMs(4)).toBe(8000)
+    expect(reconnectDelayMs(5)).toBe(15000)
+    expect(reconnectDelayMs(50)).toBe(15000)
   })
 
   test("paths work for POSIX and Windows", () => {

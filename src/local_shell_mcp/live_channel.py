@@ -147,6 +147,20 @@ class LiveChannelManager:
             live_id = self._session_channels.get(session_key)
             return self._channels.get(live_id or "")
 
+    def attach_session_for_subject(self, session_key: str, subject: str) -> LiveChannel | None:
+        """Reattach a fresh MCP session when exactly one live channel belongs to its principal."""
+        with self._lock:
+            self._prune_locked()
+            existing = self.active_for_session(session_key)
+            if existing is not None:
+                return existing
+            matches = [channel for channel in self._channels.values() if channel.subject == subject]
+            if len(matches) != 1:
+                return None
+            channel = matches[0]
+            self._session_channels[session_key] = channel.live_id
+            return channel
+
     def by_id(self, live_id: str) -> LiveChannel | None:
         with self._lock:
             self._prune_locked()

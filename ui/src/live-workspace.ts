@@ -21,6 +21,7 @@ import {
   joinPath,
   nextDisplayMode,
   parentPath,
+  reconnectDelayMs,
   renderDiffHtml,
   toolResultFromOpenAiGlobals,
   truncateContext,
@@ -30,6 +31,25 @@ import {
 } from "./live-workspace-utils"
 
 type JsonRecord = Record<string, unknown>
+
+class LiveApiError extends Error {
+  readonly status: number
+
+  constructor(message: string, status: number) {
+    super(message)
+    this.name = "LiveApiError"
+    this.status = status
+  }
+}
+
+function isLiveCredentialError(error: unknown): boolean {
+  return error instanceof LiveApiError && (error.status === 401 || error.status === 403)
+}
+
+function waitForRetry(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds))
+}
+
 type Machine = { name: string; status?: string; workdir?: string; version?: string; platform?: string }
 type TerminalSession = { session_id: string; backend?: string; created?: number; attached?: number; cwd?: string; name?: string }
 type FileEntry = { name: string; path: string; type: string; size?: number; modified?: number; hidden?: boolean }
@@ -1157,8 +1177,8 @@ async function api<T = JsonRecord>(path: string, init: RequestInit = {}): Promis
   if (init.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json")
   const response = await fetch(url, { ...init, headers, credentials: "omit", cache: "no-store" })
   let payload: JsonRecord
-  try { payload = await response.json() as JsonRecord } catch { throw new Error(`Live API returned HTTP ${response.status}`) }
-  if (!response.ok || payload.ok === false) throw new Error(String(payload.message || payload.detail || `HTTP ${response.status}`))
+  try { payload = await response.json() as JsonRecord } catch { throw new LiveApiError(`Live API returned HTTP ${response.status}`, response.status) }
+  if (!response.ok || payload.ok === false) throw new LiveApiError(String(payload.message || payload.detail || `HTTP ${response.status}`), response.status)
   return (payload.data ?? payload) as T
 }
 
@@ -1189,22 +1209,58 @@ async function loadSnapshot(generation: number): Promise<boolean> {
 
 async function pollEvents(generation: number): Promise<void> {
   while (config && generation === pollGeneration) {
+    const payload = await api<{ events: LiveEvent[]; cursor: number; control: ControlMode }>(`/api/live/events?after=${cursor}&timeout=25`)
+    if (generation !== pollGeneration) return
+    if (payload.control) control = payload.control
+    mergeEvents(payload.events || [])
+    cursor = Math.max(cursor, Number(payload.cursor || 0))
+    connected = true
+    connectionMessage = "Live"
+    updateChrome()
+    if (payload.events?.some((event) => ["tool.completed", "tool.failed", "human.action"].includes(event.type)) && Date.now() - lastPassiveRefresh > 1500) void refreshAllCore()
+  }
+}
+
+async function runConnectionLoop(generation: number): Promise<void> {
+  let attempt = 0
+  let announcedRetry = false
+  while (config && generation === pollGeneration) {
     try {
-      const payload = await api<{ events: LiveEvent[]; cursor: number; control: ControlMode }>(`/api/live/events?after=${cursor}&timeout=25`)
-      if (generation !== pollGeneration) return
-      if (payload.control) control = payload.control
-      mergeEvents(payload.events || [])
-      cursor = Math.max(cursor, Number(payload.cursor || 0))
-      connected = true
-      connectionMessage = "Live"
+      connectionMessage = attempt ? "Reconnecting" : "Connecting"
       updateChrome()
-      if (payload.events?.some((event) => ["tool.completed", "tool.failed", "human.action"].includes(event.type)) && Date.now() - lastPassiveRefresh > 1500) void refreshAllCore()
-    } catch (error) {
+      renderCurrentTab()
+      if (!await loadSnapshot(generation)) return
+      await refreshAllCore()
       if (generation !== pollGeneration) return
+      await refreshCurrent(false)
+      if (generation !== pollGeneration) return
+      attempt = 0
+      announcedRetry = false
+      await pollEvents(generation)
+      return
+    } catch (caught) {
+      if (!config || generation !== pollGeneration) return
+      let error = caught
+      if (isLiveCredentialError(error)) {
+        const stale = config
+        try {
+          await refreshLiveCredentials({ machine: stale.machine, cwd: stale.cwd, live_id: stale.liveId }, true)
+          return
+        } catch (credentialError) {
+          error = credentialError
+        }
+      }
       connected = false
       connectionMessage = "Reconnecting"
       updateChrome()
-      await new Promise((resolve) => setTimeout(resolve, 1200))
+      renderCurrentTab()
+      if (!announcedRetry) {
+        announcedRetry = true
+        notify(`Connection lost; retrying automatically (${error instanceof Error ? error.message : String(error)})`, "warning")
+      }
+      const delay = reconnectDelayMs(attempt)
+      attempt += 1
+      await waitForRetry(delay)
     }
   }
 }
@@ -1225,66 +1281,72 @@ function activateLiveConfig(nextConfig: LiveConfig): void {
   const generation = pollGeneration
   connectionMessage = "Connecting"
   renderCurrentTab()
-  void (async () => {
-    try {
-      if (!await loadSnapshot(generation)) return
-      await refreshAllCore()
-      if (generation !== pollGeneration) return
-      await refreshCurrent(false)
-      if (generation !== pollGeneration) return
-      void pollEvents(generation)
-    } catch (error) {
-      connected = false
-      connectionMessage = "Connection failed"
-      updateChrome()
-      renderCurrentTab()
-      notify(error instanceof Error ? error.message : String(error), "danger")
-    }
-  })()
+  void runConnectionLoop(generation)
 }
 
 let credentialRefresh: Promise<void> | null = null
 
-function refreshLiveCredentials(structured: JsonRecord): Promise<void> {
+async function requestLiveConfig(structured: JsonRecord, allowCreate: boolean): Promise<LiveConfig> {
+  const machine = String(structured.machine || "local")
+  const cwd = String(structured.cwd || ".")
+  const liveId = String(structured.live_id || "")
+  const invoke = (id: string) => app.callServerTool({
+    name: "open_live_workspace",
+    arguments: id ? { machine, cwd, live_id: id } : { machine, cwd },
+  })
+  let response
+  try {
+    response = await invoke(liveId)
+  } catch (error) {
+    if (!allowCreate || !liveId) throw error
+    response = await invoke("")
+  }
+  const responseStructured = (response.structuredContent || {}) as JsonRecord
+  const hidden = response._meta?.["local-shell-mcp/live"] as JsonRecord | undefined
+  const token = String(hidden?.token || "")
+  const apiBase = String(hidden?.apiBase || responseStructured.api_base || structured.api_base || "")
+  if (!token || !apiBase) {
+    throw new Error("ChatGPT omitted Live Workspace credentials from the app-initiated tool result")
+  }
+  return {
+    token,
+    apiBase,
+    uiPath: String(hidden?.uiPath || responseStructured.ui_path || structured.ui_path || "/ui"),
+    liveId: String(hidden?.liveId || responseStructured.live_id || structured.live_id || ""),
+    machine: String(responseStructured.machine || machine),
+    cwd: String(responseStructured.cwd || cwd),
+  }
+}
+
+function refreshLiveCredentials(structured: JsonRecord, allowCreate = false): Promise<void> {
   if (credentialRefresh) return credentialRefresh
   credentialRefresh = (async () => {
     connectionMessage = "Authorizing Live Workspace…"
     renderCurrentTab()
-    const machine = String(structured.machine || "local")
-    const cwd = String(structured.cwd || ".")
-    const liveId = String(structured.live_id || "")
-    if (!liveId) {
-      throw new Error("ChatGPT omitted the Live Workspace ID needed to recover app credentials")
-    }
-    const response = await app.callServerTool({
-      name: "open_live_workspace",
-      arguments: { machine, cwd, live_id: liveId },
-    })
-    const responseStructured = (response.structuredContent || {}) as JsonRecord
-    const hidden = response._meta?.["local-shell-mcp/live"] as JsonRecord | undefined
-    const token = String(hidden?.token || "")
-    const apiBase = String(hidden?.apiBase || responseStructured.api_base || structured.api_base || "")
-    if (!token || !apiBase) {
-      throw new Error("ChatGPT omitted Live Workspace credentials from the app-initiated tool result")
-    }
-    activateLiveConfig({
-      token,
-      apiBase,
-      uiPath: String(hidden?.uiPath || responseStructured.ui_path || structured.ui_path || "/ui"),
-      liveId: String(hidden?.liveId || responseStructured.live_id || structured.live_id || ""),
-      machine: String(responseStructured.machine || machine),
-      cwd: String(responseStructured.cwd || cwd),
-    })
-  })().catch((error) => {
-    connected = false
-    connectionMessage = "Live authorization failed"
-    updateChrome()
-    renderCurrentTab()
-    notify(error instanceof Error ? error.message : String(error), "danger")
-  }).finally(() => {
+    activateLiveConfig(await requestLiveConfig(structured, allowCreate))
+  })().finally(() => {
     credentialRefresh = null
   })
   return credentialRefresh
+}
+
+async function recoverCredentialsForever(structured: JsonRecord): Promise<void> {
+  let attempt = 0
+  while (!config) {
+    try {
+      await refreshLiveCredentials(structured, true)
+      return
+    } catch (error) {
+      connected = false
+      connectionMessage = "Reconnecting"
+      updateChrome()
+      renderCurrentTab()
+      if (attempt === 0) notify(`Live authorization unavailable; retrying automatically (${error instanceof Error ? error.message : String(error)})`, "warning")
+      const delay = reconnectDelayMs(attempt)
+      attempt += 1
+      await waitForRetry(delay)
+    }
+  }
 }
 
 async function configureFromToolResult(result: unknown): Promise<void> {
@@ -1294,7 +1356,7 @@ async function configureFromToolResult(result: unknown): Promise<void> {
   const token = String(hidden?.token || "")
   const apiBase = String(hidden?.apiBase || structured.api_base || "")
   if (!token || !apiBase) {
-    await refreshLiveCredentials(structured)
+    await recoverCredentialsForever(structured)
     return
   }
   activateLiveConfig({
@@ -1362,7 +1424,7 @@ void (async () => {
       pendingToolResult = null
       await configureFromToolResult(result)
     } else if (!configureFromOpenAiGlobals()) {
-      await refreshLiveCredentials({})
+      await recoverCredentialsForever({})
     }
   } catch (error) {
     connected = false
