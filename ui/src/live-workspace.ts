@@ -1332,7 +1332,8 @@ function refreshLiveCredentials(structured: JsonRecord, allowCreate = false): Pr
 
 async function recoverCredentialsForever(structured: JsonRecord): Promise<void> {
   let attempt = 0
-  while (!config) {
+  const announcedLiveId = String(structured.live_id || "")
+  while (!config || Boolean(announcedLiveId && config.liveId !== announcedLiveId)) {
     try {
       await refreshLiveCredentials(structured, true)
       return
