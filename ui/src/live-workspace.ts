@@ -100,6 +100,7 @@ let passiveRefreshing = false
 let coreRefreshQueued = false
 let activityExpandedEventKey = ""
 const activityAuditDetails = new Map<string, JsonRecord>()
+let activityDetailRevision = 0
 let activityDiscoveryInitialized = false
 let knownActiveJobs = new Set<string>()
 let knownStandaloneSessions = new Set<string>()
@@ -513,9 +514,16 @@ async function toggleActivityDetail(eventKey: string, callId: string): Promise<v
   renderActivity()
   if (activityAuditDetails.has(callId)) return
   try {
-    const detail = await api<JsonRecord>(`/api/ui/audit/detail?id=${encodeURIComponent(`call:${callId}`)}`)
-    activityAuditDetails.set(callId, detail)
-    if (activityExpandedEventKey === eventKey && activeTab === "activity") renderActivity()
+    const generation = pollGeneration
+    while (activityExpandedEventKey === eventKey && generation === pollGeneration) {
+      const revision = activityDetailRevision
+      const detail = await api<JsonRecord>(`/api/ui/audit/detail?id=${encodeURIComponent(`call:${callId}`)}`)
+      if (activityExpandedEventKey !== eventKey || generation !== pollGeneration) return
+      if (revision !== activityDetailRevision) continue
+      activityAuditDetails.set(callId, detail)
+      if (activeTab === "activity") renderActivity()
+      return
+    }
   } catch (error) {
     if (activityExpandedEventKey === eventKey) activityExpandedEventKey = ""
     if (activeTab === "activity") renderActivity()
@@ -1192,7 +1200,10 @@ function mergeEvents(incoming: LiveEvent[]): void {
     bySeq.set(event.seq, event)
     if (event.type === "tool.completed" || event.type === "tool.failed") {
       const callId = String(event.data.call_id || "")
-      if (callId) activityAuditDetails.delete(callId)
+      if (callId) {
+        activityAuditDetails.delete(callId)
+        activityDetailRevision += 1
+      }
     }
   }
   events = [...bySeq.values()].sort((a, b) => a.seq - b.seq).slice(-800)
@@ -1205,6 +1216,7 @@ async function loadSnapshot(generation: number): Promise<boolean> {
   const payload = await api<{ channel: JsonRecord; events: LiveEvent[] }>("/api/live/snapshot")
   if (generation !== pollGeneration) return false
   activityAuditDetails.clear()
+  activityDetailRevision += 1
   events = payload.events || []
   cursor = Number(payload.channel.seq || events.at(-1)?.seq || 0)
   connected = true
@@ -1281,7 +1293,16 @@ function activateLiveConfig(nextConfig: LiveConfig): void {
     && config.machine === nextConfig.machine
     && config.cwd === nextConfig.cwd
   ) return
+  const channelChanged = !config || config.liveId !== nextConfig.liveId
   const targetChanged = !config || config.machine !== nextConfig.machine || config.cwd !== nextConfig.cwd
+  if (channelChanged) {
+    events = []
+    cursor = 0
+    connected = false
+    activityExpandedEventKey = ""
+    activityAuditDetails.clear()
+    activityDetailRevision += 1
+  }
   if (targetChanged) resetWorkspaceTarget(nextConfig.machine, nextConfig.cwd)
   config = nextConfig
   pollGeneration += 1
