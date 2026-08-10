@@ -509,6 +509,7 @@ _TOOL_OPERATION_GROUPS: dict[str, frozenset[str]] = {
             "mcp_tool_search",
             "mcp_tool_inspect",
             "mcp_tool_call",
+            "session_manage",
             "plan_manage",
             "audit_tail",
         }

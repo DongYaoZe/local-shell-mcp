@@ -196,6 +196,7 @@ async def test_all_public_tool_wrappers_local_and_remote(tmp_path, monkeypatch):
         "apply_patch": {"patch": "diff", "purpose": "test"},
         "remote_transfer": {"source_path": "a", "destination_path": "b", "destination_machine": "node", "purpose": "test"},
         "secret_scan": {},
+        "session_manage": {"action": "list"},
         "plan_manage": {"action": "get"},
         "mcp_manage": {"action": "list"},
         "mcp_tool_search": {},

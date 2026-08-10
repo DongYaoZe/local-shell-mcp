@@ -37,6 +37,7 @@ CORE_TOOL_NAMES = {
     "delete_file_or_dir",
     "apply_patch",
     "secret_scan",
+    "session_manage",
     "plan_manage",
     "mcp_manage",
     "mcp_tool_search",

@@ -13,6 +13,7 @@ from starlette.requests import Request
 
 import local_shell_mcp.live_channel as live_channel_module
 import local_shell_mcp.live_channel_routes as live_routes
+import local_shell_mcp.session_runtime as session_runtime_module
 from local_shell_mcp.auth import Principal
 from local_shell_mcp.live_channel import (
     LIVE_EVENT_LIMIT,
@@ -24,6 +25,7 @@ from local_shell_mcp.live_channel import (
 )
 from local_shell_mcp.main import _build_mcp_http_app
 from local_shell_mcp.oauth import ALL_OAUTH_SCOPES
+from local_shell_mcp.session_runtime import SessionRuntimeManager
 from local_shell_mcp.settings import get_settings
 from local_shell_mcp.tools import build_mcp
 
@@ -37,6 +39,9 @@ def _configure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, auth: str = "
     monkeypatch.setenv("LOCAL_SHELL_MCP_PUBLIC_BASE_URL", "https://lsm.example.test")
     get_settings.cache_clear()
     monkeypatch.setattr(live_channel_module, "_MANAGER", LiveChannelManager())
+    monkeypatch.setattr(
+        session_runtime_module, "_MANAGER", SessionRuntimeManager(tmp_path / ".state")
+    )
 
 
 def test_live_workspace_resource_uri_stays_stable_with_versioned_alias():
@@ -216,24 +221,24 @@ async def test_live_workspace_expiry_publish_and_wait_paths():
     assert manager.by_id(channel.live_id) is None
 
 
-def test_plan_state_machine_and_auto_promotion():
-    manager = LiveChannelManager()
-    channel, _ = manager.open(
-        session_key="mcp:plan",
-        subject="user",
-        scopes=tuple(ALL_OAUTH_SCOPES),
+def test_plan_state_machine_and_auto_promotion(tmp_path):
+    sessions = SessionRuntimeManager(tmp_path / ".state")
+    started_session = sessions.manage(
+        "mcp:plan", "user", action="start", objective="Make the change fully ready"
     )
+    session_id = started_session["session_id"]
 
-    started = manager.manage_plan(
+    started = sessions.manage_plan(
         "mcp:plan",
         action="start",
         objective="Make the change fully ready",
         steps=[{"id": "inspect", "text": "Inspect"}, {"id": "test", "text": "Test"}],
     )
+    assert started["session_id"] == session_id
     assert started["goal_mode"] is True
     assert [step["status"] for step in started["plan"]["steps"]] == ["active", "pending"]
 
-    updated = manager.manage_plan(
+    updated = sessions.manage_plan(
         "mcp:plan",
         action="update",
         step_id="inspect",
@@ -242,86 +247,86 @@ def test_plan_state_machine_and_auto_promotion():
     assert [step["status"] for step in updated["plan"]["steps"]] == ["completed", "active"]
 
     with pytest.raises(ValueError, match="unfinished steps"):
-        manager.manage_plan("mcp:plan", action="finish")
+        sessions.manage_plan("mcp:plan", action="finish")
 
-    manager.manage_plan("mcp:plan", action="update", step_id="test", status="completed")
-    finished = manager.manage_plan("mcp:plan", action="finish", note="done")
+    sessions.manage_plan("mcp:plan", action="update", step_id="test", status="completed")
+    finished = sessions.manage_plan("mcp:plan", action="finish", note="done")
     assert finished["goal_mode"] is False
     assert finished["plan"]["status"] == "completed"
-    assert channel.plan is not None
+    assert sessions.plan_state(session_id)["status"] == "completed"
 
 
-def test_plan_requires_live_workspace_and_block_stops_continuation():
-    manager = LiveChannelManager()
-    with pytest.raises(ValueError, match="open_live_workspace"):
-        manager.manage_plan(
+def test_plan_requires_logical_session_and_block_stops_continuation(tmp_path, monkeypatch):
+    sessions = SessionRuntimeManager(tmp_path / ".state")
+    with pytest.raises(RuntimeError, match="logical session"):
+        sessions.manage_plan(
             "mcp:missing",
             action="start",
             objective="Long task",
             steps=[{"text": "Do work"}],
         )
 
-    channel, _ = manager.open(
-        session_key="mcp:block",
-        subject="user",
-        scopes=tuple(ALL_OAUTH_SCOPES),
+    now = [1_000.0]
+    monkeypatch.setattr(session_runtime_module.time, "time", lambda: now[0])
+    started_session = sessions.manage(
+        "mcp:block", "user", action="start", objective="Long task"
     )
-    manager.manage_plan(
+    session_id = started_session["session_id"]
+    sessions.manage_plan(
         "mcp:block",
         action="start",
         objective="Long task",
         steps=[{"text": "Do work"}],
     )
-    assert channel.plan is not None
-    channel.plan.last_agent_activity = time.time() - live_channel_module.PLAN_EXECUTION_LEASE_S - 1
-    assert manager.claim_plan_continuation(channel) is not None
-    manager.report_plan_continuation(channel, accepted=True)
+    now[0] += session_runtime_module.PLAN_EXECUTION_LEASE_S + 1
+    assert sessions.claim_plan_continuation(session_id) is not None
+    sessions.report_plan_continuation(session_id, accepted=True)
 
-    manager.manage_plan("mcp:block", action="block", note="Need user input")
-    channel.plan.last_agent_activity = time.time() - live_channel_module.PLAN_EXECUTION_LEASE_S - 1
-    assert manager.claim_plan_continuation(channel) is None
+    sessions.manage_plan("mcp:block", action="block", note="Need user input")
+    now[0] += session_runtime_module.PLAN_EXECUTION_LEASE_S + 1
+    assert sessions.claim_plan_continuation(session_id) is None
 
-    resumed = manager.manage_plan("mcp:block", action="resume")
+    resumed = sessions.manage_plan("mcp:block", action="resume")
     assert resumed["plan"]["status"] == "active"
     assert resumed["plan"]["continuation_due"] is False
 
 
-def test_plan_continuation_lease_rejection_and_hard_cap():
-    manager = LiveChannelManager()
-    channel, _ = manager.open(
-        session_key="mcp:continue",
-        subject="user",
-        scopes=tuple(ALL_OAUTH_SCOPES),
+def test_plan_continuation_lease_rejection_and_hard_cap(tmp_path, monkeypatch):
+    sessions = SessionRuntimeManager(tmp_path / ".state")
+    now = [1_000.0]
+    monkeypatch.setattr(session_runtime_module.time, "time", lambda: now[0])
+    started_session = sessions.manage(
+        "mcp:continue", "user", action="start", objective="Keep going until done"
     )
-    manager.manage_plan(
+    session_id = started_session["session_id"]
+    sessions.manage_plan(
         "mcp:continue",
         action="start",
         objective="Keep going until done",
         steps=[{"id": "work", "text": "Work"}],
     )
-    assert channel.plan is not None
 
-    channel.plan.last_agent_activity = time.time() - live_channel_module.PLAN_EXECUTION_LEASE_S + 1
-    assert manager.claim_plan_continuation(channel) is None
+    now[0] += session_runtime_module.PLAN_EXECUTION_LEASE_S - 1
+    assert sessions.claim_plan_continuation(session_id) is None
 
-    channel.plan.last_agent_activity = time.time() - live_channel_module.PLAN_EXECUTION_LEASE_S - 1
-    rejected = manager.claim_plan_continuation(channel)
+    now[0] += 2
+    rejected = sessions.claim_plan_continuation(session_id)
     assert rejected is not None
     assert rejected["continuation_count"] == 1
-    manager.report_plan_continuation(channel, accepted=False, error="host busy")
-    assert channel.plan.continuation_count == 0
+    sessions.report_plan_continuation(session_id, accepted=False, error="host busy")
+    assert sessions.plan_state(session_id)["continuation_count"] == 0
 
-    for expected in range(1, live_channel_module.PLAN_MAX_CONTINUATIONS + 1):
-        channel.plan.last_agent_activity = time.time() - live_channel_module.PLAN_EXECUTION_LEASE_S - 1
-        claim = manager.claim_plan_continuation(channel)
+    for expected in range(1, session_runtime_module.PLAN_MAX_CONTINUATIONS + 1):
+        now[0] += session_runtime_module.PLAN_EXECUTION_LEASE_S + 1
+        claim = sessions.claim_plan_continuation(session_id)
         assert claim is not None
         assert claim["continuation_count"] == expected
-        assert manager.claim_plan_continuation(channel) is None
-        manager.report_plan_continuation(channel, accepted=True)
+        assert sessions.claim_plan_continuation(session_id) is None
+        sessions.report_plan_continuation(session_id, accepted=True)
 
-    channel.plan.last_agent_activity = time.time() - live_channel_module.PLAN_EXECUTION_LEASE_S - 1
-    assert manager.claim_plan_continuation(channel) is None
-    assert channel.plan.public_state()["auto_continue_exhausted"] is True
+    now[0] += session_runtime_module.PLAN_EXECUTION_LEASE_S + 1
+    assert sessions.claim_plan_continuation(session_id) is None
+    assert sessions.plan_state(session_id)["auto_continue_exhausted"] is True
 
 
 def test_mcp_session_key_uses_request_session_identity():
@@ -454,10 +459,15 @@ async def test_live_workspace_keeps_model_and_human_mutations_collaborative(tmp_
 def test_live_http_token_cors_and_collaborative_human_mutation(tmp_path, monkeypatch):
     _configure(tmp_path, monkeypatch, auth="oauth")
     manager = live_channel_module.get_live_channel_manager()
+    session_manager = session_runtime_module.get_session_runtime_manager()
+    logical = session_manager.manage(
+        "mcp:http-test", "user", action="start", objective="Exercise human goal controls"
+    )
     channel, token = manager.open(
         session_key="mcp:http-test",
         subject="user",
         scopes=tuple(ALL_OAUTH_SCOPES),
+        logical_session_id=logical["session_id"],
     )
     headers = {"Authorization": f"Bearer {token}", "Origin": "https://chatgpt.com"}
     app = _build_mcp_http_app(build_mcp())
@@ -490,7 +500,7 @@ def test_live_http_token_cors_and_collaborative_human_mutation(tmp_path, monkeyp
         assert invalid_cursor.status_code == 400
         assert invalid_cursor.json()["message"] == "Invalid event cursor"
 
-        manager.manage_plan(
+        session_manager.manage_plan(
             "mcp:http-test",
             action="start",
             objective="Exercise human goal controls",

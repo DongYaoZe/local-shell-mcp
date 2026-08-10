@@ -76,6 +76,7 @@ from .remote_transfer import (
     revoke_transfer_ticket,
 )
 from .search_ops import grep, tree
+from .session_runtime import get_session_runtime_manager
 from .settings import get_settings, safe_settings_dump
 from .shell_ops import (
     PUBLIC_RUN_SHELL_DEFAULT_TIMEOUT_S,
@@ -140,6 +141,7 @@ class LiveChannelResult(BaseModel):
 
     ok: bool = True
     live_id: str
+    session_id: str | None = None
     api_base: str
     ui_path: str
     machine: str
@@ -293,7 +295,13 @@ MCP_INSTRUCTIONS = (
     "a related file returned by skill_load is needed. Skills use this fixed tool "
     "surface; do not expect per-Skill MCP tools. When a registered external MCP may "
     "provide a capability, use mcp_tool_search, then mcp_tool_inspect, then mcp_tool_call; "
-    "dynamic MCP tools never appear directly in tools/list."
+    "dynamic MCP tools never appear directly in tools/list. For substantive tool-driven work, "
+    "create a durable logical task context first with session_manage(action='start', objective=...). "
+    "Keep that session current with session_manage(action='report', ...) at meaningful checkpoints and "
+    "before handing work off. When continuing work from another ChatGPT run or MCP transport, call "
+    "session_manage(action='resume', session_id=..., takeover=true) before using execution tools. "
+    "Logical sessions are not bound to machines or working directories. plan_manage is optional Goal mode "
+    "owned by the current logical session, not by Live Workspace."
 )
 
 
@@ -621,6 +629,9 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
             started_at = time.monotonic()
             live_session_key = mcp_session_key(mcp)
             live_manager = get_live_channel_manager()
+            logical_manager = get_session_runtime_manager()
+            if __tool_name != "session_manage":
+                logical_manager.assert_current_run(live_session_key)
             if __tool_name not in {"open_live_workspace", "live_workspace_reconnect"}:
                 principal = current_principal()
                 live_subject = (
@@ -667,16 +678,22 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
                     **failure_context,
                     **audit_context,
                 )
+                completion_data = {
+                    "call_id": call_id,
+                    "ok": call_ok,
+                    "duration_ms": round((time.monotonic() - started_at) * 1000),
+                    **live_arguments,
+                    **_live_result_summary(result),
+                }
                 live_manager.publish_for_session(
                     live_session_key,
                     "tool.completed" if call_ok else "tool.failed",
-                    data={
-                        "call_id": call_id,
-                        "ok": call_ok,
-                        "duration_ms": round((time.monotonic() - started_at) * 1000),
-                        **live_arguments,
-                        **_live_result_summary(result),
-                    },
+                    data=completion_data,
+                )
+                logical_manager.record_activity(
+                    live_session_key,
+                    "tool.completed" if call_ok else "tool.failed",
+                    data=completion_data,
                 )
                 return result
             except TimeoutError:
@@ -702,16 +719,20 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
                     result=_serialize_audit_value(result),
                     **audit_context,
                 )
+                failure_data = {
+                    "call_id": call_id,
+                    "ok": False,
+                    "duration_ms": round((time.monotonic() - started_at) * 1000),
+                    "error_type": type(exc).__name__,
+                    **live_arguments,
+                }
                 live_manager.publish_for_session(
                     live_session_key,
                     "tool.failed",
-                    data={
-                        "call_id": call_id,
-                        "ok": False,
-                        "duration_ms": round((time.monotonic() - started_at) * 1000),
-                        "error_type": type(exc).__name__,
-                        **live_arguments,
-                    },
+                    data=failure_data,
+                )
+                logical_manager.record_activity(
+                    live_session_key, "tool.failed", data=failure_data
                 )
                 return result
             except Exception as exc:
@@ -725,17 +746,21 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
                     error_type=type(exc).__name__,
                     **audit_context,
                 )
+                failure_data = {
+                    "call_id": call_id,
+                    "ok": False,
+                    "duration_ms": round((time.monotonic() - started_at) * 1000),
+                    "error": (str(exc) or type(exc).__name__)[:500],
+                    "error_type": type(exc).__name__,
+                    **live_arguments,
+                }
                 live_manager.publish_for_session(
                     live_session_key,
                     "tool.failed",
-                    data={
-                        "call_id": call_id,
-                        "ok": False,
-                        "duration_ms": round((time.monotonic() - started_at) * 1000),
-                        "error": (str(exc) or type(exc).__name__)[:500],
-                        "error_type": type(exc).__name__,
-                        **live_arguments,
-                    },
+                    data=failure_data,
+                )
+                logical_manager.record_activity(
+                    live_session_key, "tool.failed", data=failure_data
                 )
                 raise
 
@@ -2247,9 +2272,54 @@ def _register_workspace_write_tools(mcp: FastMCP, settings: Any) -> None:
         )
 
 
+def _logical_session_subject() -> str:
+    principal = current_principal()
+    if principal is None:
+        return "local-mcp-client"
+    return principal.subject or principal.email or "mcp-client"
+
+
 def _register_maintenance_tools(mcp: FastMCP, read_only_tool: ToolAnnotations) -> None:
     shell_read_meta = _oauth_meta(["shell:read"])
     shell_write_meta = _oauth_meta(["shell:read", "shell:write"])
+
+    @mcp.tool(structured_output=True, meta=shell_write_meta)
+    async def session_manage(
+        action: str,
+        session_id: str | None = None,
+        label: str | None = None,
+        objective: str | None = None,
+        summary: str | None = None,
+        findings: list[str] | None = None,
+        next: str | None = None,
+        blockers: list[str] | None = None,
+        takeover: bool = False,
+    ) -> ToolResult:
+        """Manage a durable logical task session independent of machine and cwd. Start one before substantive tool-driven work; report semantic progress at meaningful checkpoints; resume by session_id to hand work to a new GPT/MCP run. resume with takeover=true supersedes any still-active previous run, which is then prevented from continuing. Actions: start, resume, get, report, list, finish, cancel. start may include label/objective; report accepts summary/findings/next/blockers/objective/label."""
+        session_key = mcp_session_key(mcp)
+        result = await _tool_call(
+            get_session_runtime_manager().manage,
+            session_key,
+            _logical_session_subject(),
+            action=action,
+            session_id=session_id,
+            label=label,
+            objective=objective,
+            summary=summary,
+            findings=findings,
+            next=next,
+            blockers=blockers,
+            takeover=takeover,
+        )
+        if isinstance(result, dict) and result.get("ok"):
+            data = result.get("data")
+            if isinstance(data, dict) and data.get("session_id") and action.strip().lower() in {
+                "start", "resume", "report"
+            }:
+                get_live_channel_manager().bind_logical_session(
+                    session_key, str(data["session_id"])
+                )
+        return result
 
     @mcp.tool(structured_output=True, annotations=read_only_tool, meta=shell_read_meta)
     async def secret_scan(
@@ -2270,9 +2340,9 @@ def _register_maintenance_tools(mcp: FastMCP, read_only_tool: ToolAnnotations) -
         text: str | None = None,
         note: str | None = None,
     ) -> ToolResult:
-        """Manage the current Live Workspace plan. An active plan enables Goal mode and automatic continuation after 15 minutes without agent tool activity, capped at 10 accepted continuation messages. Use action=start only for substantial multi-step work that should continue across ChatGPT turns; short tasks should not create a plan. Goal mode requires open_live_workspace first. Actions: start, get, update, block, resume, finish, cancel. start requires objective and steps; update may replace steps or update one step by step_id; block requires note; finish requires every step to be completed or skipped."""
+        """Manage the optional Goal plan owned by the current logical session. An active plan enables automatic continuation after 15 minutes without agent activity, capped at 10 accepted continuation messages. Start or resume a logical session with session_manage first. Actions: start, get, update, block, resume, finish, cancel. start requires objective and steps; finish requires every step to be completed or skipped."""
         return await _tool_call(
-            get_live_channel_manager().manage_plan,
+            get_session_runtime_manager().manage_plan,
             mcp_session_key(mcp),
             action=action,
             objective=objective,
@@ -2557,11 +2627,14 @@ def _register_live_workspace_tools(
         else:
             subject = principal.subject or principal.email or "mcp-client"
             scopes = tuple(sorted(principal_scopes(principal))) or tuple(ALL_OAUTH_SCOPES)
+        session_key = mcp_session_key(mcp)
+        logical_session_id = get_session_runtime_manager().current_session_id(session_key)
         channel, live_token = get_live_channel_manager().open(
-            session_key=mcp_session_key(mcp),
+            session_key=session_key,
             subject=subject,
             scopes=scopes,
             live_id=live_id,
+            logical_session_id=logical_session_id,
             parent_expires_at=(
                 float(principal.claims["exp"])
                 if principal is not None and principal.claims.get("exp") is not None
@@ -2570,6 +2643,7 @@ def _register_live_workspace_tools(
         )
         result = LiveChannelResult(
             live_id=channel.live_id,
+            session_id=channel.logical_session_id,
             api_base=_live_workspace_api_base(),
             ui_path=settings.ui_path,
             machine=machine or "local",

@@ -12,6 +12,7 @@ from .auth import Principal, current_principal, require_scopes, verify_request
 from .live_channel import LIVE_API_PREFIX, get_live_channel_manager, live_id_from_claims
 from .models import CommandResult
 from .remote import remote_manager
+from .session_runtime import get_session_runtime_manager
 from .settings import get_settings
 from .shell_ops import run_shell
 
@@ -120,7 +121,10 @@ async def live_events(request: Request) -> Response:
             {
                 "events": events,
                 "cursor": events[-1]["seq"] if events else after,
-                "plan": channel.plan.public_state() if channel.plan else None,
+                "plan": get_session_runtime_manager().plan_state(
+                    channel.logical_session_id
+                ),
+                "session_id": channel.logical_session_id,
             }
         )
     except Exception as exc:
@@ -133,22 +137,55 @@ async def live_plan_control(request: Request) -> Response:
         require_scopes(principal, ("shell:read", "shell:write"))
         body = await request.json()
         action = str(body.get("action") or "").strip().lower()
-        manager = get_live_channel_manager()
+        if not channel.logical_session_id:
+            raise HTTPException(status_code=409, detail="Live Workspace is not attached to a logical session")
+        session_manager = get_session_runtime_manager()
+        live_manager = get_live_channel_manager()
         if action == "pause":
-            return _ok(
-                manager.manage_channel_plan(
-                    channel, action="block", note="Paused by user", actor="human"
-                )
+            result = session_manager.manage_plan_for_session(
+                channel.logical_session_id,
+                action="block",
+                note="Paused by user",
+                actor="human",
+                subject=channel.subject,
             )
+            live_manager.publish_channel(
+                channel.live_id,
+                "plan.blocked",
+                actor="human",
+                data={"plan_id": result["plan"]["plan_id"]},
+            )
+            return _ok(result)
         if action == "resume":
-            return _ok(manager.manage_channel_plan(channel, action="resume", actor="human"))
+            result = session_manager.manage_plan_for_session(
+                channel.logical_session_id,
+                action="resume",
+                actor="human",
+                subject=channel.subject,
+            )
+            live_manager.publish_channel(
+                channel.live_id,
+                "plan.resumed",
+                actor="human",
+                data={"plan_id": result["plan"]["plan_id"]},
+            )
+            return _ok(result)
         if action == "cancel":
             note = str(body.get("note") or "Cancelled by user").strip() or "Cancelled by user"
-            return _ok(
-                manager.manage_channel_plan(
-                    channel, action="cancel", note=note, actor="human"
-                )
+            result = session_manager.manage_plan_for_session(
+                channel.logical_session_id,
+                action="cancel",
+                note=note,
+                actor="human",
+                subject=channel.subject,
             )
+            live_manager.publish_channel(
+                channel.live_id,
+                "plan.cancelled",
+                actor="human",
+                data={"plan_id": result["plan"]["plan_id"]},
+            )
+            return _ok(result)
         raise HTTPException(status_code=400, detail="action must be pause, resume, or cancel")
     except Exception as exc:
         return _error(exc)
@@ -160,14 +197,19 @@ async def live_plan_continuation(request: Request) -> Response:
         require_scopes(principal, ("shell:read",))
         body = await request.json()
         action = str(body.get("action") or "claim").strip().lower()
-        manager = get_live_channel_manager()
+        session_manager = get_session_runtime_manager()
+        if not channel.logical_session_id:
+            return _ok({"claimed": False, "plan": None, "session_id": None})
         if action == "claim":
-            claimed = manager.claim_plan_continuation(channel)
+            claimed = session_manager.claim_plan_continuation(
+                channel.logical_session_id, subject=channel.subject
+            )
             if claimed is None:
                 return _ok(
                     {
                         "claimed": False,
-                        "plan": channel.plan.public_state() if channel.plan else None,
+                        "plan": session_manager.plan_state(channel.logical_session_id),
+                        "session_id": channel.logical_session_id,
                     }
                 )
             return _ok({"claimed": True, **claimed})
@@ -176,9 +218,13 @@ async def live_plan_continuation(request: Request) -> Response:
             error = str(body.get("error") or "").strip() or None
             return _ok(
                 {
-                    "plan": manager.report_plan_continuation(
-                        channel, accepted=accepted, error=error
-                    )
+                    "session_id": channel.logical_session_id,
+                    "plan": session_manager.report_plan_continuation(
+                        channel.logical_session_id,
+                        accepted=accepted,
+                        error=error,
+                        subject=channel.subject,
+                    ),
                 }
             )
         raise HTTPException(status_code=400, detail="action must be claim or report")
