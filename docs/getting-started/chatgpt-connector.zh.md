@@ -76,7 +76,7 @@ Files、Diff、Audit 和 Activity 视图可以通过 MCP Apps bridge 把选中�
 
 为了让终端和事件流保持低延迟，渲染后的 MCP App 会从 sandbox 直接连接到配置的服务源站。因此，`LOCAL_SHELL_MCP_PUBLIC_BASE_URL` 必须是 ChatGPT 浏览器可以访问的 HTTPS 源站地址。MCP 端点仍然是 `https://your-public-host.example.com/mcp`。
 
-打开工作区时会签发随机、短生命周期的 Live Workspace bearer token。该 token 只放在供渲染 App 使用的 MCP result metadata 中，不进入模型可见的 structured content，并且只会被 human/live UI API 接受。App 使用同一个 `live_id` 自动重附着时会复用当前凭据，避免重连中的视图互相使 token 失效；显式再次调用 `open_live_workspace` 时仍会轮换 token。嵌入式 App 不使用浏览器 cookie 或环境中的隐式凭据。
+打开工作区时会签发随机、短生命周期的 Live Workspace bearer token。该 token 只放在供渲染 App 使用的 MCP result metadata 中，不进入模型可见的 structured content，并且只会被 human/live UI API 接受。App 使用同一个 `live_id` 自动重附着时会复用当前凭据，避免重连中的视图互相使 token 失效；同时会携带当前逻辑 `session_id`，因此即使内存中的 Live Workspace 状态丢失，也能恢复到持久 Session。显式再次调用 `open_live_workspace` 时仍会轮换 token。嵌入式 App 不使用浏览器 cookie 或环境中的隐式凭据。
 
 不支持 MCP Apps 的客户端可以忽略这些 UI metadata。所有普通 MCP 数据工具仍然可用，行为保持不变。
 

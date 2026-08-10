@@ -633,12 +633,7 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
             if __tool_name != "session_manage":
                 logical_manager.assert_current_run(live_session_key)
             if __tool_name not in {"open_live_workspace", "live_workspace_reconnect"}:
-                principal = current_principal()
-                live_subject = (
-                    principal.subject or principal.email or "mcp-client"
-                    if principal is not None
-                    else "local-mcp-client"
-                )
+                live_subject = _current_principal_subject()
                 live_manager.claim_recovery_session(live_session_key, live_subject)
             live_arguments = _live_event_arguments(__tool_name, safe_call_arguments)
             live_manager.publish_for_session(
@@ -2272,7 +2267,7 @@ def _register_workspace_write_tools(mcp: FastMCP, settings: Any) -> None:
         )
 
 
-def _logical_session_subject() -> str:
+def _current_principal_subject() -> str:
     principal = current_principal()
     if principal is None:
         return "local-mcp-client"
@@ -2300,7 +2295,7 @@ def _register_maintenance_tools(mcp: FastMCP, read_only_tool: ToolAnnotations) -
         result = await _tool_call(
             get_session_runtime_manager().manage,
             session_key,
-            _logical_session_subject(),
+            _current_principal_subject(),
             action=action,
             session_id=session_id,
             label=label,
@@ -2314,7 +2309,7 @@ def _register_maintenance_tools(mcp: FastMCP, read_only_tool: ToolAnnotations) -
         if isinstance(result, dict) and result.get("ok"):
             data = result.get("data")
             if isinstance(data, dict) and data.get("session_id") and action.strip().lower() in {
-                "start", "resume", "report"
+                "start", "resume"
             }:
                 get_live_channel_manager().bind_logical_session(
                     session_key, str(data["session_id"])
@@ -2619,16 +2614,20 @@ def _register_live_workspace_tools(
         machine: str | None,
         cwd: str,
         live_id: str | None,
+        session_id: str | None = None,
     ) -> LiveChannelResult:
         principal = current_principal()
-        if principal is None:
-            subject = "local-mcp-client"
-            scopes = tuple(ALL_OAUTH_SCOPES)
-        else:
-            subject = principal.subject or principal.email or "mcp-client"
-            scopes = tuple(sorted(principal_scopes(principal))) or tuple(ALL_OAUTH_SCOPES)
+        subject = _current_principal_subject()
+        scopes = (
+            tuple(ALL_OAUTH_SCOPES)
+            if principal is None
+            else tuple(sorted(principal_scopes(principal))) or tuple(ALL_OAUTH_SCOPES)
+        )
         session_key = mcp_session_key(mcp)
         logical_session_id = get_session_runtime_manager().current_session_id(session_key)
+        if logical_session_id is None and session_id:
+            get_session_runtime_manager().get(session_id, subject=subject)
+            logical_session_id = session_id
         channel, live_token = get_live_channel_manager().open(
             session_key=session_key,
             subject=subject,
@@ -2684,6 +2683,7 @@ def _register_live_workspace_tools(
             machine=machine,
             cwd=cwd,
             live_id=None,
+            session_id=None,
         )
 
     @mcp.tool(
@@ -2703,12 +2703,14 @@ def _register_live_workspace_tools(
         machine: str | None = None,
         cwd: str = ".",
         live_id: str | None = None,
+        session_id: str | None = None,
     ) -> LiveChannelResult:
         """Internal app-only Live Workspace credential attachment endpoint."""
         return await build_live_channel_result(
             machine=machine,
             cwd=cwd,
             live_id=live_id,
+            session_id=session_id,
         )
 
 

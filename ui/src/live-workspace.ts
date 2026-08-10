@@ -1449,9 +1449,15 @@ async function requestLiveConfig(structured: JsonRecord, allowCreate: boolean): 
   const machine = String(structured.machine || "local")
   const cwd = String(structured.cwd || ".")
   const liveId = String(structured.live_id || "")
+  const sessionId = String(structured.session_id || config?.sessionId || "")
   const invoke = (id: string) => app.callServerTool({
     name: "live_workspace_reconnect",
-    arguments: id ? { machine, cwd, live_id: id } : { machine, cwd },
+    arguments: {
+      machine,
+      cwd,
+      ...(id ? { live_id: id } : {}),
+      ...(sessionId ? { session_id: sessionId } : {}),
+    },
   })
   const response = await invoke(liveId)
   let resolvedResponse = response
@@ -1486,7 +1492,8 @@ function refreshLiveCredentials(structured: JsonRecord, allowCreate = false): Pr
   const machine = String(structured.machine || "local")
   const cwd = String(structured.cwd || ".")
   const liveId = String(structured.live_id || "")
-  const key = `${liveId}\u0000${machine}\u0000${cwd}\u0000${allowCreate ? "create" : "reattach"}`
+  const sessionId = String(structured.session_id || config?.sessionId || "")
+  const key = `${liveId}\u0000${sessionId}\u0000${machine}\u0000${cwd}\u0000${allowCreate ? "create" : "reattach"}`
   const existing = credentialRefreshes.get(key)
   if (existing) return existing
   const refresh = (async () => {

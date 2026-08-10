@@ -433,6 +433,45 @@ async def test_mcp_app_resource_and_render_result_hide_live_token(tmp_path, monk
 
 
 @pytest.mark.asyncio
+async def test_live_workspace_reconnect_restores_persisted_logical_session(
+    tmp_path, monkeypatch
+):
+    _configure(tmp_path, monkeypatch, auth="none")
+    mcp = build_mcp()
+
+    _, started = await mcp.call_tool(
+        "session_manage",
+        {"action": "start", "objective": "Persist across workspace recovery"},
+    )
+    session_id = started["data"]["session_id"]
+    opened = await mcp.call_tool("open_live_workspace", {"cwd": "."})
+    assert isinstance(opened, CallToolResult)
+    old_live_id = opened.structuredContent["live_id"]
+    assert opened.structuredContent["session_id"] == session_id
+
+    monkeypatch.setattr(live_channel_module, "_MANAGER", LiveChannelManager())
+    monkeypatch.setattr(
+        session_runtime_module,
+        "_MANAGER",
+        SessionRuntimeManager(tmp_path / ".state"),
+    )
+
+    reconnected = await mcp.call_tool(
+        "live_workspace_reconnect",
+        {
+            "cwd": ".",
+            "live_id": old_live_id,
+            "session_id": session_id,
+        },
+    )
+    assert isinstance(reconnected, CallToolResult)
+    assert reconnected.structuredContent["session_id"] == session_id
+    recovered = live_channel_module.get_live_channel_manager().active_for_session("direct")
+    assert recovered is not None
+    assert recovered.logical_session_id == session_id
+
+
+@pytest.mark.asyncio
 async def test_live_workspace_keeps_model_and_human_mutations_collaborative(tmp_path, monkeypatch):
     _configure(tmp_path, monkeypatch, auth="none")
     mcp = build_mcp()

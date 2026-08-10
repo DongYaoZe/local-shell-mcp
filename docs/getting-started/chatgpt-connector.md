@@ -76,7 +76,7 @@ File, diff, audit, and activity views can send selected operational context to t
 
 The rendered MCP App connects directly from its sandbox to the configured service origin for low-latency terminal and event traffic. Therefore `LOCAL_SHELL_MCP_PUBLIC_BASE_URL` must be the HTTPS origin that the ChatGPT browser can reach. The MCP endpoint itself remains `https://your-public-host.example.com/mcp`.
 
-Opening the workspace issues a random, short-lived Live Workspace bearer token. The token is returned only in MCP result metadata intended for the rendered app, is not included in model-visible structured content, and is accepted only by the human/live UI API surfaces. Automatic app reattachment to the same `live_id` reuses the current credential so reconnecting views cannot invalidate one another; an explicit new `open_live_workspace` call rotates it. The embedded app does not use browser cookies or ambient credentials.
+Opening the workspace issues a random, short-lived Live Workspace bearer token. The token is returned only in MCP result metadata intended for the rendered app, is not included in model-visible structured content, and is accepted only by the human/live UI API surfaces. Automatic app reattachment to the same `live_id` reuses the current credential so reconnecting views cannot invalidate one another; it also carries the current logical `session_id`, allowing the view to recover its durable Session even if in-memory Live Workspace state was lost. An explicit new `open_live_workspace` call rotates the credential. The embedded app does not use browser cookies or ambient credentials.
 
 Clients that do not implement MCP Apps can ignore the UI metadata. All normal MCP data tools remain available and keep the same behavior.
 
