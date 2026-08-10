@@ -316,6 +316,9 @@ if _PYDANTIC_AVAILABLE:
 
         # By default, tools are limited to workspace_root. Set true only inside a disposable container.
         allow_full_container: bool = False
+        # Disable the controller host as an execution/workspace target while keeping
+        # remote workers and control-plane services available.
+        disable_local: bool = False
 
         default_timeout_s: int = 60
         max_timeout_s: int = 3600
@@ -523,6 +526,7 @@ else:
         agent_config_dir: Path = DEFAULT_AGENT_CONFIG_DIR
 
         allow_full_container: bool = False
+        disable_local: bool = False
 
         default_timeout_s: int = 60
         max_timeout_s: int = 3600

@@ -34,6 +34,7 @@ LOCAL_SHELL_MCP_OAUTH_JWT_SECRET=change-me-long-random-secret
 | `audit_log_path` | `LOCAL_SHELL_MCP_AUDIT_LOG_PATH` | `PosixPath('/workspace/.local-shell-mcp/audit.jsonl')` | 審計日誌路徑。 |
 | `agent_config_dir` | `LOCAL_SHELL_MCP_AGENT_CONFIG_DIR` | `PosixPath('/workspace/.local-shell-mcp/agent_config')` | agent 配置目錄。 |
 | `allow_full_container` | `LOCAL_SHELL_MCP_ALLOW_FULL_CONTAINER` | `False` | 爲 true 時禁用工作區 / 路徑限制；只在一次性邊界內使用。 |
+| `disable_local` | `LOCAL_SHELL_MCP_DISABLE_LOCAL` | `False` | 停用控制器主機作為 shell / 檔案 / 瀏覽器執行目標；遠端 worker 與控制平面服務仍可使用。 |
 
 ### 限制
 
@@ -134,6 +135,7 @@ mode: mcp
 workspace_root: /workspace
 auth_mode: oauth
 remote_enabled: true
+disable_local: false
 file_download_enabled: true
 shell_env_blocked_prefixes:
   - LOCAL_SHELL_MCP_

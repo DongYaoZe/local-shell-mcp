@@ -14,14 +14,59 @@ from local_shell_mcp.models import CommandResult
 from local_shell_mcp.settings import get_settings
 
 
-def _configure(tmp_path, monkeypatch, *, remote_enabled: bool = True):
+def _configure(
+    tmp_path,
+    monkeypatch,
+    *,
+    remote_enabled: bool = True,
+    disable_local: bool = False,
+):
     monkeypatch.setenv("LOCAL_SHELL_MCP_WORKSPACE_ROOT", str(tmp_path))
     monkeypatch.setenv("LOCAL_SHELL_MCP_STATE_DIR", str(tmp_path / ".state"))
     monkeypatch.setenv("LOCAL_SHELL_MCP_AUDIT_LOG_PATH", str(tmp_path / "audit.jsonl"))
     monkeypatch.setenv("LOCAL_SHELL_MCP_AUTH_MODE", "none")
     monkeypatch.setenv("LOCAL_SHELL_MCP_REMOTE_ENABLED", str(remote_enabled).lower())
+    monkeypatch.setenv("LOCAL_SHELL_MCP_DISABLE_LOCAL", str(disable_local).lower())
     monkeypatch.setenv("LOCAL_SHELL_MCP_PUBLIC_BASE_URL", "http://testserver")
     get_settings.cache_clear()
+
+
+@pytest.mark.asyncio
+async def test_disable_local_requires_remote_targets_and_hides_local_only_tools(
+    tmp_path, monkeypatch
+):
+    _configure(tmp_path, monkeypatch, disable_local=True)
+    manager = FakeRemoteManager()
+    monkeypatch.setattr(tools, "remote_manager", lambda: manager)
+    mcp = tools.build_mcp()
+
+    for name in tools.LOCAL_ONLY_TOOL_NAMES:
+        assert name not in mcp._tool_manager._tools
+
+    local_result = await mcp._tool_manager._tools["run_shell_tool"].fn(command="pwd")
+    assert local_result.isError is True
+    assert "Local access is disabled" in local_result.structuredContent["message"]
+
+    explicit_local_result = await mcp._tool_manager._tools["run_shell_tool"].fn(
+        command="pwd", machine="local"
+    )
+    assert explicit_local_result.isError is True
+    assert "Local access is disabled" in explicit_local_result.structuredContent["message"]
+
+    remote_result = await mcp._tool_manager._tools["run_shell_tool"].fn(
+        command="pwd", machine="node"
+    )
+    assert remote_result["ok"] is True
+    assert manager.calls[-1][0:2] == ("node", "run_shell_tool")
+    assert manager.calls[-1][2]["command"] == "pwd"
+
+    transfer_result = await mcp._tool_manager._tools["remote_transfer"].fn(
+        source_path="a",
+        destination_path="b",
+        source_machine="node",
+    )
+    assert transfer_result.isError is True
+    assert "both remote endpoints" in transfer_result.structuredContent["message"]
 
 
 def _result() -> CommandResult:

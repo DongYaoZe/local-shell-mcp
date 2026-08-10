@@ -23,12 +23,20 @@ from local_shell_mcp.oauth import ALL_OAUTH_SCOPES
 from local_shell_mcp.settings import get_settings
 
 
-def _configure(tmp_path, monkeypatch, *, remote: bool = False, auth: str = "none"):
+def _configure(
+    tmp_path,
+    monkeypatch,
+    *,
+    remote: bool = False,
+    auth: str = "none",
+    disable_local: bool = False,
+):
     monkeypatch.setenv("LOCAL_SHELL_MCP_WORKSPACE_ROOT", str(tmp_path))
     monkeypatch.setenv("LOCAL_SHELL_MCP_STATE_DIR", str(tmp_path / ".state"))
     monkeypatch.setenv("LOCAL_SHELL_MCP_AUDIT_LOG_PATH", str(tmp_path / "audit.jsonl"))
     monkeypatch.setenv("LOCAL_SHELL_MCP_AUTH_MODE", auth)
     monkeypatch.setenv("LOCAL_SHELL_MCP_REMOTE_ENABLED", str(remote).lower())
+    monkeypatch.setenv("LOCAL_SHELL_MCP_DISABLE_LOCAL", str(disable_local).lower())
     monkeypatch.setenv("LOCAL_SHELL_MCP_UI_WALLPAPER", "none")
     get_settings.cache_clear()
 
@@ -377,6 +385,19 @@ def test_remote_dispatch_machine_rows_and_errors(tmp_path, monkeypatch):
 
     monkeypatch.setattr(manager, "list_machines", broken)
     assert ui._machine_uses_windows_paths("win-node") is False
+
+
+def test_disable_local_hides_controller_and_blocks_ui_dispatch(tmp_path, monkeypatch):
+    _configure(tmp_path, monkeypatch, remote=True, disable_local=True)
+    manager = FakeRemoteManager()
+    monkeypatch.setattr(ui, "remote_manager", lambda: manager)
+
+    rows = ui._machine_rows()
+    assert all(machine["name"] != "local" for machine in rows["machines"])
+    assert rows["counts"] == {"online": 1, "offline": 0, "total": 1}
+
+    with pytest.raises(RuntimeError, match="Local access is disabled"):
+        asyncio.run(ui._machine_dispatch("local", lambda: {"sync": True}, "x", {}))
 
 
 def test_remote_file_terminal_todo_audit_and_admin_routes(tmp_path, monkeypatch):

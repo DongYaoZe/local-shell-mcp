@@ -605,6 +605,7 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
                 call_arguments = dict(bound.arguments)
             except TypeError:
                 call_arguments = dict(kwargs)
+            local_access_error = _disabled_local_access_error(__tool_name, call_arguments)
             if any(call_arguments.get(name) for name in REMOTE_MACHINE_ARGUMENTS):
                 require_current_scopes(("remote:use",))
             safe_call_arguments = _safe_audit_call_arguments(__tool_name, call_arguments)
@@ -646,7 +647,9 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
             )
             try:
                 with audit_call_context(call_id) as call_state:
-                    if __tool_name in NON_CANCELLABLE_TOOL_NAMES:
+                    if local_access_error is not None:
+                        result = _handled_error(RuntimeError(local_access_error))
+                    elif __tool_name in NON_CANCELLABLE_TOOL_NAMES:
                         result = await __original(*args, **kwargs)
                     else:
                         result = await asyncio.wait_for(
@@ -782,6 +785,34 @@ MACHINE_CAPABLE_TOOL_NAMES = {
     "browser_act",
     "browser_run_script",
 }
+
+LOCAL_ONLY_TOOL_NAMES = {
+    "search",
+    "fetch",
+    "create_file_link",
+    "secret_scan",
+}
+
+
+def _disabled_local_access_error(tool_name: str, arguments: dict[str, Any]) -> str | None:
+    if not get_settings().disable_local:
+        return None
+    if tool_name in MACHINE_CAPABLE_TOOL_NAMES and arguments.get("machine") in {None, "", "local"}:
+        return "Local access is disabled; specify a remote machine"
+    if tool_name == "remote_transfer" and (
+        arguments.get("source_machine") in {None, "", "local"}
+        or arguments.get("destination_machine") in {None, "", "local"}
+    ):
+        return "Local access is disabled; remote_transfer requires both remote endpoints"
+    return None
+
+
+def _remove_local_only_tools_when_disabled(mcp: FastMCP) -> None:
+    if not get_settings().disable_local:
+        return
+    tools = mcp._tool_manager._tools  # noqa: SLF001
+    for name in LOCAL_ONLY_TOOL_NAMES:
+        tools.pop(name, None)
 
 OPEN_WORLD_TOOL_NAMES = {
     *MACHINE_CAPABLE_TOOL_NAMES,
@@ -2660,6 +2691,7 @@ def build_mcp() -> FastMCP:
     _register_remote_admin_tools(mcp)
 
     _remove_remote_tools_when_disabled(mcp)
+    _remove_local_only_tools_when_disabled(mcp)
     _install_tool_annotations(mcp)
     _install_mcp_tool_watchdogs(mcp)
     return mcp

@@ -604,25 +604,28 @@ async def ui_wallpaper(request: Request) -> Response:  # noqa: ARG001
 
 def _machine_rows() -> dict[str, Any]:
     remote = remote_manager().list_machines()
-    rows = [
-        {
-            "name": "local",
-            "status": "online",
-            "workdir": str(get_settings().workspace_root),
-            "last_seen": time.time(),
-            "last_seen_age_s": 0,
-            "capabilities": ["files", "terminals"],
-            "info": {
-                "platform": sys.platform,
-                "local": True,
-                "version": version_info().get("version"),
-            },
-        },
-        *remote.get("machines", []),
-    ]
+    settings = get_settings()
+    rows = list(remote.get("machines", []))
     counts = dict(remote.get("counts") or {})
-    counts["online"] = int(counts.get("online", 0)) + 1
-    counts["total"] = int(counts.get("total", 0)) + 1
+    if not settings.disable_local:
+        rows.insert(
+            0,
+            {
+                "name": "local",
+                "status": "online",
+                "workdir": str(settings.workspace_root),
+                "last_seen": time.time(),
+                "last_seen_age_s": 0,
+                "capabilities": ["files", "terminals"],
+                "info": {
+                    "platform": sys.platform,
+                    "local": True,
+                    "version": version_info().get("version"),
+                },
+            },
+        )
+        counts["online"] = int(counts.get("online", 0)) + 1
+        counts["total"] = int(counts.get("total", 0)) + 1
     return {"machines": rows, "counts": counts}
 
 
@@ -648,6 +651,8 @@ async def _machine_dispatch(
     remote_args: dict[str, Any],
 ) -> Any:
     if machine == "local":
+        if get_settings().disable_local:
+            raise RuntimeError("Local access is disabled")
         with suppress_audit():
             result = await asyncio.to_thread(local_call)
             if asyncio.iscoroutine(result):
