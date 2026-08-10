@@ -25,6 +25,7 @@ GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "skill_load",
             "skill_read_file",
             "secret_scan",
+            "session_manage",
             "plan_manage",
             "audit_tail",
         ),

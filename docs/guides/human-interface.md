@@ -15,6 +15,27 @@ Start `local-shell-mcp` normally:
 local-shell-mcp --mode mcp
 ```
 
+## ChatGPT Live Workspace
+
+When ChatGPT renders MCP Apps, `open_live_workspace` opens a floating collaborative view for the currently attached logical Session. The Session owns durable task state; the Live Workspace only presents live activity and human controls. Reconnecting the app or changing ChatGPT/MCP transport therefore does not reset the Session.
+
+A typical handoff is:
+
+```text
+session_manage(action="start", objective=...)
+        -> session_id
+... tool work + session_manage(action="report", ...) ...
+new agent run
+session_manage(action="resume", session_id=..., takeover=true)
+        -> inherited progress, Plan, and recent activity
+open_live_workspace()
+        -> reconnectable view of that Session
+```
+
+`takeover=true` supersedes a still-active older agent run. Any later tool call from the superseded run is rejected until that agent explicitly resumes the Session again. Sessions do not bind a machine or working directory; normal tool parameters continue to choose local/remote targets and paths.
+
+An optional `plan_manage` Plan enables Goal mode for the Session. If the Plan is active and no agent activity occurs for 15 minutes, an attached Live Workspace can ask ChatGPT to continue. The continuation first resumes the same `session_id` and is limited to 10 accepted continuation messages. Human pause/resume/cancel controls update the Session-owned Plan rather than ephemeral Live Workspace state.
+
 ## Browser interface
 
 Open:

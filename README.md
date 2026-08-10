@@ -114,9 +114,11 @@ See the [human interface guide](https://fwerkor.github.io/local-shell-mcp/guides
 
 For full shell, filesystem, remote-worker, and Playwright tools, use ChatGPT Developer Mode or another full MCP client. ChatGPT is a client connection; choose and start a runtime first.
 
-When the client supports MCP Apps, `open_live_workspace` can open the execution workspace as a floating MCP App and expand it to fullscreen when needed. Open it once for an active task; the app reconnects itself rather than requiring repeated tool calls. The workspace is always collaborative: ChatGPT and the human can operate the same terminal/files/remotes concurrently. Ordinary MCP tools remain the execution API, while the app adds live operational activity, persistent terminals, file/diff inspection, jobs, remotes, and audit data. Clients that do not render MCP Apps continue to use the normal tool surface unchanged.
+`session_manage` provides a durable logical task context for agent work. A Session is deliberately independent of machine and working directory: it stores the task objective, semantic progress reports, recent execution activity, agent-run history, and an optional Plan. A later ChatGPT run can call `session_manage(action="resume", session_id=..., takeover=true)` to inherit that context; takeover supersedes a still-active older run so stale agents cannot continue mutating the same Session. Agents should report meaningful checkpoints with `session_manage(action="report", ...)` rather than copying every tool result into the Session summary.
 
-`plan_manage` optionally turns the current Live Workspace into **Goal mode** for substantial multi-step work. An active Plan is the goal: its steps are visible in the workspace, can be revised as execution changes, and are automatically continued when no agent tool activity has occurred for 15 minutes. Automatic continuation is capped at 10 accepted continuation messages; blocked, completed, cancelled, or fully terminal Plans are never nudged. Short tasks should simply run without a Plan.
+When the client supports MCP Apps, `open_live_workspace` opens the execution view for the current Session as a floating MCP App and can expand to fullscreen. The Live Workspace is a reconnectable view and collaboration transport, not the owner of task state: closing it, reconnecting MCP, or handing the Session to another ChatGPT run does not discard Session progress or its Plan. Ordinary MCP tools remain the execution API, while the app adds live operational activity, persistent terminals, file/diff inspection, jobs, remotes, audit data, and the active Session id. Clients that do not render MCP Apps continue to use the normal tool surface unchanged.
+
+`plan_manage` optionally enables **Goal mode** on the current Session for substantial multi-step work. An active Plan is the goal: its steps can be revised as execution changes and, while a Live Workspace is attached, the app can request continuation after 15 minutes without agent tool activity. Automatic continuation is capped at 10 accepted continuation messages and resumes the same Session before continuing; blocked, completed, cancelled, or fully terminal Plans are never nudged. A Session does not require a Plan.
 
 1. Expose the server through HTTPS.
 2. Keep OAuth enabled.
@@ -171,14 +173,15 @@ The public MCP surface includes:
 - File links: `create_file_link`, `list_file_links`, `revoke_file_link`.
 - Remote workers: `remote_manage` with `invite`, `list`, `rename`, and `revoke` actions; normal execution tools accept optional `machine`.
 - Agent Skills: `skills_list`, `skill_load`, `skill_read_file`.
-- Planning: `plan_manage` for optional Live Workspace Goal mode and cross-turn continuation.
+- Sessions: `session_manage` for durable task context, progress handoff, agent-run takeover, and cross-run inheritance.
+- Planning: `plan_manage` for optional Session-owned Goal mode and automatic continuation.
 - Diagnostics: `environment_info` (including version information), `secret_scan`, and `audit_tail`.
 
 The detailed tool reference, including purpose, inputs, returns, combinations, and notes for every tool, is available in the [docs](https://fwerkor.github.io/local-shell-mcp/reference/tools/).
 
-## Session-oriented community fork
+## Alternative workspace-bound session model
 
-Users who prefer an explicit session abstraction, including those who do not use ChatGPT Memory, may prefer the independently maintained [rijuyuezhu/local-shell-mcp](https://github.com/rijuyuezhu/local-shell-mcp) fork. It binds workspace context, jobs, todos, and transfers to sessions and has its own tool surface and release lifecycle.
+Mainline LSM Sessions are logical task contexts and intentionally do not bind tools, machines, working directories, jobs, or transfers to a Session. The independently maintained [rijuyuezhu/local-shell-mcp](https://github.com/rijuyuezhu/local-shell-mcp) fork uses a different, execution-oriented session model that binds workspace context and related resources to explicit sessions. It has its own tool surface and release lifecycle.
 
 ## Security model
 

@@ -109,9 +109,27 @@ Scan local workspace text files for common secrets before commit or push.
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
+### `session_manage`
+
+Manage a durable logical task session independent of machine and cwd. Start one before substantive tool-driven work; report semantic progress at meaningful checkpoints; resume by session_id to hand work to a new GPT/MCP run. resume with takeover=true supersedes any still-active previous run, which is then prevented from continuing. Actions: start, resume, get, report, list, finish, cancel. start may include label/objective; report accepts summary/findings/next/blockers/objective/label.
+
+| Parameter | Type | Required/default | Description |
+|---|---|---|---|
+| `action` | `string` | required |  |
+| `session_id` | `string \| null` | `null` |  |
+| `label` | `string \| null` | `null` |  |
+| `objective` | `string \| null` | `null` |  |
+| `summary` | `string \| null` | `null` |  |
+| `findings` | `array[string] \| null` | `null` |  |
+| `next` | `string \| null` | `null` |  |
+| `blockers` | `array[string] \| null` | `null` |  |
+| `takeover` | `boolean` | `false` |  |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
 ### `plan_manage`
 
-Manage the current Live Workspace plan. An active plan enables Goal mode and automatic continuation after 15 minutes without agent tool activity, capped at 10 accepted continuation messages. Use action=start only for substantial multi-step work that should continue across ChatGPT turns; short tasks should not create a plan. Goal mode requires open_live_workspace first. Actions: start, get, update, block, resume, finish, cancel. start requires objective and steps; update may replace steps or update one step by step_id; block requires note; finish requires every step to be completed or skipped.
+Manage the optional Goal plan owned by the current logical session. An active plan enables automatic continuation after 15 minutes without agent activity, capped at 10 accepted continuation messages. Start or resume a logical session with session_manage first. Actions: start, get, update, block, resume, finish, cancel. start requires objective and steps; finish requires every step to be completed or skipped.
 
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|

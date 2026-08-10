@@ -76,6 +76,7 @@ type LiveConfig = {
   apiBase: string
   uiPath: string
   liveId: string
+  sessionId: string
   machine: string
   cwd: string
 }
@@ -250,6 +251,10 @@ function updateChrome(): void {
   qs<HTMLElement>("[data-role=connection-dot]")?.classList.toggle("connected", connected)
   const connectionLabel = qs<HTMLElement>("[data-role=connection-label]")
   if (connectionLabel) connectionLabel.textContent = connectionMessage
+  const subtitle = qs<HTMLElement>("[data-role=subtitle]")
+  if (subtitle) subtitle.textContent = config?.sessionId
+    ? `local-shell-mcp · session ${config.sessionId}`
+    : "local-shell-mcp · no logical session attached"
   root.querySelectorAll<HTMLButtonElement>("[data-tab]").forEach((button) => {
     button.classList.toggle("active", button.dataset.tab === activeTab)
   })
@@ -1267,9 +1272,10 @@ function mergeEvents(incoming: LiveEvent[]): void {
 }
 
 async function loadSnapshot(generation: number): Promise<boolean> {
-  const payload = await api<{ channel: JsonRecord & { plan?: PlanState | null }; events: LiveEvent[] }>("/api/live/snapshot")
+  const payload = await api<{ channel: JsonRecord & { plan?: PlanState | null; session_id?: string | null }; events: LiveEvent[] }>("/api/live/snapshot")
   if (generation !== pollGeneration) return false
   plan = payload.channel.plan || null
+  if (config) config.sessionId = String(payload.channel.session_id || config.sessionId || "")
   activityAuditDetails.clear()
   activityDetailRevision += 1
   events = payload.events || []
@@ -1283,9 +1289,10 @@ async function loadSnapshot(generation: number): Promise<boolean> {
 
 async function pollEvents(generation: number): Promise<void> {
   while (!shuttingDown && config && generation === pollGeneration) {
-    const payload = await api<{ events: LiveEvent[]; cursor: number; plan?: PlanState | null }>(`/api/live/events?after=${cursor}&timeout=25`)
+    const payload = await api<{ events: LiveEvent[]; cursor: number; plan?: PlanState | null; session_id?: string | null }>(`/api/live/events?after=${cursor}&timeout=25`)
     if (generation !== pollGeneration) return
     plan = payload.plan || null
+    if (config) config.sessionId = String(payload.session_id || config.sessionId || "")
     mergeEvents(payload.events || [])
     cursor = Math.max(cursor, Number(payload.cursor || 0))
     connected = true
@@ -1299,7 +1306,7 @@ async function checkPlanContinuation(): Promise<void> {
   if (!config || continuationChecking) return
   continuationChecking = true
   try {
-    const claim = await api<{ claimed: boolean; plan?: PlanState | null; recent_events?: LiveEvent[]; continuation_count?: number }>("/api/live/plan/continuation", {
+    const claim = await api<{ claimed: boolean; plan?: PlanState | null; recent_events?: LiveEvent[]; continuation_count?: number; session_id?: string | null }>("/api/live/plan/continuation", {
       method: "POST",
       body: JSON.stringify({ action: "claim" }),
     })
@@ -1310,8 +1317,11 @@ async function checkPlanContinuation(): Promise<void> {
     }
 
     const recent = claim.recent_events || []
+    const sessionId = String(claim.session_id || config.sessionId || "")
+    if (sessionId) config.sessionId = sessionId
     const attempt = Number(claim.continuation_count || plan.continuation_count + 1)
     const checkpoint = {
+      sessionId,
       objective: plan.objective,
       status: plan.status,
       steps: plan.steps,
@@ -1323,11 +1333,14 @@ async function checkPlanContinuation(): Promise<void> {
     try {
       await app.updateModelContext({
         content: [{ type: "text", text: `Active local-shell-mcp Goal checkpoint:\n${truncateContext(JSON.stringify(checkpoint, null, 2), 20_000)}` }],
-        structuredContent: { localShellMcpPlan: plan, localShellMcpRecentActivity: recent },
+        structuredContent: { localShellMcpSessionId: sessionId, localShellMcpPlan: plan, localShellMcpRecentActivity: recent },
       })
+      const resumeInstruction = sessionId
+        ? `First call session_manage(action="resume", session_id="${sessionId}", takeover=true) so this agent run inherits the durable task context. `
+        : ""
       const response = await app.sendMessage({
         role: "user",
-        content: [{ type: "text", text: 'Continue working on the active plan from its current state. Do not repeat completed steps. Keep working autonomously and keep the Plan state synchronized with your execution: use plan_manage(action="update") whenever step status or the execution plan changes; when every step is completed or skipped, you must call plan_manage(action="finish") before ending the turn; if you genuinely cannot continue without user input or an external condition, you must call plan_manage(action="block", note=...) before ending the turn. Do not merely state completion or blockage in natural language without updating the Plan.' }],
+        content: [{ type: "text", text: `${resumeInstruction}Continue working on the active plan from its current state. Do not repeat completed steps. Keep working autonomously and keep the Session progress and Plan synchronized with execution: report meaningful checkpoints with session_manage(action="report", ...); use plan_manage(action="update") whenever step status or the execution plan changes; when every step is completed or skipped, call plan_manage(action="finish") before ending the turn; if you genuinely cannot continue without user input or an external condition, call plan_manage(action="block", note=...) and report the blocker before ending the turn.` }],
       })
       const result = response as unknown as JsonRecord
       accepted = result?.isError !== true
@@ -1407,6 +1420,7 @@ function activateLiveConfig(nextConfig: LiveConfig): void {
     && config.token === nextConfig.token
     && config.apiBase === nextConfig.apiBase
     && config.liveId === nextConfig.liveId
+    && config.sessionId === nextConfig.sessionId
     && config.machine === nextConfig.machine
     && config.cwd === nextConfig.cwd
   ) return
@@ -1462,6 +1476,7 @@ async function requestLiveConfig(structured: JsonRecord, allowCreate: boolean): 
     apiBase,
     uiPath: String(hidden?.uiPath || responseStructured.ui_path || structured.ui_path || "/ui"),
     liveId: String(hidden?.liveId || responseStructured.live_id || structured.live_id || ""),
+    sessionId: String(responseStructured.session_id || structured.session_id || ""),
     machine: String(responseStructured.machine || machine),
     cwd: String(responseStructured.cwd || cwd),
   }
@@ -1536,6 +1551,7 @@ async function configureFromToolResult(result: unknown): Promise<void> {
     apiBase,
     uiPath: String(hidden?.uiPath || structured.ui_path || "/ui"),
     liveId: String(hidden?.liveId || structured.live_id || ""),
+    sessionId: String(structured.session_id || ""),
     machine: String(structured.machine || "local"),
     cwd: String(structured.cwd || "."),
   })

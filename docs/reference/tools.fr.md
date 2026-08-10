@@ -10,7 +10,7 @@ Cette page est une vue d’ensemble localisée des outils. Les noms d’outils e
 
 ### Environment / audit / task state
 
-`environment_info`, `audit_tail`, `plan_manage`, `secret_scan`
+`environment_info`, `audit_tail`, `session_manage`, `plan_manage`, `secret_scan`
 
 ### Skills
 
