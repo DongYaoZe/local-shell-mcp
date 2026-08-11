@@ -390,12 +390,13 @@ def build_http_app() -> FastAPI:
     _install_exception_handlers(app)
     _install_tool_timeout_middleware(app)
     _register_status_routes(app)
-    _register_skill_routes(app, settings)
-    _register_shell_routes(app)
-    _register_workspace_routes(app)
-    _register_download_routes(app)
     _register_todo_routes(app)
-    _register_browser_routes(app)
+    if not settings.disable_local:
+        _register_skill_routes(app, settings)
+        _register_shell_routes(app)
+        _register_workspace_routes(app)
+        _register_download_routes(app)
+        _register_browser_routes(app)
 
     app.router.routes.extend(ui_routes())
     return app

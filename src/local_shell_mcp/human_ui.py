@@ -604,25 +604,28 @@ async def ui_wallpaper(request: Request) -> Response:  # noqa: ARG001
 
 def _machine_rows() -> dict[str, Any]:
     remote = remote_manager().list_machines()
-    rows = [
-        {
-            "name": "local",
-            "status": "online",
-            "workdir": str(get_settings().workspace_root),
-            "last_seen": time.time(),
-            "last_seen_age_s": 0,
-            "capabilities": ["files", "terminals"],
-            "info": {
-                "platform": sys.platform,
-                "local": True,
-                "version": version_info().get("version"),
-            },
-        },
-        *remote.get("machines", []),
-    ]
+    settings = get_settings()
+    rows = list(remote.get("machines", []))
     counts = dict(remote.get("counts") or {})
-    counts["online"] = int(counts.get("online", 0)) + 1
-    counts["total"] = int(counts.get("total", 0)) + 1
+    if not settings.disable_local:
+        rows.insert(
+            0,
+            {
+                "name": "local",
+                "status": "online",
+                "workdir": str(settings.workspace_root),
+                "last_seen": time.time(),
+                "last_seen_age_s": 0,
+                "capabilities": ["files", "terminals"],
+                "info": {
+                    "platform": sys.platform,
+                    "local": True,
+                    "version": version_info().get("version"),
+                },
+            },
+        )
+        counts["online"] = int(counts.get("online", 0)) + 1
+        counts["total"] = int(counts.get("total", 0)) + 1
     return {"machines": rows, "counts": counts}
 
 
@@ -648,6 +651,8 @@ async def _machine_dispatch(
     remote_args: dict[str, Any],
 ) -> Any:
     if machine == "local":
+        if get_settings().disable_local:
+            raise RuntimeError("Local access is disabled")
         with suppress_audit():
             result = await asyncio.to_thread(local_call)
             if asyncio.iscoroutine(result):
@@ -916,6 +921,8 @@ async def api_file_preview(request: Request) -> Response:
     path = request.query_params.get("path", ".")
     try:
         _require_ui_scopes(request, "shell:read", machine=machine)
+        if machine == "local" and get_settings().disable_local:
+            raise RuntimeError("Local access is disabled; select a remote machine")
         windows_paths = _machine_uses_windows_paths(machine)
         if machine == "local":
             resolved = await asyncio.to_thread(resolve_path, path, must_exist=True)
@@ -1832,6 +1839,12 @@ async def ui_terminal_websocket(websocket: WebSocket) -> None:
         return
 
     settings = get_settings()
+    if settings.disable_local:
+        await websocket.close(
+            code=4403,
+            reason="The local TUI bridge is unavailable when local access is disabled",
+        )
+        return
     marker = id(websocket)
     if len(_ACTIVE_UI_TERMINALS) >= max(1, settings.ui_terminal_max_sessions):
         await websocket.close(code=4429, reason="Too many active WebUI terminal sessions")

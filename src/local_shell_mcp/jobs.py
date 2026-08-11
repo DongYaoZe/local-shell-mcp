@@ -30,6 +30,7 @@ from .shell_ops import (
     read_shell,
     start_shell,
 )
+from .state_store import get_state_store, state_lock
 
 JOB_STORE_FILE_NAME = "jobs.json"
 JOB_STORE_BACKUP_FILE_NAME = "jobs.json.bak"
@@ -160,6 +161,36 @@ def _load_store_file(path: Path) -> dict[str, Any]:
 
 
 def _load_store() -> dict[str, Any]:
+    if get_settings().state_backend != "file":
+        store = get_state_store()
+        raw = store.read_bytes(JOB_STORE_FILE_NAME)
+        backup_raw = store.read_bytes(JOB_STORE_BACKUP_FILE_NAME)
+        if raw is None and backup_raw is None:
+            return _empty_store()
+        for source, payload in (
+            (JOB_STORE_FILE_NAME, raw),
+            (JOB_STORE_BACKUP_FILE_NAME, backup_raw),
+        ):
+            if payload is None:
+                continue
+            try:
+                data = json.loads(payload.decode("utf-8"))
+                if not isinstance(data, dict):
+                    raise ValueError(f"unsupported or invalid job store: {source}")
+                version = data.get("version")
+                if version != JOB_STORE_VERSION and version not in JOB_STORE_LEGACY_VERSIONS:
+                    raise ValueError(f"unsupported or invalid job store: {source}")
+                rows = data.get("jobs")
+                if not isinstance(rows, list):
+                    raise ValueError(f"job store jobs field is invalid: {source}")
+                return {
+                    "version": JOB_STORE_VERSION,
+                    "jobs": [job for job in rows if isinstance(job, dict)],
+                }
+            except (UnicodeDecodeError, ValueError, json.JSONDecodeError) as exc:
+                audit("job_store_unreadable", path=source, error=repr(exc))
+        raise RuntimeError("Job store is unreadable and no valid backup is available")
+
     path = _job_store_path()
     backup_path = _job_store_backup_path()
     if not path.exists() and not backup_path.exists():
@@ -200,6 +231,15 @@ def _remove_attempt_paths(paths: dict[str, Path] | None) -> None:
 def _remove_attempt_files(job_id: str, keep_attempt: int | None = None) -> None:
     if not job_id:
         return
+    if get_settings().stateless_controller:
+        prefix = f"job-logs/{job_id}/"
+        keep_key = f"{prefix}{keep_attempt}.log" if keep_attempt is not None else None
+        store = get_state_store()
+        for key in store.list_keys(prefix):
+            if key == keep_key:
+                continue
+            store.delete(key)
+        return
     keep_stem = f"{job_id}-attempt-{keep_attempt}." if keep_attempt is not None else None
     for path in _job_runtime_dir().glob(f"{job_id}-attempt-*"):
         if keep_stem is not None and path.name.startswith(keep_stem):
@@ -228,6 +268,12 @@ def _prune_store(store: dict[str, Any]) -> None:
 def _save_store(store: dict[str, Any]) -> None:
     _prune_store(store)
     store["version"] = JOB_STORE_VERSION
+    if get_settings().state_backend != "file":
+        payload = json.dumps(store, separators=(",", ":"), sort_keys=True).encode("utf-8")
+        backend = get_state_store()
+        backend.write_bytes(JOB_STORE_FILE_NAME, payload)
+        backend.write_bytes(JOB_STORE_BACKUP_FILE_NAME, payload)
+        return
     path = _job_store_path()
     backup_path = _job_store_backup_path()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -413,6 +459,18 @@ def _job_store_busy_error(lock_path: Path, *, lock_kind: str) -> TimeoutError:
 
 @contextlib.contextmanager
 def _store_transaction():  # noqa: ANN201
+    if get_settings().state_backend != "file":
+        if not _JOB_STORE_THREAD_LOCK.acquire(timeout=JOB_STORE_LOCK_TIMEOUT_S):
+            raise TimeoutError("timed out acquiring the in-process job store lock")
+        try:
+            with state_lock("jobs"):
+                store = _load_store()
+                yield store
+                _save_store(store)
+        finally:
+            _JOB_STORE_THREAD_LOCK.release()
+        return
+
     lock_path = _job_store_lock_path()
     started = time.monotonic()
     if not _JOB_STORE_THREAD_LOCK.acquire(timeout=JOB_STORE_LOCK_TIMEOUT_S):
@@ -778,6 +836,17 @@ def _find_job(store: dict[str, Any], job_id: str) -> dict[str, Any]:
 def _read_log_tail(path: str | None, lines: int) -> str:
     if not path:
         return ""
+    if path.startswith("state://"):
+        data = get_state_store().read_bytes(path.removeprefix("state://")) or b""
+        max_bytes = max(1, get_settings().max_job_log_bytes)
+        data = data[-max_bytes:]
+        text = data.decode("utf-8", errors="replace")
+        if lines > 0:
+            split = text.splitlines()
+            text = "\n".join(split[-max(1, lines) :])
+            if data.endswith((b"\n", b"\r")) and text:
+                text += "\n"
+        return text
     target = Path(path)
     if not target.is_file():
         return ""
@@ -807,6 +876,24 @@ def register_managed_job_handler(kind: str, handler: ManagedJobHandler) -> None:
 
 
 def _append_managed_log(path: str, message: str) -> None:
+    if path.startswith("state://"):
+        payload = message if message.endswith("\n") else message + "\n"
+        encoded = payload.encode("utf-8", errors="replace")
+        max_bytes = max(1, int(get_settings().max_job_log_bytes))
+        key = path.removeprefix("state://")
+        with state_lock(key):
+            log = (get_state_store().read_bytes(key) or b"") + encoded
+            truncated = len(log) > max_bytes
+            if truncated:
+                log = log[-max_bytes:]
+            get_state_store().write_bytes(key, log)
+        job_id = key.removeprefix("job-logs/").split("/", 1)[0]
+        _managed_store_update(
+            "append_log",
+            job_id,
+            {"bytes": len(encoded), "truncated": truncated},
+        )
+        return
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     payload = message if message.endswith("\n") else message + "\n"
@@ -860,6 +947,8 @@ def _managed_store_update(
                 attempt=attempt,
             )
             time.sleep(JOB_STORE_LOCK_RETRY_INTERVAL_S)
+    if get_settings().state_backend != "file":
+        raise TimeoutError(f"unable to update managed job state: {job_id}")
     _write_managed_deferred_update(job_id, operation, payload)
 
 
@@ -965,8 +1054,13 @@ async def start_managed_job(
         raise ValueError(f"unknown managed job kind: {normalized}")
     job_id = _new_job_id()
     display_name = name or f"{normalized}-{job_id}"
-    paths = _attempt_paths(job_id, 1)
-    _private_write_text(paths["log"], "")
+    if get_settings().stateless_controller:
+        log_path = f"state://job-logs/{job_id}/1.log"
+        get_state_store().write_bytes(log_path.removeprefix("state://"), b"")
+    else:
+        paths = _attempt_paths(job_id, 1)
+        _private_write_text(paths["log"], "")
+        log_path = str(paths["log"])
     now = _utc()
     job = {
         "job_id": job_id,
@@ -980,7 +1074,7 @@ async def start_managed_job(
         "session_id": None,
         "backend": "managed",
         "command_path": None,
-        "log_path": str(paths["log"]),
+        "log_path": log_path,
         "status_path": None,
         "created_at": now,
         "updated_at": now,
@@ -995,7 +1089,7 @@ async def start_managed_job(
     try:
         with _store_transaction() as store:
             store["jobs"].append(job)
-        _launch_managed_job(job_id, normalized, payload, str(paths["log"]))
+        _launch_managed_job(job_id, normalized, payload, log_path)
     except BaseException:
         _remove_attempt_files(job_id)
         with contextlib.suppress(Exception), _store_transaction() as store:
@@ -1096,20 +1190,29 @@ async def start_job(command: str, cwd: str = ".", name: str | None = None) -> di
 
 
 async def list_jobs(include_finished: bool = True) -> dict[str, Any]:
-    active = _active_session_ids(await list_shells())
+    active = (
+        set()
+        if get_settings().disable_local
+        else _active_session_ids(await list_shells())
+    )
     now = _utc()
     with _store_transaction() as store:
         jobs = [_refresh_job_status(job, active, now) for job in store.get("jobs", [])]
         store["jobs"] = jobs
         _prune_store(store)
         jobs = store["jobs"]
+        visible_jobs = (
+            [job for job in jobs if job.get("kind") == "managed"]
+            if get_settings().disable_local
+            else jobs
+        )
         rows = [
             _public_job(job)
-            for job in jobs
+            for job in visible_jobs
             if include_finished or job.get("status") not in TERMINAL_STATUSES
         ]
         counts: dict[str, int] = {}
-        for job in jobs:
+        for job in visible_jobs:
             status = str(job.get("status") or "unknown")
             counts[status] = counts.get(status, 0) + 1
     rows.sort(key=lambda item: float(item.get("created_at") or 0), reverse=True)
@@ -1117,9 +1220,15 @@ async def list_jobs(include_finished: bool = True) -> dict[str, Any]:
 
 
 async def tail_job(job_id: str, lines: int = 200) -> dict[str, Any]:
-    active = _active_session_ids(await list_shells())
+    active = (
+        set()
+        if get_settings().disable_local
+        else _active_session_ids(await list_shells())
+    )
     with _store_transaction() as store:
         job = _refresh_job_status(_find_job(store, job_id), active)
+        if get_settings().disable_local and job.get("kind") != "managed":
+            raise ValueError("local shell jobs are unavailable when local access is disabled")
         public_job = _public_job(job)
         log_path = job.get("log_path")
         session_id = str(job.get("session_id") or "")
@@ -1202,8 +1311,13 @@ async def _retry_managed_job(job_id: str) -> dict[str, Any]:
             raise RuntimeError(f"managed job handler is unavailable: {kind}")
         payload = dict(job.get("managed_payload") or {})
         attempts = int(job.get("attempts") or 1) + 1
-        paths = _attempt_paths(job_id, attempts)
-        _private_write_text(paths["log"], "")
+        if get_settings().stateless_controller:
+            log_path = f"state://job-logs/{job_id}/{attempts}.log"
+            get_state_store().write_bytes(log_path.removeprefix("state://"), b"")
+        else:
+            paths = _attempt_paths(job_id, attempts)
+            _private_write_text(paths["log"], "")
+            log_path = str(paths["log"])
         started_at = _utc()
         job.update(
             {
@@ -1213,7 +1327,7 @@ async def _retry_managed_job(job_id: str) -> dict[str, Any]:
                 "completed_at": None,
                 "exit_code": None,
                 "error": None,
-                "log_path": str(paths["log"]),
+                "log_path": log_path,
                 "log_truncated": False,
                 "output_bytes": 0,
                 "attempts": attempts,
@@ -1224,7 +1338,7 @@ async def _retry_managed_job(job_id: str) -> dict[str, Any]:
         public_job = _public_job(job)
     _remove_attempt_files(job_id, keep_attempt=attempts)
     try:
-        _launch_managed_job(job_id, kind, payload, str(paths["log"]))
+        _launch_managed_job(job_id, kind, payload, log_path)
     except BaseException as exc:
         error = f"retry failed: {type(exc).__name__}: {exc}"
         await asyncio.to_thread(
@@ -1241,7 +1355,10 @@ async def _retry_managed_job(job_id: str) -> dict[str, Any]:
 
 async def stop_job(job_id: str) -> dict[str, Any]:
     with _store_transaction() as store:
-        managed = _find_job(store, job_id).get("kind") == "managed"
+        job = _find_job(store, job_id)
+        managed = job.get("kind") == "managed"
+        if get_settings().disable_local and not managed:
+            raise ValueError("local shell jobs are unavailable when local access is disabled")
     if managed:
         return await _stop_managed_job(job_id)
     active = _active_session_ids(await list_shells())
@@ -1310,7 +1427,10 @@ async def stop_job(job_id: str) -> dict[str, Any]:
 
 async def retry_job(job_id: str) -> dict[str, Any]:
     with _store_transaction() as store:
-        managed = _find_job(store, job_id).get("kind") == "managed"
+        job = _find_job(store, job_id)
+        managed = job.get("kind") == "managed"
+        if get_settings().disable_local and not managed:
+            raise ValueError("local shell jobs are unavailable when local access is disabled")
     if managed:
         return await _retry_managed_job(job_id)
     active = _active_session_ids(await list_shells())

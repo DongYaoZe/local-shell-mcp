@@ -45,6 +45,7 @@ def test_yaml_flatten_apply_get_settings_and_redaction(tmp_path, monkeypatch):
     config.write_text(
         """
 mode: http
+disable_local: true
 ui:
   wallpaper: none
 remote:
@@ -56,6 +57,7 @@ port: 9001
     flat = settings._flatten_yaml(config)
     assert flat == {
         "mode": "http",
+        "disable_local": True,
         "ui_wallpaper": "none",
         "remote_enabled": False,
         "port": 9001,
@@ -78,6 +80,7 @@ port: 9001
     settings.get_settings.cache_clear()
     loaded = settings.get_settings()
     assert loaded.mode == "http"
+    assert loaded.disable_local is True
     assert loaded.port == 9001
     assert loaded.ui_wallpaper == "none"
     assert loaded.remote_enabled is False
@@ -193,10 +196,12 @@ def test_dependency_light_fallback_settings(tmp_path, monkeypatch):
     monkeypatch.setenv("LOCAL_SHELL_MCP_STATE_DIR", str(tmp_path / "fallback-state"))
     monkeypatch.setenv("LOCAL_SHELL_MCP_PORT", "9010")
     monkeypatch.setenv("LOCAL_SHELL_MCP_REMOTE_ENABLED", "false")
+    monkeypatch.setenv("LOCAL_SHELL_MCP_DISABLE_LOCAL", "true")
     monkeypatch.setenv("LOCAL_SHELL_MCP_COMMAND_DENYLIST", "one,two")
     instance = fallback.Settings()
     assert instance.port == 9010
     assert instance.remote_enabled is False
+    assert instance.disable_local is True
     assert instance.command_denylist == ["one", "two"]
     assert instance.workspace_root == workspace.resolve()
     assert instance.mcp_session_idle_timeout_s == 180
