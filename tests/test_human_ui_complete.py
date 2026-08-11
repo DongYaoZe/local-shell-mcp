@@ -399,6 +399,22 @@ def test_disable_local_hides_controller_and_blocks_ui_dispatch(tmp_path, monkeyp
     with pytest.raises(RuntimeError, match="Local access is disabled"):
         asyncio.run(ui._machine_dispatch("local", lambda: {"sync": True}, "x", {}))
 
+    class Socket:
+        headers = {"sec-websocket-protocol": "lsm-ui"}
+        query_params = {}
+
+        def __init__(self):
+            self.closed = []
+
+        async def close(self, code=1000, reason=""):
+            self.closed.append((code, reason))
+
+    monkeypatch.setattr(ui, "_authorize_websocket", lambda websocket: True)
+    socket = Socket()
+    asyncio.run(ui.ui_terminal_websocket(socket))
+    assert socket.closed[0][0] == 4403
+    assert "local access is disabled" in socket.closed[0][1].lower()
+
 
 def test_remote_file_terminal_todo_audit_and_admin_routes(tmp_path, monkeypatch):
     _configure(tmp_path, monkeypatch, remote=True)

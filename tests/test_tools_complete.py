@@ -68,6 +68,14 @@ async def test_disable_local_requires_remote_targets_and_hides_local_only_tools(
     assert transfer_result.isError is True
     assert "both remote endpoints" in transfer_result.structuredContent["message"]
 
+    job_list_result = await mcp._tool_manager._tools["job_list"].fn()
+    assert job_list_result["ok"] is True
+    assert job_list_result["data"]["jobs"] == []
+
+    local_job_result = await mcp._tool_manager._tools["job_start"].fn(command="echo nope")
+    assert local_job_result.isError is True
+    assert "Local access is disabled" in local_job_result.structuredContent["message"]
+
 
 def _result() -> CommandResult:
     return CommandResult(

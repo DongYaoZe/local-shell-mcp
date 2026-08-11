@@ -1,13 +1,11 @@
 from __future__ import annotations
 
 import base64
-import contextlib
 import hashlib
 import hmac
 import html as html_lib
 import json
 import math
-import os
 import re
 import secrets
 import threading
@@ -16,7 +14,6 @@ from collections import OrderedDict, deque
 from dataclasses import dataclass, field
 from functools import lru_cache
 from importlib.resources import files
-from pathlib import Path
 from string import Template
 from typing import Any
 from urllib.parse import urlencode, urlsplit
@@ -27,6 +24,7 @@ from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Re
 
 from .audit import audit
 from .settings import get_settings
+from .state_store import get_state_store
 
 
 @dataclass
@@ -61,6 +59,8 @@ MAX_CLIENT_NAME_LENGTH = 200
 OAUTH_PENDING_CLIENT_TTL_S = 24 * 60 * 60
 OAUTH_CLIENT_STORE_VERSION = 1
 OAUTH_CLIENT_STORE_FILE_NAME = "oauth-clients.json"
+OAUTH_CODE_STORE_VERSION = 1
+OAUTH_CODE_STORE_FILE_NAME = "oauth-codes.json"
 OAUTH_PIN_FAILURE_LIMIT = 5
 OAUTH_PIN_FAILURE_WINDOW_S = 5 * 60
 MAX_OAUTH_PIN_SOURCES = 4_096
@@ -74,7 +74,8 @@ ALL_OAUTH_SCOPES = (
 )
 _LEGACY_CLIENT_ID_RE = re.compile(r"local-shell-mcp-[A-Za-z0-9_-]{16,128}\Z")
 _CLIENT_STORE_LOCK = threading.RLock()
-_LOADED_CLIENT_STORE_PATH: Path | None = None
+_CODE_STORE_LOCK = threading.RLock()
+_LOADED_CLIENT_STORE_SIGNATURE: tuple[str, str | None, str, str] | None = None
 _PIN_FAILURE_LOCK = threading.Lock()
 _PIN_FAILURES: OrderedDict[str, deque[float]] = OrderedDict()
 
@@ -116,26 +117,31 @@ def _scope_value() -> str:
     return " ".join(ALL_OAUTH_SCOPES)
 
 
-def _client_store_path() -> Path:
-    path = get_settings().state_dir / OAUTH_CLIENT_STORE_FILE_NAME
-    path.parent.mkdir(parents=True, exist_ok=True)
-    return path
+def _client_store_signature() -> tuple[str, str | None, str, str]:
+    settings = get_settings()
+    return (
+        settings.state_backend,
+        settings.state_backend_url,
+        settings.state_backend_prefix,
+        str(settings.state_dir),
+    )
 
 
 def _load_clients_locked() -> None:
-    global _LOADED_CLIENT_STORE_PATH
+    global _LOADED_CLIENT_STORE_SIGNATURE
 
-    path = _client_store_path()
-    if path == _LOADED_CLIENT_STORE_PATH and (_CLIENTS or not path.exists()):
+    signature = _client_store_signature()
+    if signature == _LOADED_CLIENT_STORE_SIGNATURE and _CLIENTS:
         return
 
     _CLIENTS.clear()
-    _LOADED_CLIENT_STORE_PATH = path
-    if not path.exists():
+    _LOADED_CLIENT_STORE_SIGNATURE = signature
+    raw = get_state_store().read_bytes(OAUTH_CLIENT_STORE_FILE_NAME)
+    if raw is None:
         return
 
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(raw.decode("utf-8"))
         if not isinstance(data, dict) or data.get("version") != OAUTH_CLIENT_STORE_VERSION:
             raise ValueError("unsupported OAuth client store version")
         rows = data.get("clients")
@@ -163,13 +169,12 @@ def _load_clients_locked() -> None:
                 created_at=created_at or int(time.time()),
                 approved=True,
             )
-    except (OSError, ValueError, json.JSONDecodeError) as exc:
-        audit("oauth_client_store_unreadable", path=str(path), error=repr(exc))
+    except (OSError, UnicodeDecodeError, ValueError, json.JSONDecodeError) as exc:
+        audit("oauth_client_store_unreadable", path=OAUTH_CLIENT_STORE_FILE_NAME, error=repr(exc))
         _CLIENTS.clear()
 
 
 def _save_clients_locked() -> None:
-    path = _client_store_path()
     payload = {
         "version": OAUTH_CLIENT_STORE_VERSION,
         "clients": {
@@ -182,18 +187,82 @@ def _save_clients_locked() -> None:
             if client.approved
         },
     }
-    temporary = path.with_name(f".{path.name}.{os.getpid()}.{secrets.token_hex(4)}.tmp")
+    get_state_store().write_bytes(
+        OAUTH_CLIENT_STORE_FILE_NAME,
+        json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode(
+            "utf-8"
+        ),
+    )
+
+
+def _load_codes_locked() -> None:
+    if get_settings().state_backend == "file":
+        return
+    raw = get_state_store().read_bytes(OAUTH_CODE_STORE_FILE_NAME)
+    _CODES.clear()
+    if raw is None:
+        return
     try:
-        temporary.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True),
-            encoding="utf-8",
-        )
-        with contextlib.suppress(OSError):
-            temporary.chmod(0o600)
-        os.replace(temporary, path)
-    finally:
-        with contextlib.suppress(OSError):
-            temporary.unlink(missing_ok=True)
+        data = json.loads(raw.decode("utf-8"))
+        if not isinstance(data, dict) or data.get("version") != OAUTH_CODE_STORE_VERSION:
+            raise ValueError("unsupported OAuth code store version")
+        rows = data.get("codes")
+        if not isinstance(rows, list):
+            raise ValueError("OAuth code store codes field is invalid")
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            code = str(row.get("code") or "")
+            if not code:
+                continue
+            _CODES[code] = AuthCode(
+                code=code,
+                client_id=str(row.get("client_id") or ""),
+                redirect_uri=str(row.get("redirect_uri") or ""),
+                scope=str(row.get("scope") or ""),
+                resource=str(row.get("resource") or ""),
+                code_challenge=(
+                    str(row["code_challenge"])
+                    if row.get("code_challenge") is not None
+                    else None
+                ),
+                code_challenge_method=(
+                    str(row["code_challenge_method"])
+                    if row.get("code_challenge_method") is not None
+                    else None
+                ),
+                created_at=int(row.get("created_at") or 0),
+                used=bool(row.get("used", False)),
+            )
+    except (UnicodeDecodeError, ValueError, TypeError, json.JSONDecodeError) as exc:
+        audit("oauth_code_store_unreadable", path=OAUTH_CODE_STORE_FILE_NAME, error=repr(exc))
+        _CODES.clear()
+
+
+def _save_codes_locked() -> None:
+    if get_settings().state_backend == "file":
+        return
+    payload = {
+        "version": OAUTH_CODE_STORE_VERSION,
+        "codes": [
+            {
+                "code": item.code,
+                "client_id": item.client_id,
+                "redirect_uri": item.redirect_uri,
+                "scope": item.scope,
+                "resource": item.resource,
+                "code_challenge": item.code_challenge,
+                "code_challenge_method": item.code_challenge_method,
+                "created_at": item.created_at,
+                "used": item.used,
+            }
+            for item in _CODES.values()
+        ],
+    }
+    get_state_store().write_bytes(
+        OAUTH_CODE_STORE_FILE_NAME,
+        json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8"),
+    )
 
 
 def _get_client(client_id: str) -> OAuthClient | None:
@@ -331,13 +400,16 @@ async def oauth_server_metadata(request: Request) -> JSONResponse:
 
 def _prune_oauth_state(now: int | None = None) -> None:
     now = int(time.time()) if now is None else now
-    code_ttl = max(1, get_settings().oauth_code_ttl_s)
-    for code, item in list(_CODES.items()):
-        if item.used or now - item.created_at > code_ttl:
-            _CODES.pop(code, None)
-    while len(_CODES) > MAX_OAUTH_CODES:
-        oldest = min(_CODES, key=lambda key: _CODES[key].created_at)
-        _CODES.pop(oldest, None)
+    with _CODE_STORE_LOCK:
+        _load_codes_locked()
+        code_ttl = max(1, get_settings().oauth_code_ttl_s)
+        for code, item in list(_CODES.items()):
+            if item.used or now - item.created_at > code_ttl:
+                _CODES.pop(code, None)
+        while len(_CODES) > MAX_OAUTH_CODES:
+            oldest = min(_CODES, key=lambda key: _CODES[key].created_at)
+            _CODES.pop(oldest, None)
+        _save_codes_locked()
     with _CLIENT_STORE_LOCK:
         _load_clients_locked()
         _prune_clients_locked(now)
@@ -664,11 +736,14 @@ async def oauth_authorize_post(request: Request) -> Response:
         code_challenge_method=params.get("code_challenge_method"),
     )
     _prune_oauth_state()
-    if len(_CODES) >= MAX_OAUTH_CODES:
-        return _authorize_form(
-            params, error="Too many pending authorization requests; try again later"
-        )
-    _CODES[code] = auth_code
+    with _CODE_STORE_LOCK:
+        _load_codes_locked()
+        if len(_CODES) >= MAX_OAUTH_CODES:
+            return _authorize_form(
+                params, error="Too many pending authorization requests; try again later"
+            )
+        _CODES[code] = auth_code
+        _save_codes_locked()
     audit("oauth_code_issued", client_id=auth_code.client_id, resource=auth_code.resource)
     query = {"code": code, "iss": issuer_url(request)}
     if params.get("state"):
@@ -721,7 +796,9 @@ async def oauth_token(request: Request) -> JSONResponse:
     redirect_uri = str(form.get("redirect_uri") or "")
     verifier = str(form.get("code_verifier") or "") or None
     _prune_oauth_state()
-    code_obj = _CODES.get(code)
+    with _CODE_STORE_LOCK:
+        _load_codes_locked()
+        code_obj = _CODES.get(code)
     if not code_obj or code_obj.used:
         return _json(
             {"error": "invalid_grant", "error_description": "Unknown or used code"}, status_code=400
@@ -741,7 +818,9 @@ async def oauth_token(request: Request) -> JSONResponse:
             status_code=400,
         )
     code_obj.used = True
-    _CODES.pop(code, None)
+    with _CODE_STORE_LOCK:
+        _CODES.pop(code, None)
+        _save_codes_locked()
     token = issue_access_token(
         client_id=client_id,
         scope=code_obj.scope,

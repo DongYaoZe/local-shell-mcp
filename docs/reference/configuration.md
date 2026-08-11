@@ -36,6 +36,10 @@ For local-only testing, `auth_bypass_localhost` is enabled by default. Do not ex
 | `agent_config_dir` | `LOCAL_SHELL_MCP_AGENT_CONFIG_DIR` | `PosixPath('/workspace/.local-shell-mcp/agent_config')` |  |
 | `allow_full_container` | `LOCAL_SHELL_MCP_ALLOW_FULL_CONTAINER` | `False` | Disables workspace/path restrictions when true; use only inside disposable boundaries. |
 | `disable_local` | `LOCAL_SHELL_MCP_DISABLE_LOCAL` | `False` | Disables the controller host as a shell/file/browser execution target. Remote workers and control-plane services remain available. |
+| `stateless_controller` | `LOCAL_SHELL_MCP_STATELESS_CONTROLLER` | `False` | Makes the controller suitable for ephemeral/serverless instances: implies `disable_local`, disables local file links/wallpaper caching, and defaults `state_backend` to `memory`. Configure a strong `oauth_jwt_secret` explicitly. |
+| `state_backend` | `LOCAL_SHELL_MCP_STATE_BACKEND` | `'file'` | `file`, `memory`, or `redis`. Use Redis when serverless controller state must survive cold starts. |
+| `state_backend_url` | `LOCAL_SHELL_MCP_STATE_BACKEND_URL` | `None` | Redis connection URL when `state_backend=redis`. Redacted from diagnostics. |
+| `state_backend_prefix` | `LOCAL_SHELL_MCP_STATE_BACKEND_PREFIX` | `'local-shell-mcp'` | Namespace for memory/Redis control-plane state. |
 
 ### Limits
 
@@ -101,6 +105,17 @@ For local-only testing, `auth_bypass_localhost` is enabled by default. Do not ex
 | `remote_job_timeout_s` | `LOCAL_SHELL_MCP_REMOTE_JOB_TIMEOUT_S` | `3600` |  |
 | `remote_max_pending_jobs` | `LOCAL_SHELL_MCP_REMOTE_MAX_PENDING_JOBS` | `256` | Maximum queued or pending jobs per worker. |
 | `remote_cancelled_job_ttl_s` | `LOCAL_SHELL_MCP_REMOTE_CANCELLED_JOB_TTL_S` | `3600` | Retention time for cancellation tombstones used to skip timed-out queued jobs. |
+| `remote_transfer_strategy` | `LOCAL_SHELL_MCP_REMOTE_TRANSFER_STRATEGY` | `'auto'` | `auto`, `relay`, `direct`, or `object_store`. `auto` tries enabled peer-direct, then configured S3, then bounded-memory controller relay. |
+| `remote_peer_transfer_enabled` | `LOCAL_SHELL_MCP_REMOTE_PEER_TRANSFER_ENABLED` | `False` | Opt in to a one-shot HTTP receiver on the destination worker for worker-to-worker direct transfer. Enable only on a trusted private network such as a VPC/Tailscale network. |
+| `remote_peer_transfer_bind_host` | `LOCAL_SHELL_MCP_REMOTE_PEER_TRANSFER_BIND_HOST` | `'0.0.0.0'` | Bind address for the one-shot destination-worker receiver. |
+| `remote_peer_transfer_advertise_host` | `LOCAL_SHELL_MCP_REMOTE_PEER_TRANSFER_ADVERTISE_HOST` | `None` | Address advertised to the source worker; defaults to the destination worker hostname/FQDN. |
+| `remote_peer_transfer_port` | `LOCAL_SHELL_MCP_REMOTE_PEER_TRANSFER_PORT` | `0` | Receiver port; `0` chooses an ephemeral port. |
+| `remote_peer_transfer_timeout_s` | `LOCAL_SHELL_MCP_REMOTE_PEER_TRANSFER_TIMEOUT_S` | `3600` | Lifetime/timeout for a one-shot direct receiver. |
+| `remote_transfer_s3_bucket` | `LOCAL_SHELL_MCP_REMOTE_TRANSFER_S3_BUCKET` | `None` | Optional S3-compatible bucket used for presigned worker-to-worker transfers. Requires the `s3` extra. |
+| `remote_transfer_s3_prefix` | `LOCAL_SHELL_MCP_REMOTE_TRANSFER_S3_PREFIX` | `'local-shell-mcp'` | Object-key prefix for temporary transfer objects. |
+| `remote_transfer_s3_region` | `LOCAL_SHELL_MCP_REMOTE_TRANSFER_S3_REGION` | `None` | Optional S3 region. |
+| `remote_transfer_s3_endpoint_url` | `LOCAL_SHELL_MCP_REMOTE_TRANSFER_S3_ENDPOINT_URL` | `None` | Optional S3-compatible endpoint URL. |
+| `remote_transfer_s3_presign_ttl_s` | `LOCAL_SHELL_MCP_REMOTE_TRANSFER_S3_PRESIGN_TTL_S` | `3600` | Presigned PUT/GET URL lifetime. Temporary objects are deleted after transfer. |
 
 ### Shell and executable paths
 
@@ -155,6 +170,22 @@ shell_env_blocked_prefixes:
   - LOCAL_SHELL_MCP_
   - DOCKER_
 ```
+
+Serverless controller with durable Redis state:
+
+```yaml
+mode: mcp
+stateless_controller: true
+state_backend: redis
+state_backend_url: redis://redis.internal:6379/0
+remote_transfer_strategy: auto
+```
+
+`stateless_controller` removes the need for a persistent controller volume. The `memory`
+backend is intentionally ephemeral; use Redis for durable worker registrations, OAuth clients,
+jobs, and audit records. Active remote RPC queues/futures are process-local, so deployments that
+use remote workers should currently run one active controller instance at a time rather than
+multiple load-balanced controller replicas.
 
 ## Operational advice
 

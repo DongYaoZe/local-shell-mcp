@@ -790,12 +790,18 @@ LOCAL_ONLY_TOOL_NAMES = {
     "search",
     "fetch",
     "create_file_link",
+    "list_file_links",
+    "revoke_file_link",
     "secret_scan",
 }
 
 
 def _disabled_local_access_error(tool_name: str, arguments: dict[str, Any]) -> str | None:
     if not get_settings().disable_local:
+        return None
+    if tool_name in {"job_list", "job_tail", "job_stop", "job_retry"} and arguments.get(
+        "machine"
+    ) in {None, "", "local"}:
         return None
     if tool_name in MACHINE_CAPABLE_TOOL_NAMES and arguments.get("machine") in {None, "", "local"}:
         return "Local access is disabled; specify a remote machine"
@@ -1167,6 +1173,294 @@ async def _copy_remote_file_to_local(
     }
 
 
+async def _copy_remote_file_via_controller_relay(
+    src_machine: str,
+    src_path: str,
+    dst_machine: str,
+    dst_path: str,
+    overwrite: bool = True,
+    chunk_size: int | None = None,
+    progress: TransferProgress | None = None,
+) -> dict:
+    stat = await _remote_transfer_data(
+        src_machine, "transfer_stat", {"path": src_path, "sha256": True}
+    )
+    if stat.get("type") != "file":
+        raise ValueError(f"source is not a file: {src_path}")
+    total_bytes = int(stat["size"])
+    effective_chunk_size = normalize_chunk_size(
+        DEFAULT_TRANSFER_CHUNK_BYTES if chunk_size is None else chunk_size
+    )
+    begin = await _remote_transfer_data(
+        dst_machine,
+        "transfer_begin_write",
+        {
+            "path": dst_path,
+            "overwrite": overwrite,
+            "expected_bytes": total_bytes,
+        },
+    )
+    transfer_id = str(begin["transfer_id"])
+    offset = 0
+    chunks = 0
+    try:
+        await _report_transfer_progress(
+            progress,
+            phase="transferring",
+            bytes_transferred=0,
+            total_bytes=total_bytes,
+            chunks=0,
+            chunk_size=effective_chunk_size,
+        )
+        while offset < total_bytes:
+            chunk = await _remote_transfer_data(
+                src_machine,
+                "transfer_read_chunk",
+                {
+                    "path": src_path,
+                    "offset": offset,
+                    "chunk_size": effective_chunk_size,
+                },
+            )
+            chunk_bytes = int(chunk.get("bytes", 0))
+            if chunk_bytes <= 0:
+                raise RemoteTransferError(
+                    f"source returned an empty chunk at offset {offset} before EOF"
+                )
+            if int(chunk.get("offset", -1)) != offset:
+                raise RemoteTransferError(
+                    f"source returned offset {chunk.get('offset')}, expected {offset}"
+                )
+            written = await _remote_transfer_data(
+                dst_machine,
+                "transfer_write_chunk",
+                {
+                    "path": dst_path,
+                    "transfer_id": transfer_id,
+                    "offset": offset,
+                    "data_b64": chunk["data_b64"],
+                    "expected_sha256": chunk["sha256"],
+                },
+            )
+            if int(written.get("bytes", -1)) != chunk_bytes:
+                raise RemoteTransferError(
+                    f"destination wrote {written.get('bytes')} bytes, expected {chunk_bytes}"
+                )
+            offset += chunk_bytes
+            chunks += 1
+            await _report_transfer_progress(
+                progress,
+                phase="transferring",
+                bytes_transferred=offset,
+                total_bytes=total_bytes,
+                chunks=chunks,
+                chunk_size=effective_chunk_size,
+            )
+
+        finish = await _remote_transfer_data(
+            dst_machine,
+            "transfer_finish_write",
+            {
+                "path": dst_path,
+                "transfer_id": transfer_id,
+                "expected_bytes": total_bytes,
+                "expected_sha256": stat["sha256"],
+            },
+        )
+    except Exception:
+        with suppress(Exception):
+            await _remote_transfer_data(
+                dst_machine,
+                "transfer_abort_write",
+                {"path": dst_path, "transfer_id": transfer_id},
+            )
+        raise
+    return {
+        "source": {"machine": src_machine, "path": stat["path"]},
+        "destination": {"machine": dst_machine, "path": finish["path"]},
+        "bytes": total_bytes,
+        "sha256": stat.get("sha256"),
+        "chunks": chunks,
+        "chunk_size": effective_chunk_size,
+        "transport": "controller-memory-relay",
+    }
+
+
+async def _copy_remote_file_direct(
+    src_machine: str,
+    src_path: str,
+    dst_machine: str,
+    dst_path: str,
+    overwrite: bool,
+    progress: TransferProgress | None,
+) -> dict:
+    settings = get_settings()
+    if not settings.remote_peer_transfer_enabled:
+        raise RuntimeError("direct remote transfer is not enabled")
+    stat = await _remote_transfer_data(
+        src_machine, "transfer_stat", {"path": src_path, "sha256": True}
+    )
+    if stat.get("type") != "file":
+        raise ValueError(f"source is not a file: {src_path}")
+    total_bytes = int(stat["size"])
+    receiver = await _remote_transfer_data(
+        dst_machine,
+        "transfer_open_receiver",
+        {
+            "path": dst_path,
+            "overwrite": overwrite,
+            "expected_bytes": total_bytes,
+            "expected_sha256": stat["sha256"],
+            "bind_host": settings.remote_peer_transfer_bind_host,
+            "advertise_host": settings.remote_peer_transfer_advertise_host,
+            "port": settings.remote_peer_transfer_port,
+            "timeout_s": settings.remote_peer_transfer_timeout_s,
+        },
+    )
+    try:
+        await _remote_transfer_data(
+            src_machine,
+            "transfer_put_url",
+            {
+                "path": src_path,
+                "url": receiver["url"],
+                "expected_bytes": total_bytes,
+                "expected_sha256": stat["sha256"],
+                "timeout_s": settings.remote_peer_transfer_timeout_s,
+            },
+            settings.remote_peer_transfer_timeout_s,
+        )
+        finish = await _remote_transfer_data(
+            dst_machine, "transfer_stat", {"path": dst_path, "sha256": True}
+        )
+    except Exception:
+        with suppress(Exception):
+            await _remote_transfer_data(
+                dst_machine,
+                "transfer_close_receiver",
+                {"receiver_id": receiver["receiver_id"]},
+            )
+        raise
+    if int(finish.get("size", -1)) != total_bytes or finish.get("sha256") != stat["sha256"]:
+        raise RemoteTransferError("direct peer transfer verification failed")
+    await _report_transfer_progress(
+        progress,
+        phase="transferring",
+        bytes_transferred=total_bytes,
+        total_bytes=total_bytes,
+        chunks=1,
+        chunk_size=total_bytes,
+    )
+    return {
+        "source": {"machine": src_machine, "path": stat["path"]},
+        "destination": {"machine": dst_machine, "path": finish["path"]},
+        "bytes": total_bytes,
+        "sha256": stat.get("sha256"),
+        "chunks": 1,
+        "chunk_size": total_bytes,
+        "transport": "peer-direct",
+    }
+
+
+def _s3_transfer_client():  # noqa: ANN202
+    try:
+        import boto3
+    except ImportError as exc:  # pragma: no cover - optional dependency.
+        raise RuntimeError(
+            "object-store transfer requires the 'boto3' package; install local-shell-mcp[s3]"
+        ) from exc
+    settings = get_settings()
+    return boto3.client(
+        "s3",
+        region_name=settings.remote_transfer_s3_region,
+        endpoint_url=settings.remote_transfer_s3_endpoint_url,
+    )
+
+
+async def _copy_remote_file_via_object_store(
+    src_machine: str,
+    src_path: str,
+    dst_machine: str,
+    dst_path: str,
+    overwrite: bool,
+    progress: TransferProgress | None,
+) -> dict:
+    settings = get_settings()
+    bucket = str(settings.remote_transfer_s3_bucket or "").strip()
+    if not bucket:
+        raise RuntimeError("remote_transfer_s3_bucket is required for object-store transfer")
+    stat = await _remote_transfer_data(
+        src_machine, "transfer_stat", {"path": src_path, "sha256": True}
+    )
+    if stat.get("type") != "file":
+        raise ValueError(f"source is not a file: {src_path}")
+    total_bytes = int(stat["size"])
+    prefix = settings.remote_transfer_s3_prefix.strip("/")
+    key = "/".join(part for part in (prefix, "transfers", uuid.uuid4().hex) if part)
+    client = await asyncio.to_thread(_s3_transfer_client)
+    ttl = int(settings.remote_transfer_s3_presign_ttl_s)
+    put_url = await asyncio.to_thread(
+        client.generate_presigned_url,
+        "put_object",
+        Params={"Bucket": bucket, "Key": key},
+        ExpiresIn=ttl,
+        HttpMethod="PUT",
+    )
+    get_url = await asyncio.to_thread(
+        client.generate_presigned_url,
+        "get_object",
+        Params={"Bucket": bucket, "Key": key},
+        ExpiresIn=ttl,
+        HttpMethod="GET",
+    )
+    try:
+        await _remote_transfer_data(
+            src_machine,
+            "transfer_put_url",
+            {
+                "path": src_path,
+                "url": put_url,
+                "expected_bytes": total_bytes,
+                "expected_sha256": stat["sha256"],
+                "timeout_s": settings.remote_job_timeout_s,
+            },
+            settings.remote_job_timeout_s,
+        )
+        finish = await _remote_transfer_data(
+            dst_machine,
+            "transfer_get_url",
+            {
+                "url": get_url,
+                "path": dst_path,
+                "overwrite": overwrite,
+                "expected_bytes": total_bytes,
+                "expected_sha256": stat["sha256"],
+                "timeout_s": settings.remote_job_timeout_s,
+            },
+            settings.remote_job_timeout_s,
+        )
+    finally:
+        with suppress(Exception):
+            await asyncio.to_thread(client.delete_object, Bucket=bucket, Key=key)
+    await _report_transfer_progress(
+        progress,
+        phase="transferring",
+        bytes_transferred=total_bytes,
+        total_bytes=total_bytes,
+        chunks=1,
+        chunk_size=total_bytes,
+    )
+    return {
+        "source": {"machine": src_machine, "path": stat["path"]},
+        "destination": {"machine": dst_machine, "path": finish["path"]},
+        "bytes": total_bytes,
+        "sha256": stat.get("sha256"),
+        "chunks": 1,
+        "chunk_size": total_bytes,
+        "transport": "s3-presigned",
+    }
+
+
 async def _copy_remote_file_to_remote(
     src_machine: str,
     src_path: str,
@@ -1176,36 +1470,58 @@ async def _copy_remote_file_to_remote(
     chunk_size: int | None = None,
     progress: TransferProgress | None = None,
 ) -> dict:
-    temporary = await asyncio.to_thread(transfer_alloc_temp_path, ".bin")
-    try:
-        pull = await _copy_remote_file_to_local(
-            src_machine,
-            src_path,
-            temporary["path"],
-            True,
-            chunk_size,
-            progress,
+    settings = get_settings()
+    strategy = settings.remote_transfer_strategy
+    if strategy == "relay":
+        return await _copy_remote_file_via_controller_relay(
+            src_machine, src_path, dst_machine, dst_path, overwrite, chunk_size, progress
         )
-        push = await _copy_local_file_to_remote(
-            temporary["path"],
-            dst_machine,
-            dst_path,
-            overwrite,
-            chunk_size,
-            progress,
+    if strategy == "direct":
+        return await _copy_remote_file_direct(
+            src_machine, src_path, dst_machine, dst_path, overwrite, progress
         )
-    finally:
-        with suppress(Exception):
-            delete_path(temporary["path"], False)
-    return {
-        "source": pull["source"],
-        "destination": push["destination"],
-        "bytes": pull["bytes"],
-        "sha256": pull["sha256"],
-        "chunks": pull["chunks"] + push["chunks"],
-        "chunk_size": pull["chunk_size"],
-        "transport": "http-chunks-via-controller",
-    }
+    if strategy == "object_store":
+        return await _copy_remote_file_via_object_store(
+            src_machine, src_path, dst_machine, dst_path, overwrite, progress
+        )
+
+    failures: list[str] = []
+    if settings.remote_peer_transfer_enabled:
+        try:
+            return await _copy_remote_file_direct(
+                src_machine, src_path, dst_machine, dst_path, overwrite, progress
+            )
+        except Exception as exc:
+            failures.append(f"peer-direct: {type(exc).__name__}: {exc}")
+            audit(
+                "remote_transfer_fallback",
+                transport="peer-direct",
+                source_machine=src_machine,
+                destination_machine=dst_machine,
+                error=type(exc).__name__,
+                message=str(exc),
+            )
+    if settings.remote_transfer_s3_bucket:
+        try:
+            return await _copy_remote_file_via_object_store(
+                src_machine, src_path, dst_machine, dst_path, overwrite, progress
+            )
+        except Exception as exc:
+            failures.append(f"s3-presigned: {type(exc).__name__}: {exc}")
+            audit(
+                "remote_transfer_fallback",
+                transport="s3-presigned",
+                source_machine=src_machine,
+                destination_machine=dst_machine,
+                error=type(exc).__name__,
+                message=str(exc),
+            )
+    result = await _copy_remote_file_via_controller_relay(
+        src_machine, src_path, dst_machine, dst_path, overwrite, chunk_size, progress
+    )
+    if failures:
+        result["fallbacks"] = failures
+    return result
 
 
 async def _remote_cleanup_file(machine: str, path: str) -> None:

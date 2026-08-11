@@ -166,13 +166,18 @@ async def test_remote_copy_file_streams_between_workers(tmp_path, monkeypatch):
         "src", "src-machine/payload.bin", "dst", "dst-machine/payload.bin", True, 1024
     )
 
-    assert result["chunks"] == 7
+    assert result["chunks"] == 6
     assert result["chunk_size"] == 1024
-    assert result["transport"] == "http-chunks-via-controller"
+    assert result["transport"] == "controller-memory-relay"
     assert result["bytes"] == len(data)
     assert calls[0] == "transfer_stat"
-    assert calls[1:7] == ["transfer_upload_url"] * 6
-    assert calls[7] == "transfer_download_url"
+    assert calls[1] == "transfer_begin_write"
+    assert calls[2:14:2] == ["transfer_read_chunk"] * 6
+    assert calls[3:14:2] == ["transfer_write_chunk"] * 6
+    assert calls[14] == "transfer_finish_write"
+    assert "transfer_alloc_temp_path" not in calls
+    assert "transfer_upload_url" not in calls
+    assert "transfer_download_url" not in calls
     assert (root / "dst-machine" / "payload.bin").read_bytes() == data
 
 

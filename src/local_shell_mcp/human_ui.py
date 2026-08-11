@@ -1837,6 +1837,12 @@ async def ui_terminal_websocket(websocket: WebSocket) -> None:
         return
 
     settings = get_settings()
+    if settings.disable_local:
+        await websocket.close(
+            code=4403,
+            reason="The local TUI bridge is unavailable when local access is disabled",
+        )
+        return
     marker = id(websocket)
     if len(_ACTIVE_UI_TERMINALS) >= max(1, settings.ui_terminal_max_sessions):
         await websocket.close(code=4429, reason="Too many active WebUI terminal sessions")

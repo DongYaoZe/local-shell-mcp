@@ -27,6 +27,8 @@ from io import BytesIO
 from pathlib import Path
 from typing import Any
 
+import jwt
+
 from . import __version__
 from .audit import audit, suppress_audit
 from .browser_sessions import get_browser_session_manager
@@ -52,6 +54,7 @@ from .fs_ops import (
 from .jobs import list_jobs, retry_job, start_job, stop_job, tail_job
 from .models import ok_result as _ok
 from .patch_ops import git_apply_command, git_apply_prefix, normalize_patch_text
+from .peer_transfer import close_peer_receiver, open_peer_receiver
 from .playwright_ops import playwright_run_script
 from .search_ops import grep, tree
 from .settings import get_settings, safe_settings_dump
@@ -70,6 +73,7 @@ from .shell_ops import (
     send_shell,
     start_shell,
 )
+from .state_store import get_state_store
 from .tmux_helper import persistent_shell_backend_info
 from .transfer_ops import (
     DEFAULT_TRANSFER_CHUNK_BYTES,
@@ -105,6 +109,8 @@ REMOTE_WORKER_REGISTRY_BACKUP_FILE_NAME = "remote-workers.json.bak"
 REMOTE_WORKER_IDENTITY_FILE_NAME = "identity.json"
 MAX_REMOTE_INVITES = 1_024
 MAX_REMOTE_MACHINE_NAME_LENGTH = 128
+_STATELESS_WORKER_TOKEN_PREFIX = "lsmcp_wk_s_"
+_STATELESS_INVITE_PREFIX = "lsmcp_inv_s_"
 REMOTE_NON_CANCELLABLE_WORKER_TOOLS = frozenset(
     {
         "write_file",
@@ -119,8 +125,41 @@ REMOTE_NON_CANCELLABLE_WORKER_TOOLS = frozenset(
         "transfer_unpack_archive",
         "transfer_upload_url",
         "transfer_download_url",
+        "transfer_open_receiver",
+        "transfer_put_url",
+        "transfer_get_url",
+        "transfer_close_receiver",
     }
 )
+
+
+def _stateless_signing_secret() -> str:
+    secret = str(get_settings().oauth_jwt_secret or "")
+    if len(secret.encode("utf-8")) < 32:
+        raise RuntimeError(
+            "stateless controller requires LOCAL_SHELL_MCP_OAUTH_JWT_SECRET with at least 32 bytes"
+        )
+    return secret
+
+
+def _encode_stateless_token(prefix: str, claims: dict[str, Any]) -> str:
+    return prefix + jwt.encode(claims, _stateless_signing_secret(), algorithm="HS256")
+
+
+def _decode_stateless_token(token: str, prefix: str, token_type: str) -> dict[str, Any]:
+    if not token.startswith(prefix):
+        raise PermissionError(f"invalid {token_type}")
+    try:
+        claims = jwt.decode(
+            token[len(prefix) :],
+            _stateless_signing_secret(),
+            algorithms=["HS256"],
+        )
+    except jwt.PyJWTError as exc:
+        raise PermissionError(f"invalid {token_type}") from exc
+    if claims.get("typ") != token_type:
+        raise PermissionError(f"invalid {token_type}")
+    return claims
 
 
 class RemoteJobCancelled(RuntimeError):
@@ -246,47 +285,56 @@ class RemoteManager:
         return get_settings().state_dir / REMOTE_WORKER_REGISTRY_BACKUP_FILE_NAME
 
     @staticmethod
-    def _read_registry(path: Path) -> list[dict[str, Any]]:
-        data = json.loads(path.read_text(encoding="utf-8"))
+    def _read_registry(raw: bytes | Path, source: str | None = None) -> list[dict[str, Any]]:
+        if isinstance(raw, Path):
+            source = source or str(raw)
+            raw = raw.read_bytes()
+        source = source or REMOTE_WORKER_REGISTRY_FILE_NAME
+        data = json.loads(raw.decode("utf-8"))
         if not isinstance(data, dict) or data.get("version") != 1:
-            raise ValueError(f"unsupported or invalid remote worker registry: {path}")
+            raise ValueError(f"unsupported or invalid remote worker registry: {source}")
         rows = data.get("workers")
         if not isinstance(rows, list):
-            raise ValueError(f"remote worker registry workers field is invalid: {path}")
+            raise ValueError(f"remote worker registry workers field is invalid: {source}")
         return [item for item in rows if isinstance(item, dict)]
 
     def _load_registry_unlocked(self) -> None:
         if self._registry_loaded:
             return
-        path = self._registry_path()
-        backup_path = self._registry_backup_path()
-        if not path.exists() and not backup_path.exists():
+        store = get_state_store()
+        raw = store.read_bytes(REMOTE_WORKER_REGISTRY_FILE_NAME)
+        backup_raw = store.read_bytes(REMOTE_WORKER_REGISTRY_BACKUP_FILE_NAME)
+        if raw is None and backup_raw is None:
             self._registry_loaded = True
             return
         rows: list[dict[str, Any]] | None = None
         main_error: Exception | None = None
         recovered_from_backup = False
         try:
-            if path.exists():
-                rows = self._read_registry(path)
+            if raw is not None:
+                rows = self._read_registry(raw, REMOTE_WORKER_REGISTRY_FILE_NAME)
         except (OSError, ValueError, json.JSONDecodeError) as exc:
             main_error = exc
-            audit("remote_worker_registry_unreadable", path=str(path), error=repr(exc))
-        if rows is None and backup_path.exists():
+            audit(
+                "remote_worker_registry_unreadable",
+                path=REMOTE_WORKER_REGISTRY_FILE_NAME,
+                error=repr(exc),
+            )
+        if rows is None and backup_raw is not None:
             try:
-                rows = self._read_registry(backup_path)
+                rows = self._read_registry(backup_raw, REMOTE_WORKER_REGISTRY_BACKUP_FILE_NAME)
             except (OSError, ValueError, json.JSONDecodeError) as exc:
                 audit(
                     "remote_worker_registry_backup_unreadable",
-                    path=str(backup_path),
+                    path=REMOTE_WORKER_REGISTRY_BACKUP_FILE_NAME,
                     error=repr(exc),
                 )
             else:
                 recovered_from_backup = True
                 audit(
                     "remote_worker_registry_recovered",
-                    path=str(path),
-                    backup_path=str(backup_path),
+                    path=REMOTE_WORKER_REGISTRY_FILE_NAME,
+                    backup_path=REMOTE_WORKER_REGISTRY_BACKUP_FILE_NAME,
                 )
         if rows is None:
             raise RuntimeError(
@@ -316,9 +364,6 @@ class RemoteManager:
             self._save_registry_unlocked()
 
     def _save_registry_unlocked(self) -> None:
-        path = self._registry_path()
-        backup_path = self._registry_backup_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
         data = {
             "version": 1,
             "workers": [
@@ -333,19 +378,10 @@ class RemoteManager:
                 for worker in sorted(self.workers.values(), key=lambda item: item.name)
             ],
         }
-        payload = json.dumps(data, indent=2, sort_keys=True)
-        tmp_path = path.with_name(path.name + f".{uuid.uuid4().hex}.tmp")
-        backup_tmp_path = backup_path.with_name(backup_path.name + f".{uuid.uuid4().hex}.tmp")
-        try:
-            for temporary in (tmp_path, backup_tmp_path):
-                temporary.write_text(payload, encoding="utf-8")
-                with contextlib.suppress(OSError):
-                    temporary.chmod(0o600)
-            os.replace(tmp_path, path)
-            os.replace(backup_tmp_path, backup_path)
-        finally:
-            tmp_path.unlink(missing_ok=True)
-            backup_tmp_path.unlink(missing_ok=True)
+        payload = json.dumps(data, indent=2, sort_keys=True).encode("utf-8")
+        store = get_state_store()
+        store.write_bytes(REMOTE_WORKER_REGISTRY_FILE_NAME, payload)
+        store.write_bytes(REMOTE_WORKER_REGISTRY_BACKUP_FILE_NAME, payload)
 
     def _join_url(self, base_url: str | None = None) -> str:
         settings = get_settings()
@@ -362,12 +398,25 @@ class RemoteManager:
         settings = get_settings()
         ttl = max(60, min(int(ttl_s or settings.remote_invite_ttl_s), 24 * 3600))
         normalized_name = _validate_machine_name(name) if name else None
-        code = "lsmcp_inv_" + secrets.token_urlsafe(24)
+        expires_at = _utc() + ttl
+        if settings.stateless_controller:
+            code = _encode_stateless_token(
+                _STATELESS_INVITE_PREFIX,
+                {
+                    "typ": "remote-invite",
+                    "jti": uuid.uuid4().hex,
+                    "name": normalized_name or "",
+                    "workdir": workdir or "",
+                    "exp": int(expires_at),
+                },
+            )
+        else:
+            code = "lsmcp_inv_" + secrets.token_urlsafe(24)
         invite = RemoteInvite(
             code=code,
             name=normalized_name,
             workdir=workdir,
-            expires_at=_utc() + ttl,
+            expires_at=expires_at,
         )
         async with self._lock:
             with self._state_lock:
@@ -414,12 +463,32 @@ class RemoteManager:
     async def register_worker(self, payload: dict[str, Any]) -> dict[str, Any]:
         code = str(payload.get("invite") or "")
         requested_name = str(payload.get("name") or "").strip() or None
+        stateless_claims: dict[str, Any] | None = None
+        if get_settings().stateless_controller:
+            try:
+                stateless_claims = _decode_stateless_token(
+                    code, _STATELESS_INVITE_PREFIX, "remote-invite"
+                )
+            except PermissionError as exc:
+                raise ValueError("invalid invite code") from exc
         async with self._lock:
             with self._state_lock:
                 self._load_registry_unlocked()
                 invite = self.invites.get(code)
+                if not invite and stateless_claims is not None:
+                    invite = RemoteInvite(
+                        code=code,
+                        name=str(stateless_claims.get("name") or "") or None,
+                        workdir=str(stateless_claims.get("workdir") or "") or None,
+                        expires_at=float(stateless_claims.get("exp") or 0),
+                    )
                 if not invite:
                     raise ValueError("invalid invite code")
+                invite_use_key = ""
+                if stateless_claims is not None and get_settings().state_backend != "memory":
+                    invite_use_key = f"remote-invites-used/{stateless_claims.get('jti') or ''}"
+                    if not invite_use_key.endswith("/") and get_state_store().read_bytes(invite_use_key):
+                        raise ValueError("invite code has already been used")
                 if invite.used:
                     raise ValueError("invite code has already been used")
                 if invite.expires_at < _utc():
@@ -431,7 +500,18 @@ class RemoteManager:
                     raise ValueError(f"invite is bound to machine name {invite.name!r}")
                 if name in self.workers:
                     raise ValueError(f"machine name already exists: {name}")
-                token = "lsmcp_wk_" + secrets.token_urlsafe(32)
+                if get_settings().stateless_controller:
+                    token = _encode_stateless_token(
+                        _STATELESS_WORKER_TOKEN_PREFIX,
+                        {
+                            "typ": "remote-worker",
+                            "name": name,
+                            "workdir": str(payload.get("workdir") or invite.workdir or ""),
+                            "iat": int(_utc()),
+                        },
+                    )
+                else:
+                    token = "lsmcp_wk_" + secrets.token_urlsafe(32)
                 worker = RemoteWorker(
                     name=name,
                     token=token,
@@ -444,6 +524,8 @@ class RemoteManager:
                 invite.used = True
                 self.invites.pop(code, None)
                 self._save_registry_unlocked()
+                if invite_use_key:
+                    get_state_store().write_bytes(invite_use_key, b"1")
         audit("remote_worker_registered", machine=name)
         return {
             "token": token,
@@ -458,6 +540,24 @@ class RemoteManager:
             with self._state_lock:
                 self._load_registry_unlocked()
                 name = self.tokens.get(access)
+                if (
+                    not name
+                    and get_settings().stateless_controller
+                    and get_settings().state_backend == "memory"
+                ):
+                    claims = _decode_stateless_token(
+                        access, _STATELESS_WORKER_TOKEN_PREFIX, "remote-worker"
+                    )
+                    name = _validate_machine_name(str(claims.get("name") or ""))
+                    worker = RemoteWorker(
+                        name=name,
+                        token=access,
+                        workdir=str(payload.get("workdir") or claims.get("workdir") or ""),
+                        capabilities=list(payload.get("capabilities") or []),
+                        info=dict(payload.get("info") or {}),
+                    )
+                    self.workers[name] = worker
+                    self.tokens[access] = name
                 if not name:
                     raise PermissionError("invalid worker identity")
                 worker = self.workers.get(name)
@@ -797,6 +897,22 @@ class RemoteManager:
         with self._state_lock:
             self._load_registry_unlocked()
             name = self.tokens.get(token)
+            if (
+                not name
+                and get_settings().stateless_controller
+                and get_settings().state_backend == "memory"
+            ):
+                claims = _decode_stateless_token(
+                    token, _STATELESS_WORKER_TOKEN_PREFIX, "remote-worker"
+                )
+                name = _validate_machine_name(str(claims.get("name") or ""))
+                worker = RemoteWorker(
+                    name=name,
+                    token=token,
+                    workdir=str(claims.get("workdir") or ""),
+                )
+                self.workers[name] = worker
+                self.tokens[token] = name
             if not name:
                 raise PermissionError("invalid worker token")
             worker = self.workers.get(name)
@@ -1124,6 +1240,10 @@ WORKER_TRANSFER_TOOLS = frozenset(
         "transfer_unpack_archive",
         "transfer_upload_url",
         "transfer_download_url",
+        "transfer_open_receiver",
+        "transfer_put_url",
+        "transfer_get_url",
+        "transfer_close_receiver",
     }
 )
 WORKER_BROWSER_TOOLS = frozenset(
@@ -1158,6 +1278,14 @@ def _worker_validate_transfer_url(url: str) -> None:
         raise ValueError("transfer URL does not belong to the configured controller")
     if not parsed.path.startswith("/remote/transfer/"):
         raise ValueError("transfer URL path is not permitted")
+
+
+def _worker_validate_external_transfer_url(url: str) -> None:
+    if len(url) > 16_384:
+        raise ValueError("transfer URL is too long")
+    parsed = urllib.parse.urlsplit(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ValueError("transfer URL must use absolute HTTP(S)")
 
 
 def _worker_curl_timeout(timeout_s: int | None) -> int:
@@ -1267,6 +1395,78 @@ def _worker_upload_url(
     return result
 
 
+def _worker_put_url(
+    path: str,
+    url: str,
+    expected_bytes: int,
+    expected_sha256: str,
+    timeout_s: int | None = None,
+) -> dict[str, Any]:
+    _worker_validate_external_transfer_url(url)
+    source = resolve_path(path, must_exist=True)
+    stat = transfer_stat(str(source), True)
+    if stat.get("type") != "file":
+        raise ValueError(f"source is not a file: {path}")
+    total = int(expected_bytes)
+    if int(stat["size"]) != total:
+        raise ValueError(f"size mismatch: expected {total}, got {stat['size']}")
+    if str(stat.get("sha256") or "").lower() != str(expected_sha256).lower():
+        raise ValueError("file sha256 mismatch before upload")
+
+    curl = shutil.which("curl")
+    if not curl:
+        raise FileNotFoundError("curl is required for remote file streaming")
+    marker = "\n__LSM_HTTP_STATUS__:"
+    completed = subprocess.run(  # noqa: S603
+        [
+            curl,
+            "-sS",
+            "--http1.1",
+            "--connect-timeout",
+            "15",
+            "--max-time",
+            str(_worker_curl_timeout(timeout_s)),
+            "-X",
+            "PUT",
+            "-H",
+            "Expect:",
+            "-H",
+            "Content-Type: application/octet-stream",
+            "--upload-file",
+            str(source),
+            "--write-out",
+            marker + "%{http_code}",
+            url,
+        ],
+        capture_output=True,
+        check=False,
+    )
+    raw_stdout = completed.stdout or b""
+    raw_stderr = completed.stderr or b""
+    stdout = raw_stdout.encode() if isinstance(raw_stdout, str) else raw_stdout
+    stderr = raw_stderr if isinstance(raw_stderr, str) else raw_stderr.decode(errors="replace")
+    _body, separator, raw_status = stdout.rpartition(marker.encode("ascii"))
+    if completed.returncode != 0:
+        raise RuntimeError(
+            f"stream upload failed with curl exit {completed.returncode}: {stderr.strip()}"
+        )
+    if not separator:
+        raise RuntimeError("stream upload returned an invalid response")
+    try:
+        status_code = int(raw_status.strip())
+    except ValueError as exc:
+        raise RuntimeError("stream upload returned an invalid HTTP status") from exc
+    if not 200 <= status_code < 300:
+        raise RuntimeError(f"stream upload failed with HTTP {status_code}")
+    return {
+        "path": stat["path"],
+        "bytes": total,
+        "sha256": stat["sha256"],
+        "http_status": status_code,
+        "transport": "http-put",
+    }
+
+
 def _worker_download_url(
     url: str,
     path: str,
@@ -1274,8 +1474,12 @@ def _worker_download_url(
     expected_bytes: int,
     expected_sha256: str,
     timeout_s: int | None = None,
+    external: bool = False,
 ) -> dict[str, Any]:
-    _worker_validate_transfer_url(url)
+    if external:
+        _worker_validate_external_transfer_url(url)
+    else:
+        _worker_validate_transfer_url(url)
     begin = transfer_begin_write(path, overwrite, expected_bytes)
     temporary = resolve_path(begin["temp_path"], follow_final_symlink=False)
     curl = shutil.which("curl")
@@ -1554,6 +1758,44 @@ async def _execute_transfer_worker_tool(tool: str, args: dict[str, Any]) -> Any:
             args["expected_bytes"],
             args["expected_sha256"],
             args.get("timeout_s"),
+        )
+
+    if tool == "transfer_open_receiver":
+        return await asyncio.to_thread(
+            open_peer_receiver,
+            path=args["path"],
+            overwrite=args.get("overwrite", True),
+            expected_bytes=args["expected_bytes"],
+            expected_sha256=args["expected_sha256"],
+            bind_host=args.get("bind_host", "0.0.0.0"),
+            port=args.get("port", 0),
+            advertise_host=args.get("advertise_host"),
+            timeout_s=args.get("timeout_s", 3600),
+        )
+
+    if tool == "transfer_close_receiver":
+        return await asyncio.to_thread(close_peer_receiver, args["receiver_id"])
+
+    if tool == "transfer_put_url":
+        return await asyncio.to_thread(
+            _worker_put_url,
+            args["path"],
+            args["url"],
+            args["expected_bytes"],
+            args["expected_sha256"],
+            args.get("timeout_s"),
+        )
+
+    if tool == "transfer_get_url":
+        return await asyncio.to_thread(
+            _worker_download_url,
+            args["url"],
+            args["path"],
+            args.get("overwrite", True),
+            args["expected_bytes"],
+            args["expected_sha256"],
+            args.get("timeout_s"),
+            True,
         )
     raise ValueError(f"unsupported remote worker tool: {tool}")
 
