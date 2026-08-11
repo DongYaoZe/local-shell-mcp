@@ -50,8 +50,8 @@ async def test_disable_local_requires_remote_targets_and_hides_local_only_tools(
     explicit_local_result = await mcp._tool_manager._tools["run_shell_tool"].fn(
         command="pwd", machine="local"
     )
-    assert explicit_local_result.isError is True
-    assert "Local access is disabled" in explicit_local_result.structuredContent["message"]
+    assert explicit_local_result["ok"] is True
+    assert manager.calls[-1][0:2] == ("local", "run_shell_tool")
 
     remote_result = await mcp._tool_manager._tools["run_shell_tool"].fn(
         command="pwd", machine="node"

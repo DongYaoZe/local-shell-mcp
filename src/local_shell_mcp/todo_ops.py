@@ -5,7 +5,7 @@ import threading
 import time
 
 from .settings import get_settings
-from .state_store import get_state_store
+from .state_store import get_state_store, state_lock
 
 _TODO_LOCK = threading.Lock()
 
@@ -40,7 +40,7 @@ def todo_write(todos: list[dict], expected_revision: int | None = None) -> dict:
             }
         )
 
-    with _TODO_LOCK:
+    with _TODO_LOCK, state_lock("todos.json"):
         current = todo_read()
         current_revision = int(current.get("revision") or 0)
         if expected_revision is not None and expected_revision != current_revision:

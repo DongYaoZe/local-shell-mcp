@@ -97,6 +97,7 @@ from .skill_ops import (
     load_installed_skill,
     read_installed_skill_file,
 )
+from .state_store import get_state_store
 from .tmux_helper import persistent_shell_backend_info
 from .todo_ops import todo_read, todo_write
 from .transfer_ops import (
@@ -789,6 +790,9 @@ MACHINE_CAPABLE_TOOL_NAMES = {
 LOCAL_ONLY_TOOL_NAMES = {
     "search",
     "fetch",
+    "skills_list",
+    "skill_load",
+    "skill_read_file",
     "create_file_link",
     "list_file_links",
     "revoke_file_link",
@@ -801,13 +805,13 @@ def _disabled_local_access_error(tool_name: str, arguments: dict[str, Any]) -> s
         return None
     if tool_name in {"job_list", "job_tail", "job_stop", "job_retry"} and arguments.get(
         "machine"
-    ) in {None, "", "local"}:
+    ) in {None, ""}:
         return None
-    if tool_name in MACHINE_CAPABLE_TOOL_NAMES and arguments.get("machine") in {None, "", "local"}:
+    if tool_name in MACHINE_CAPABLE_TOOL_NAMES and arguments.get("machine") in {None, ""}:
         return "Local access is disabled; specify a remote machine"
     if tool_name == "remote_transfer" and (
-        arguments.get("source_machine") in {None, "", "local"}
-        or arguments.get("destination_machine") in {None, "", "local"}
+        arguments.get("source_machine") in {None, ""}
+        or arguments.get("destination_machine") in {None, ""}
     ):
         return "Local access is disabled; remote_transfer requires both remote endpoints"
     return None
@@ -1406,13 +1410,6 @@ async def _copy_remote_file_via_object_store(
         ExpiresIn=ttl,
         HttpMethod="PUT",
     )
-    get_url = await asyncio.to_thread(
-        client.generate_presigned_url,
-        "get_object",
-        Params={"Bucket": bucket, "Key": key},
-        ExpiresIn=ttl,
-        HttpMethod="GET",
-    )
     try:
         await _remote_transfer_data(
             src_machine,
@@ -1425,6 +1422,13 @@ async def _copy_remote_file_via_object_store(
                 "timeout_s": settings.remote_job_timeout_s,
             },
             settings.remote_job_timeout_s,
+        )
+        get_url = await asyncio.to_thread(
+            client.generate_presigned_url,
+            "get_object",
+            Params={"Bucket": bucket, "Key": key},
+            ExpiresIn=ttl,
+            HttpMethod="GET",
         )
         finish = await _remote_transfer_data(
             dst_machine,
@@ -1918,12 +1922,33 @@ async def _view_image_result(path: str, machine: str | None = None) -> CallToolR
 
 def _read_audit_tail_entries(lines: int = 100) -> dict:
     settings = get_settings()
+    line_limit = max(1, min(lines, 1000))
+    max_bytes = max(1, settings.max_audit_tail_bytes)
+    if settings.state_backend != "file":
+        stored = get_state_store().read_bytes("audit.jsonl") or b""
+        bytes_read = min(len(stored), max_bytes)
+        content_bytes = stored[-bytes_read:]
+        if bytes_read < len(stored):
+            newline = content_bytes.find(b"\n")
+            if newline >= 0:
+                content_bytes = content_bytes[newline + 1 :]
+        content = content_bytes.decode("utf-8", errors="replace").splitlines()[-line_limit:]
+        entries = []
+        for line in content:
+            try:
+                entries.append(json.loads(line))
+            except json.JSONDecodeError:
+                entries.append({"raw": line})
+        return {
+            "entries": entries,
+            "bytes_read": bytes_read,
+            "truncated_bytes": max(0, len(stored) - bytes_read),
+        }
+
     path = settings.audit_log_path
     if not path.exists():
         return {"entries": []}
 
-    line_limit = max(1, min(lines, 1000))
-    max_bytes = max(1, settings.max_audit_tail_bytes)
     chunks: list[bytes] = []
     bytes_read = 0
     newline_count = 0

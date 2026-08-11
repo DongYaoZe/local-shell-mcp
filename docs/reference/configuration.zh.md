@@ -35,7 +35,7 @@ LOCAL_SHELL_MCP_OAUTH_JWT_SECRET=change-me-long-random-secret
 | `agent_config_dir` | `LOCAL_SHELL_MCP_AGENT_CONFIG_DIR` | `PosixPath('/workspace/.local-shell-mcp/agent_config')` | agent 配置目录。 |
 | `allow_full_container` | `LOCAL_SHELL_MCP_ALLOW_FULL_CONTAINER` | `False` | 为 true 时禁用工作区 / 路径限制；只在一次性边界内使用。 |
 | `disable_local` | `LOCAL_SHELL_MCP_DISABLE_LOCAL` | `False` | 禁用控制器主机作为 shell / 文件 / 浏览器执行目标；远程 worker 与控制平面服务仍可使用。 |
-| `stateless_controller` | `LOCAL_SHELL_MCP_STATELESS_CONTROLLER` | `False` | 面向临时实例/serverless 的无状态控制器模式；隐含 `disable_local`，默认使用内存状态后端，并要求显式配置强 `oauth_jwt_secret`。 |
+| `stateless_controller` | `LOCAL_SHELL_MCP_STATELESS_CONTROLLER` | `False` | 面向临时实例/serverless 的无状态控制器模式；隐含 `disable_local`，默认使用内存状态后端。使用默认的 `auth_mode=oauth` 时，需要显式配置强 `oauth_jwt_secret`。 |
 | `state_backend` | `LOCAL_SHELL_MCP_STATE_BACKEND` | `'file'` | `file`、`memory` 或 `redis`；serverless 冷启动后需要保留状态时使用 Redis。 |
 | `state_backend_url` | `LOCAL_SHELL_MCP_STATE_BACKEND_URL` | `None` | `state_backend=redis` 时的 Redis URL；诊断输出会隐藏。 |
 | `state_backend_prefix` | `LOCAL_SHELL_MCP_STATE_BACKEND_PREFIX` | `'local-shell-mcp'` | 内存/Redis 控制面状态的命名空间。 |
@@ -167,7 +167,7 @@ state_backend_url: redis://redis.internal:6379/0
 remote_transfer_strategy: auto
 ```
 
-同时通过 `LOCAL_SHELL_MCP_OAUTH_JWT_SECRET` 注入至少 32 字节的随机密钥。`memory` 后端是临时状态；生产 serverless 建议使用 Redis。当前远程 RPC 的活动队列/等待 future 仍位于 controller 进程内，因此使用 remote worker 时应保持单个 active controller 实例，而不是多个负载均衡副本。
+`stateless_controller` 不要求 controller 挂载持久卷。`memory` 后端是完全临时的：冷启动会使待使用的 remote invite 和 worker identity 失效，并丢弃 OAuth client、job 与 audit 状态。需要这些状态跨冷启动保留（包括可靠的 worker revoke 语义）时应使用 Redis。使用默认的 `auth_mode=oauth` 时，同时通过 `LOCAL_SHELL_MCP_OAUTH_JWT_SECRET` 注入至少 32 字节的随机密钥。当前远程 RPC 的活动队列/等待 future 仍位于 controller 进程内，因此使用 remote worker 时应保持单个 active controller 实例，而不是多个负载均衡副本。
 
 ## 运维建议
 

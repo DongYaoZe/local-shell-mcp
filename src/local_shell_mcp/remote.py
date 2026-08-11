@@ -27,8 +27,6 @@ from io import BytesIO
 from pathlib import Path
 from typing import Any
 
-import jwt
-
 from . import __version__
 from .audit import audit, suppress_audit
 from .browser_sessions import get_browser_session_manager
@@ -109,8 +107,6 @@ REMOTE_WORKER_REGISTRY_BACKUP_FILE_NAME = "remote-workers.json.bak"
 REMOTE_WORKER_IDENTITY_FILE_NAME = "identity.json"
 MAX_REMOTE_INVITES = 1_024
 MAX_REMOTE_MACHINE_NAME_LENGTH = 128
-_STATELESS_WORKER_TOKEN_PREFIX = "lsmcp_wk_s_"
-_STATELESS_INVITE_PREFIX = "lsmcp_inv_s_"
 REMOTE_NON_CANCELLABLE_WORKER_TOOLS = frozenset(
     {
         "write_file",
@@ -131,35 +127,6 @@ REMOTE_NON_CANCELLABLE_WORKER_TOOLS = frozenset(
         "transfer_close_receiver",
     }
 )
-
-
-def _stateless_signing_secret() -> str:
-    secret = str(get_settings().oauth_jwt_secret or "")
-    if len(secret.encode("utf-8")) < 32:
-        raise RuntimeError(
-            "stateless controller requires LOCAL_SHELL_MCP_OAUTH_JWT_SECRET with at least 32 bytes"
-        )
-    return secret
-
-
-def _encode_stateless_token(prefix: str, claims: dict[str, Any]) -> str:
-    return prefix + jwt.encode(claims, _stateless_signing_secret(), algorithm="HS256")
-
-
-def _decode_stateless_token(token: str, prefix: str, token_type: str) -> dict[str, Any]:
-    if not token.startswith(prefix):
-        raise PermissionError(f"invalid {token_type}")
-    try:
-        claims = jwt.decode(
-            token[len(prefix) :],
-            _stateless_signing_secret(),
-            algorithms=["HS256"],
-        )
-    except jwt.PyJWTError as exc:
-        raise PermissionError(f"invalid {token_type}") from exc
-    if claims.get("typ") != token_type:
-        raise PermissionError(f"invalid {token_type}")
-    return claims
 
 
 class RemoteJobCancelled(RuntimeError):
@@ -399,19 +366,7 @@ class RemoteManager:
         ttl = max(60, min(int(ttl_s or settings.remote_invite_ttl_s), 24 * 3600))
         normalized_name = _validate_machine_name(name) if name else None
         expires_at = _utc() + ttl
-        if settings.stateless_controller:
-            code = _encode_stateless_token(
-                _STATELESS_INVITE_PREFIX,
-                {
-                    "typ": "remote-invite",
-                    "jti": uuid.uuid4().hex,
-                    "name": normalized_name or "",
-                    "workdir": workdir or "",
-                    "exp": int(expires_at),
-                },
-            )
-        else:
-            code = "lsmcp_inv_" + secrets.token_urlsafe(24)
+        code = "lsmcp_inv_" + secrets.token_urlsafe(24)
         invite = RemoteInvite(
             code=code,
             name=normalized_name,
@@ -430,6 +385,7 @@ class RemoteManager:
                 if len(self.invites) >= MAX_REMOTE_INVITES:
                     raise RuntimeError("Too many pending remote invites")
                 self.invites[code] = invite
+                self._save_registry_unlocked()
         join_url = self._join_url(base_url)
         command = f"curl -fsSL {shlex.quote(join_url)} | bash -s -- --invite {shlex.quote(code)}"
         if normalized_name:
@@ -463,32 +419,12 @@ class RemoteManager:
     async def register_worker(self, payload: dict[str, Any]) -> dict[str, Any]:
         code = str(payload.get("invite") or "")
         requested_name = str(payload.get("name") or "").strip() or None
-        stateless_claims: dict[str, Any] | None = None
-        if get_settings().stateless_controller:
-            try:
-                stateless_claims = _decode_stateless_token(
-                    code, _STATELESS_INVITE_PREFIX, "remote-invite"
-                )
-            except PermissionError as exc:
-                raise ValueError("invalid invite code") from exc
         async with self._lock:
             with self._state_lock:
                 self._load_registry_unlocked()
                 invite = self.invites.get(code)
-                if not invite and stateless_claims is not None:
-                    invite = RemoteInvite(
-                        code=code,
-                        name=str(stateless_claims.get("name") or "") or None,
-                        workdir=str(stateless_claims.get("workdir") or "") or None,
-                        expires_at=float(stateless_claims.get("exp") or 0),
-                    )
                 if not invite:
                     raise ValueError("invalid invite code")
-                invite_use_key = ""
-                if stateless_claims is not None and get_settings().state_backend != "memory":
-                    invite_use_key = f"remote-invites-used/{stateless_claims.get('jti') or ''}"
-                    if not invite_use_key.endswith("/") and get_state_store().read_bytes(invite_use_key):
-                        raise ValueError("invite code has already been used")
                 if invite.used:
                     raise ValueError("invite code has already been used")
                 if invite.expires_at < _utc():
@@ -500,18 +436,7 @@ class RemoteManager:
                     raise ValueError(f"invite is bound to machine name {invite.name!r}")
                 if name in self.workers:
                     raise ValueError(f"machine name already exists: {name}")
-                if get_settings().stateless_controller:
-                    token = _encode_stateless_token(
-                        _STATELESS_WORKER_TOKEN_PREFIX,
-                        {
-                            "typ": "remote-worker",
-                            "name": name,
-                            "workdir": str(payload.get("workdir") or invite.workdir or ""),
-                            "iat": int(_utc()),
-                        },
-                    )
-                else:
-                    token = "lsmcp_wk_" + secrets.token_urlsafe(32)
+                token = "lsmcp_wk_" + secrets.token_urlsafe(32)
                 worker = RemoteWorker(
                     name=name,
                     token=token,
@@ -524,8 +449,6 @@ class RemoteManager:
                 invite.used = True
                 self.invites.pop(code, None)
                 self._save_registry_unlocked()
-                if invite_use_key:
-                    get_state_store().write_bytes(invite_use_key, b"1")
         audit("remote_worker_registered", machine=name)
         return {
             "token": token,
@@ -540,24 +463,6 @@ class RemoteManager:
             with self._state_lock:
                 self._load_registry_unlocked()
                 name = self.tokens.get(access)
-                if (
-                    not name
-                    and get_settings().stateless_controller
-                    and get_settings().state_backend == "memory"
-                ):
-                    claims = _decode_stateless_token(
-                        access, _STATELESS_WORKER_TOKEN_PREFIX, "remote-worker"
-                    )
-                    name = _validate_machine_name(str(claims.get("name") or ""))
-                    worker = RemoteWorker(
-                        name=name,
-                        token=access,
-                        workdir=str(payload.get("workdir") or claims.get("workdir") or ""),
-                        capabilities=list(payload.get("capabilities") or []),
-                        info=dict(payload.get("info") or {}),
-                    )
-                    self.workers[name] = worker
-                    self.tokens[access] = name
                 if not name:
                     raise PermissionError("invalid worker identity")
                 worker = self.workers.get(name)
@@ -897,22 +802,6 @@ class RemoteManager:
         with self._state_lock:
             self._load_registry_unlocked()
             name = self.tokens.get(token)
-            if (
-                not name
-                and get_settings().stateless_controller
-                and get_settings().state_backend == "memory"
-            ):
-                claims = _decode_stateless_token(
-                    token, _STATELESS_WORKER_TOKEN_PREFIX, "remote-worker"
-                )
-                name = _validate_machine_name(str(claims.get("name") or ""))
-                worker = RemoteWorker(
-                    name=name,
-                    token=token,
-                    workdir=str(claims.get("workdir") or ""),
-                )
-                self.workers[name] = worker
-                self.tokens[token] = name
             if not name:
                 raise PermissionError("invalid worker token")
             worker = self.workers.get(name)

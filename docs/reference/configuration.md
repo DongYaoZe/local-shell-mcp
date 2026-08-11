@@ -36,7 +36,7 @@ For local-only testing, `auth_bypass_localhost` is enabled by default. Do not ex
 | `agent_config_dir` | `LOCAL_SHELL_MCP_AGENT_CONFIG_DIR` | `PosixPath('/workspace/.local-shell-mcp/agent_config')` |  |
 | `allow_full_container` | `LOCAL_SHELL_MCP_ALLOW_FULL_CONTAINER` | `False` | Disables workspace/path restrictions when true; use only inside disposable boundaries. |
 | `disable_local` | `LOCAL_SHELL_MCP_DISABLE_LOCAL` | `False` | Disables the controller host as a shell/file/browser execution target. Remote workers and control-plane services remain available. |
-| `stateless_controller` | `LOCAL_SHELL_MCP_STATELESS_CONTROLLER` | `False` | Makes the controller suitable for ephemeral/serverless instances: implies `disable_local`, disables local file links/wallpaper caching, and defaults `state_backend` to `memory`. Configure a strong `oauth_jwt_secret` explicitly. |
+| `stateless_controller` | `LOCAL_SHELL_MCP_STATELESS_CONTROLLER` | `False` | Makes the controller suitable for ephemeral/serverless instances: implies `disable_local`, disables local file links/wallpaper caching, and defaults `state_backend` to `memory`. With the default `auth_mode=oauth`, configure a strong `oauth_jwt_secret` explicitly. |
 | `state_backend` | `LOCAL_SHELL_MCP_STATE_BACKEND` | `'file'` | `file`, `memory`, or `redis`. Use Redis when serverless controller state must survive cold starts. |
 | `state_backend_url` | `LOCAL_SHELL_MCP_STATE_BACKEND_URL` | `None` | Redis connection URL when `state_backend=redis`. Redacted from diagnostics. |
 | `state_backend_prefix` | `LOCAL_SHELL_MCP_STATE_BACKEND_PREFIX` | `'local-shell-mcp'` | Namespace for memory/Redis control-plane state. |
@@ -182,10 +182,13 @@ remote_transfer_strategy: auto
 ```
 
 `stateless_controller` removes the need for a persistent controller volume. The `memory`
-backend is intentionally ephemeral; use Redis for durable worker registrations, OAuth clients,
-jobs, and audit records. Active remote RPC queues/futures are process-local, so deployments that
-use remote workers should currently run one active controller instance at a time rather than
-multiple load-balanced controller replicas.
+backend is intentionally ephemeral: a cold start invalidates pending remote invites and worker
+identities and discards OAuth clients, jobs, and audit records. Use Redis when any of that state
+must survive cold starts, including durable worker revocation semantics. With the default
+`auth_mode=oauth`, inject at least 32 bytes of random key material through
+`LOCAL_SHELL_MCP_OAUTH_JWT_SECRET`. Active remote RPC queues/futures are process-local, so
+deployments that use remote workers should currently run one active controller instance at a
+time rather than multiple load-balanced controller replicas.
 
 ## Operational advice
 

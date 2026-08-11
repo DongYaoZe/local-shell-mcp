@@ -24,7 +24,7 @@ from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Re
 
 from .audit import audit
 from .settings import get_settings
-from .state_store import get_state_store
+from .state_store import get_state_store, state_lock
 
 
 @dataclass
@@ -131,7 +131,11 @@ def _load_clients_locked() -> None:
     global _LOADED_CLIENT_STORE_SIGNATURE
 
     signature = _client_store_signature()
-    if signature == _LOADED_CLIENT_STORE_SIGNATURE and _CLIENTS:
+    if (
+        get_settings().state_backend == "file"
+        and signature == _LOADED_CLIENT_STORE_SIGNATURE
+        and _CLIENTS
+    ):
         return
 
     _CLIENTS.clear()
@@ -167,7 +171,7 @@ def _load_clients_locked() -> None:
                 redirect_uris=redirect_uris,
                 client_name=client_name,
                 created_at=created_at or int(time.time()),
-                approved=True,
+                approved=bool(row.get("approved", True)),
             )
     except (OSError, UnicodeDecodeError, ValueError, json.JSONDecodeError) as exc:
         audit("oauth_client_store_unreadable", path=OAUTH_CLIENT_STORE_FILE_NAME, error=repr(exc))
@@ -175,6 +179,7 @@ def _load_clients_locked() -> None:
 
 
 def _save_clients_locked() -> None:
+    persist_pending = get_settings().state_backend != "file"
     payload = {
         "version": OAUTH_CLIENT_STORE_VERSION,
         "clients": {
@@ -182,9 +187,10 @@ def _save_clients_locked() -> None:
                 "redirect_uris": client.redirect_uris,
                 "client_name": client.client_name,
                 "created_at": client.created_at,
+                "approved": client.approved,
             }
             for client_id, client in sorted(_CLIENTS.items())
-            if client.approved
+            if persist_pending or client.approved
         },
     }
     get_state_store().write_bytes(
@@ -325,7 +331,7 @@ def _registration_response(client: OAuthClient, *, reused: bool) -> JSONResponse
 
 
 def _approve_client(client_id: str) -> OAuthClient | None:
-    with _CLIENT_STORE_LOCK:
+    with _CLIENT_STORE_LOCK, state_lock(OAUTH_CLIENT_STORE_FILE_NAME):
         _load_clients_locked()
         client = _CLIENTS.get(client_id)
         if client is None:
@@ -340,7 +346,7 @@ def _approve_client(client_id: str) -> OAuthClient | None:
 def _persist_legacy_client(client_id: str, redirect_uri: str) -> OAuthClient | None:
     if not _LEGACY_CLIENT_ID_RE.fullmatch(client_id):
         return None
-    with _CLIENT_STORE_LOCK:
+    with _CLIENT_STORE_LOCK, state_lock(OAUTH_CLIENT_STORE_FILE_NAME):
         _load_clients_locked()
         existing = _CLIENTS.get(client_id)
         if existing is not None:
@@ -400,7 +406,7 @@ async def oauth_server_metadata(request: Request) -> JSONResponse:
 
 def _prune_oauth_state(now: int | None = None) -> None:
     now = int(time.time()) if now is None else now
-    with _CODE_STORE_LOCK:
+    with _CODE_STORE_LOCK, state_lock(OAUTH_CODE_STORE_FILE_NAME):
         _load_codes_locked()
         code_ttl = max(1, get_settings().oauth_code_ttl_s)
         for code, item in list(_CODES.items()):
@@ -410,9 +416,11 @@ def _prune_oauth_state(now: int | None = None) -> None:
             oldest = min(_CODES, key=lambda key: _CODES[key].created_at)
             _CODES.pop(oldest, None)
         _save_codes_locked()
-    with _CLIENT_STORE_LOCK:
+    with _CLIENT_STORE_LOCK, state_lock(OAUTH_CLIENT_STORE_FILE_NAME):
         _load_clients_locked()
         _prune_clients_locked(now)
+        if get_settings().state_backend != "file":
+            _save_clients_locked()
 
 
 def _validate_redirect_uri(uri: str) -> str | None:
@@ -469,7 +477,7 @@ async def oauth_register(request: Request) -> JSONResponse:
             {"error": "invalid_client_metadata", "error_description": "client_name is too long"},
             status_code=400,
         )
-    with _CLIENT_STORE_LOCK:
+    with _CLIENT_STORE_LOCK, state_lock(OAUTH_CLIENT_STORE_FILE_NAME):
         _load_clients_locked()
         now = int(time.time())
         _prune_clients_locked(now)
@@ -497,6 +505,8 @@ async def oauth_register(request: Request) -> JSONResponse:
             client_name=client_name,
         )
         _CLIENTS[client_id] = client
+        if get_settings().state_backend != "file":
+            _save_clients_locked()
     audit("oauth_client_registered", client_id=client_id, redirect_uris=redirect_uris)
     return _registration_response(client, reused=False)
 
@@ -736,7 +746,7 @@ async def oauth_authorize_post(request: Request) -> Response:
         code_challenge_method=params.get("code_challenge_method"),
     )
     _prune_oauth_state()
-    with _CODE_STORE_LOCK:
+    with _CODE_STORE_LOCK, state_lock(OAUTH_CODE_STORE_FILE_NAME):
         _load_codes_locked()
         if len(_CODES) >= MAX_OAUTH_CODES:
             return _authorize_form(
@@ -796,29 +806,29 @@ async def oauth_token(request: Request) -> JSONResponse:
     redirect_uri = str(form.get("redirect_uri") or "")
     verifier = str(form.get("code_verifier") or "") or None
     _prune_oauth_state()
-    with _CODE_STORE_LOCK:
+    with _CODE_STORE_LOCK, state_lock(OAUTH_CODE_STORE_FILE_NAME):
         _load_codes_locked()
         code_obj = _CODES.get(code)
-    if not code_obj or code_obj.used:
-        return _json(
-            {"error": "invalid_grant", "error_description": "Unknown or used code"}, status_code=400
-        )
-    if int(time.time()) - code_obj.created_at > get_settings().oauth_code_ttl_s:
-        return _json(
-            {"error": "invalid_grant", "error_description": "Expired code"}, status_code=400
-        )
-    if code_obj.client_id != client_id or code_obj.redirect_uri != redirect_uri:
-        return _json(
-            {"error": "invalid_grant", "error_description": "Client or redirect mismatch"},
-            status_code=400,
-        )
-    if not _verify_pkce(code_obj, verifier):
-        return _json(
-            {"error": "invalid_grant", "error_description": "PKCE verification failed"},
-            status_code=400,
-        )
-    code_obj.used = True
-    with _CODE_STORE_LOCK:
+        if not code_obj or code_obj.used:
+            return _json(
+                {"error": "invalid_grant", "error_description": "Unknown or used code"},
+                status_code=400,
+            )
+        if int(time.time()) - code_obj.created_at > get_settings().oauth_code_ttl_s:
+            return _json(
+                {"error": "invalid_grant", "error_description": "Expired code"}, status_code=400
+            )
+        if code_obj.client_id != client_id or code_obj.redirect_uri != redirect_uri:
+            return _json(
+                {"error": "invalid_grant", "error_description": "Client or redirect mismatch"},
+                status_code=400,
+            )
+        if not _verify_pkce(code_obj, verifier):
+            return _json(
+                {"error": "invalid_grant", "error_description": "PKCE verification failed"},
+                status_code=400,
+            )
+        code_obj.used = True
         _CODES.pop(code, None)
         _save_codes_locked()
     token = issue_access_token(

@@ -222,16 +222,18 @@ def _get_or_create_oauth_secret(state_dir: Path) -> str:
 
 
 def _ensure_oauth_jwt_secret(settings: Settings) -> Settings:
-    if settings.auth_mode != "oauth" and not settings.stateless_controller:
+    if settings.auth_mode != "oauth":
         return settings
     current = str(settings.oauth_jwt_secret or "")
-    if current not in _WEAK_OAUTH_SECRET_VALUES:
-        return settings
-    if settings.stateless_controller:
+    if settings.stateless_controller and (
+        current in _WEAK_OAUTH_SECRET_VALUES or len(current.encode("utf-8")) < 32
+    ):
         raise RuntimeError(
             "LOCAL_SHELL_MCP_OAUTH_JWT_SECRET must be explicitly configured with at least "
             "32 bytes when stateless_controller=true"
         )
+    if current not in _WEAK_OAUTH_SECRET_VALUES:
+        return settings
     return _replace_settings(
         settings,
         oauth_jwt_secret=_get_or_create_oauth_secret(settings.state_dir),

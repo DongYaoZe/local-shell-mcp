@@ -324,14 +324,9 @@ def _bounded_preview_unit(
     return bounded
 
 
-def _enforce_audit_storage_limit(log_path: Path, max_bytes: int) -> None:
-    if max_bytes <= 0 or not log_path.exists():
-        return
-    try:
-        raw_lines = log_path.read_bytes().splitlines(keepends=True)
-    except OSError:
-        return
-
+def _parse_retention_lines(
+    raw_lines: list[bytes],
+) -> tuple[list[tuple[bytes, dict[str, Any] | None, set[str]]], set[str]]:
     parsed: list[tuple[bytes, dict[str, Any] | None, set[str]]] = []
     all_referenced: set[str] = set()
     for raw_line in raw_lines:
@@ -346,12 +341,19 @@ def _enforce_audit_storage_limit(log_path: Path, max_bytes: int) -> None:
             _collect_payload_ids(record, payload_ids)
             all_referenced.update(payload_ids)
         parsed.append((raw_line, record, payload_ids))
+    return parsed, all_referenced
 
-    payload_sizes = {digest: _payload_file_size(digest, log_path) for digest in all_referenced}
-    total_bytes = sum(len(raw_line) for raw_line in raw_lines) + sum(payload_sizes.values())
+
+def _select_retention_lines(
+    parsed: list[tuple[bytes, dict[str, Any] | None, set[str]]],
+    payload_sizes: dict[str, int],
+    max_bytes: int,
+) -> list[tuple[int, bytes]] | None:
+    total_bytes = sum(len(raw_line) for raw_line, _record, _payload_ids in parsed) + sum(
+        payload_sizes.values()
+    )
     if total_bytes <= max_bytes:
-        _prune_payload_store(log_path)
-        return
+        return None
 
     target_bytes = max(1, max_bytes // 2)
     selected: list[tuple[int, bytes]] = []
@@ -377,6 +379,24 @@ def _enforce_audit_storage_limit(log_path: Path, max_bytes: int) -> None:
         selected_bytes += added_bytes
 
     selected.sort(key=lambda item: item[0])
+    return selected
+
+
+def _enforce_audit_storage_limit(log_path: Path, max_bytes: int) -> None:
+    if max_bytes <= 0 or not log_path.exists():
+        return
+    try:
+        raw_lines = log_path.read_bytes().splitlines(keepends=True)
+    except OSError:
+        return
+
+    parsed, all_referenced = _parse_retention_lines(raw_lines)
+    payload_sizes = {digest: _payload_file_size(digest, log_path) for digest in all_referenced}
+    selected = _select_retention_lines(parsed, payload_sizes, max_bytes)
+    if selected is None:
+        _prune_payload_store(log_path)
+        return
+
     temporary = log_path.with_name(f".{log_path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
     try:
         _write_private_bytes(temporary, b"".join(raw_line for _, raw_line in selected))
@@ -385,6 +405,29 @@ def _enforce_audit_storage_limit(log_path: Path, max_bytes: int) -> None:
         with contextlib.suppress(OSError):
             temporary.unlink(missing_ok=True)
     _prune_payload_store(log_path)
+
+
+def _enforce_state_audit_storage_limit(max_bytes: int) -> None:
+    if max_bytes <= 0:
+        return
+    store = get_state_store()
+    raw_lines = (store.read_bytes("audit.jsonl") or b"").splitlines(keepends=True)
+    parsed, all_referenced = _parse_retention_lines(raw_lines)
+    payload_sizes = {
+        digest: len(store.read_bytes(f"{_AUDIT_PAYLOAD_DIRECTORY}/{digest}.json.gz") or b"")
+        for digest in all_referenced
+    }
+    selected = _select_retention_lines(parsed, payload_sizes, max_bytes)
+    if selected is not None:
+        store.write_bytes("audit.jsonl", b"".join(raw_line for _, raw_line in selected))
+        _, all_referenced = _parse_retention_lines(
+            [raw_line for _index, raw_line in selected]
+        )
+    prefix = f"{_AUDIT_PAYLOAD_DIRECTORY}/"
+    for key in store.list_keys(prefix):
+        digest = key.removeprefix(prefix).removesuffix(".json.gz")
+        if digest not in all_referenced:
+            store.delete(key)
 
 
 def _trim_audit_log(path: Path, max_bytes: int) -> bool:
@@ -462,30 +505,10 @@ def audit(event: str, **fields: Any) -> None:
         encoded = json.dumps(record, ensure_ascii=False, default=str) + "\n"
         if settings.state_backend != "file":
             store = get_state_store()
-            trimmed = False
             with state_lock("audit.jsonl"):
                 existing = store.read_bytes("audit.jsonl") or b""
-                payload = existing + encoded.encode("utf-8")
-                max_bytes = max(1, settings.max_audit_log_bytes)
-                if len(payload) > max_bytes:
-                    trimmed = True
-                    payload = payload[-max_bytes:]
-                    newline = payload.find(b"\n")
-                    if newline >= 0:
-                        payload = payload[newline + 1 :]
-                store.write_bytes("audit.jsonl", payload)
-            if trimmed:
-                referenced: set[str] = set()
-                for line in payload.splitlines():
-                    with contextlib.suppress(json.JSONDecodeError, UnicodeDecodeError):
-                        loaded = json.loads(line)
-                        if isinstance(loaded, dict):
-                            _collect_payload_ids(loaded, referenced)
-                prefix = f"{_AUDIT_PAYLOAD_DIRECTORY}/"
-                for key in store.list_keys(prefix):
-                    digest = key.removeprefix(prefix).removesuffix(".json.gz")
-                    if digest not in referenced:
-                        store.delete(key)
+                store.write_bytes("audit.jsonl", existing + encoded.encode("utf-8"))
+                _enforce_state_audit_storage_limit(settings.max_audit_log_bytes)
             return
         path: Path = settings.audit_log_path
         path.parent.mkdir(parents=True, exist_ok=True)

@@ -4,6 +4,7 @@ import asyncio
 import base64
 import hashlib
 import http.client
+import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -18,6 +19,7 @@ from starlette.testclient import TestClient
 import local_shell_mcp.audit as audit_module
 import local_shell_mcp.jobs as jobs_module
 import local_shell_mcp.oauth as oauth_module
+import local_shell_mcp.peer_transfer as peer_transfer_module
 import local_shell_mcp.remote as remote_module
 import local_shell_mcp.todo_ops as todo_module
 import local_shell_mcp.tools as tools
@@ -74,7 +76,7 @@ def test_stateless_settings_require_no_persistent_directories(tmp_path, monkeypa
     assert not settings.state_dir.exists()
 
 
-def test_stateless_requires_explicit_signing_secret(tmp_path, monkeypatch):
+def test_stateless_oauth_requires_strong_explicit_signing_secret(tmp_path, monkeypatch):
     monkeypatch.setenv("LOCAL_SHELL_MCP_STATELESS_CONTROLLER", "true")
     monkeypatch.setenv("LOCAL_SHELL_MCP_WORKSPACE_ROOT", str(tmp_path / "workspace"))
     monkeypatch.setenv("LOCAL_SHELL_MCP_STATE_DIR", str(tmp_path / "state"))
@@ -83,6 +85,25 @@ def test_stateless_requires_explicit_signing_secret(tmp_path, monkeypatch):
 
     with pytest.raises(RuntimeError, match="OAUTH_JWT_SECRET"):
         get_settings()
+
+    monkeypatch.setenv("LOCAL_SHELL_MCP_OAUTH_JWT_SECRET", "short")
+    get_settings.cache_clear()
+    with pytest.raises(RuntimeError, match="at least 32 bytes"):
+        get_settings()
+
+
+def test_stateless_without_oauth_does_not_require_jwt_secret(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOCAL_SHELL_MCP_STATELESS_CONTROLLER", "true")
+    monkeypatch.setenv("LOCAL_SHELL_MCP_AUTH_MODE", "none")
+    monkeypatch.setenv("LOCAL_SHELL_MCP_WORKSPACE_ROOT", str(tmp_path / "workspace"))
+    monkeypatch.setenv("LOCAL_SHELL_MCP_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.delenv("LOCAL_SHELL_MCP_OAUTH_JWT_SECRET", raising=False)
+    get_settings.cache_clear()
+
+    settings = get_settings()
+
+    assert settings.stateless_controller is True
+    assert settings.auth_mode == "none"
 
 
 def test_stateless_ui_local_token_uses_state_backend(tmp_path, monkeypatch):
@@ -261,14 +282,52 @@ def test_stateless_oauth_code_uses_state_backend(tmp_path, monkeypatch):
     assert token.json()["token_type"] == "Bearer"
 
 
+def test_shared_oauth_client_reads_reload_non_file_backend(tmp_path, monkeypatch):
+    _configure_stateless(tmp_path, monkeypatch)
+    oauth_module._CLIENTS.clear()
+    oauth_module._LOADED_CLIENT_STORE_SIGNATURE = None
+    store = get_state_store()
+
+    def write_clients(*client_ids: str) -> None:
+        rows = {
+            client_id: {
+                "redirect_uris": [f"https://{client_id}.test/callback"],
+                "client_name": client_id,
+                "created_at": 1,
+                "approved": True,
+            }
+            for client_id in client_ids
+        }
+        store.write_bytes(
+            oauth_module.OAUTH_CLIENT_STORE_FILE_NAME,
+            json.dumps({"version": 1, "clients": rows}).encode(),
+        )
+
+    write_clients("first")
+    assert oauth_module._get_client("first") is not None
+
+    write_clients("first", "second")
+    assert oauth_module._get_client("second") is not None
+
+
 @pytest.mark.asyncio
-async def test_stateless_invite_and_worker_identity_survive_cold_start(tmp_path, monkeypatch):
+async def test_memory_stateless_remote_identity_is_invalid_after_cold_start(tmp_path, monkeypatch):
     _configure_stateless(tmp_path, monkeypatch)
     first = remote_module.RemoteManager()
     invite = await first.create_invite(name="worker-a", workdir="/srv/work")
 
     clear_memory_state()
     second = remote_module.RemoteManager()
+    with pytest.raises(ValueError, match="invalid invite code"):
+        await second.register_worker(
+            {
+                "invite": invite["code"],
+                "name": "worker-a",
+                "workdir": "/srv/work",
+            }
+        )
+
+    invite = await second.create_invite(name="worker-a", workdir="/srv/work")
     registered = await second.register_worker(
         {
             "invite": invite["code"],
@@ -278,22 +337,18 @@ async def test_stateless_invite_and_worker_identity_survive_cold_start(tmp_path,
             "info": {"hostname": "worker-a"},
         }
     )
-    assert registered["token"].startswith("lsmcp_wk_s_")
+    assert registered["token"].startswith("lsmcp_wk_")
 
     clear_memory_state()
     third = remote_module.RemoteManager()
-    resumed = await third.resume_worker(
-        registered["token"],
-        {
-            "name": "worker-a",
-            "workdir": "/srv/work",
-            "capabilities": ["transfer_stat"],
-            "info": {"hostname": "worker-a"},
-        },
-    )
-
-    assert resumed["name"] == "worker-a"
-    assert "worker-a" in third.workers
+    with pytest.raises(PermissionError, match="invalid worker identity"):
+        await third.resume_worker(
+            registered["token"],
+            {
+                "name": "worker-a",
+                "workdir": "/srv/work",
+            },
+        )
     assert not get_settings().state_dir.exists()
 
 
@@ -330,6 +385,22 @@ async def test_stateless_managed_job_and_audit_stay_off_disk(tmp_path, monkeypat
 
     stopped = await jobs_module.stop_job(job["job_id"])
     assert stopped["killed"] is False
+
+
+def test_state_backed_audit_tail_and_retention_include_external_payloads(tmp_path, monkeypatch):
+    _configure_stateless(tmp_path, monkeypatch, max_audit_log_bytes="8000")
+    large_value = "".join(hashlib.sha256(str(index).encode()).hexdigest() for index in range(1200))
+
+    audit_module.audit("serverless_large_audit", payload=large_value)
+
+    store = get_state_store()
+    audit_bytes = len(store.read_bytes("audit.jsonl") or b"")
+    payload_bytes = sum(len(store.read_bytes(key) or b"") for key in store.list_keys("audit-payloads/"))
+    assert audit_bytes + payload_bytes <= get_settings().max_audit_log_bytes
+
+    tail = tools._read_audit_tail_entries(10)
+    assert any(entry.get("event") == "serverless_large_audit" for entry in tail["entries"])
+    assert not get_settings().audit_log_path.exists()
 
 
 @pytest.mark.asyncio
@@ -491,6 +562,37 @@ def test_peer_receiver_rejects_invalid_requests_and_can_be_cancelled(tmp_path, m
     assert close_peer_receiver(cancellable["receiver_id"])["closed"] is True
     assert close_peer_receiver(cancellable["receiver_id"])["closed"] is False
     assert not (root / "cancelled.bin").exists()
+
+
+def test_peer_receiver_aborts_write_when_listener_bind_fails(tmp_path, monkeypatch):
+    root = _configure_workspace(tmp_path, monkeypatch)
+    payload = b"payload"
+    digest = hashlib.sha256(payload).hexdigest()
+    aborted: list[tuple[str, str]] = []
+    original_abort = peer_transfer_module.transfer_abort_write
+
+    def abort(path: str, transfer_id: str):
+        aborted.append((path, transfer_id))
+        return original_abort(path, transfer_id)
+
+    def fail_bind(*_args, **_kwargs):
+        raise OSError("address already in use")
+
+    monkeypatch.setattr(peer_transfer_module, "transfer_abort_write", abort)
+    monkeypatch.setattr(peer_transfer_module, "ThreadingHTTPServer", fail_bind)
+
+    with pytest.raises(OSError, match="address already in use"):
+        open_peer_receiver(
+            path="bind-failure.bin",
+            overwrite=True,
+            expected_bytes=len(payload),
+            expected_sha256=digest,
+            bind_host="127.0.0.1",
+        )
+
+    assert len(aborted) == 1
+    assert aborted[0][0] == "bind-failure.bin"
+    assert not (root / "bind-failure.bin").exists()
 
 
 @pytest.mark.asyncio
@@ -697,6 +799,7 @@ async def test_object_store_transfer_uses_presigned_urls_and_deletes_object(tmp_
     )
     content = b"object-store-transfer"
     digest = hashlib.sha256(content).hexdigest()
+    events: list[str] = []
 
     class FakeS3:
         def __init__(self) -> None:
@@ -706,10 +809,12 @@ async def test_object_store_transfer_uses_presigned_urls_and_deletes_object(tmp_
         def generate_presigned_url(self, operation, *, Params, ExpiresIn, HttpMethod):
             del ExpiresIn
             self.presigned.append((operation, HttpMethod))
+            events.append(f"presign:{operation}")
             return f"https://storage.test/{Params['Bucket']}/{Params['Key']}?op={operation}"
 
         def delete_object(self, *, Bucket, Key):
             self.deleted.append((Bucket, Key))
+            events.append("delete")
 
     fake_s3 = FakeS3()
     monkeypatch.setattr(tools, "_s3_transfer_client", lambda: fake_s3)
@@ -722,9 +827,11 @@ async def test_object_store_transfer_uses_presigned_urls_and_deletes_object(tmp_
             return {"type": "file", "path": "source.bin", "size": len(content), "sha256": digest}
         if tool == "transfer_put_url":
             assert args["url"].startswith("https://storage.test/")
+            events.append("upload")
             return {"bytes": len(content), "sha256": digest}
         if tool == "transfer_get_url":
             assert args["url"].startswith("https://storage.test/")
+            events.append("download")
             return {"path": "destination.bin", "bytes": len(content), "sha256": digest}
         raise AssertionError(f"unexpected tool: {tool}")
 
@@ -738,3 +845,10 @@ async def test_object_store_transfer_uses_presigned_urls_and_deletes_object(tmp_
     assert len(fake_s3.deleted) == 1
     assert fake_s3.deleted[0][0] == "transfer-bucket"
     assert [tool for _, tool, _ in calls] == ["transfer_stat", "transfer_put_url", "transfer_get_url"]
+    assert events == [
+        "presign:put_object",
+        "upload",
+        "presign:get_object",
+        "download",
+        "delete",
+    ]

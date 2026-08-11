@@ -53,3 +53,22 @@ def test_http_request_body_limit_rejects_oversized_payload(tmp_path, monkeypatch
         "error": "request_too_large",
         "message": "Request body exceeds the configured 64 byte limit",
     }
+
+
+def test_http_remote_only_mode_omits_controller_local_tool_routes(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOCAL_SHELL_MCP_WORKSPACE_ROOT", str(tmp_path))
+    monkeypatch.setenv("LOCAL_SHELL_MCP_AUTH_MODE", "none")
+    monkeypatch.setenv("LOCAL_SHELL_MCP_DISABLE_LOCAL", "true")
+    get_settings.cache_clear()
+    client = TestClient(build_http_app())
+
+    for method, path, payload in (
+        ("post", "/tools/run_shell", {"command": "echo nope"}),
+        ("post", "/tools/read_file", {"path": "secret.txt"}),
+        ("get", "/tools/skills_list", None),
+        ("post", "/tools/browser/text", {"url": "https://example.com"}),
+    ):
+        response = getattr(client, method)(path, json=payload) if payload is not None else getattr(client, method)(path)
+        assert response.status_code == 404
+
+    assert client.get("/tools/todo").status_code == 200

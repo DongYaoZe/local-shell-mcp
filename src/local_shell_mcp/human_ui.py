@@ -921,6 +921,8 @@ async def api_file_preview(request: Request) -> Response:
     path = request.query_params.get("path", ".")
     try:
         _require_ui_scopes(request, "shell:read", machine=machine)
+        if machine == "local" and get_settings().disable_local:
+            raise RuntimeError("Local access is disabled; select a remote machine")
         windows_paths = _machine_uses_windows_paths(machine)
         if machine == "local":
             resolved = await asyncio.to_thread(resolve_path, path, must_exist=True)

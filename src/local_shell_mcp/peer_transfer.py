@@ -125,7 +125,12 @@ def open_peer_receiver(
             finally:
                 threading.Thread(target=self.server.shutdown, daemon=True).start()
 
-    server = ThreadingHTTPServer((bind_host, int(port)), Handler)
+    try:
+        server = ThreadingHTTPServer((bind_host, int(port)), Handler)
+    except Exception:
+        with contextlib.suppress(Exception):
+            transfer_abort_write(path, transfer_id)
+        raise
     server.daemon_threads = True
     actual_port = int(server.server_address[1])
     advertised = advertise_host or socket.getfqdn() or socket.gethostname()

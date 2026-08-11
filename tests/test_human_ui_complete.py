@@ -407,6 +407,12 @@ def test_disable_local_hides_controller_and_blocks_ui_dispatch(tmp_path, monkeyp
     with pytest.raises(RuntimeError, match="Local access is disabled"):
         asyncio.run(ui._machine_dispatch("local", lambda: {"sync": True}, "x", {}))
 
+    preview = TestClient(Starlette(routes=ui.ui_routes())).get(
+        "/api/ui/files/preview", params={"machine": "local", "path": "."}
+    )
+    assert preview.status_code == 400
+    assert "Local access is disabled" in preview.json()["message"]
+
     class Socket:
         headers = {"sec-websocket-protocol": "lsm-ui"}
         query_params = {}
