@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 import contextlib
-import json
 import threading
 import uuid
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Protocol
 
 from .settings import get_settings
 
@@ -200,24 +199,6 @@ def get_state_store() -> StateStore:
             raise ValueError(f"unsupported state backend: {settings.state_backend}")
         _STORE_CACHE = (signature, store)
         return store
-
-
-def read_json(key: str, default: Any = None) -> Any:
-    raw = get_state_store().read_bytes(key)
-    if raw is None:
-        return default
-    return json.loads(raw.decode("utf-8"))
-
-
-def write_json(key: str, value: Any) -> None:
-    payload = json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode(
-        "utf-8"
-    )
-    get_state_store().write_bytes(key, payload)
-
-
-def delete_state(key: str) -> None:
-    get_state_store().delete(key)
 
 
 @contextlib.contextmanager

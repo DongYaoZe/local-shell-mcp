@@ -148,6 +148,14 @@ def test_audit_detail_requires_scopes_before_materializing_payloads(tmp_path, mo
         "shell:read",
         "browser:use",
     }
+    assert set(ui._audit_detail_scopes({"tool": "job_start", "node": "local"})) == {
+        "shell:read",
+        "shell:execute",
+    }
+    assert set(ui._audit_detail_scopes({"tool": "create_file_link", "node": "local"})) == {
+        "shell:read",
+        "file:share",
+    }
     assert set(ui._audit_detail_scopes({"operation": "other", "node": "worker"})) == set(
         ui.UI_FULL_SCOPES
     )
@@ -414,6 +422,12 @@ def test_disable_local_hides_controller_and_blocks_ui_dispatch(tmp_path, monkeyp
     asyncio.run(ui.ui_terminal_websocket(socket))
     assert socket.closed[0][0] == 4403
     assert "local access is disabled" in socket.closed[0][1].lower()
+
+    monkeypatch.setattr(ui, "_live_websocket_credentials", lambda websocket: {"session": "live"})
+    live_socket = Socket()
+    asyncio.run(ui.ui_terminal_websocket(live_socket))
+    assert live_socket.closed[0][0] == 4403
+    assert "persistent shell sessions" in live_socket.closed[0][1]
 
 
 def test_remote_file_terminal_todo_audit_and_admin_routes(tmp_path, monkeypatch):
