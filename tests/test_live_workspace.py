@@ -427,6 +427,7 @@ async def test_mcp_app_resource_and_render_result_hide_live_token(tmp_path, monk
     assert reconnect_tool.meta["ui"] == {"visibility": ["app"]}
     assert "ui/resourceUri" not in reconnect_tool.meta
     assert "openai/outputTemplate" not in reconnect_tool.meta
+    assert "session_run_id" not in reconnect_tool.inputSchema["properties"]
 
     resources = {str(resource.uri): resource for resource in await mcp.list_resources()}
     resource = resources[LIVE_RESOURCE_URI]
@@ -493,6 +494,17 @@ async def test_live_workspace_reconnect_restores_persisted_logical_session(
     assert isinstance(opened, CallToolResult)
     old_live_id = opened.structuredContent["live_id"]
     assert opened.structuredContent["session_id"] == session_id
+
+    attached_reconnect = await mcp.call_tool(
+        "live_workspace_reconnect",
+        {
+            "cwd": ".",
+            "live_id": old_live_id,
+            "session_id": session_id,
+        },
+    )
+    assert isinstance(attached_reconnect, CallToolResult)
+    assert attached_reconnect.structuredContent["session_id"] == session_id
 
     monkeypatch.setattr(live_channel_module, "_MANAGER", LiveChannelManager())
     monkeypatch.setattr(

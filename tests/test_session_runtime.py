@@ -10,10 +10,14 @@ from local_shell_mcp.session_runtime import (
     PLAN_CONTINUATION_FAILURE_BACKOFF_S,
     PLAN_EXECUTION_LEASE_S,
     PLAN_MAX_STEPS,
+    PLAN_NOTE_LIMIT,
+    PLAN_OBJECTIVE_LIMIT,
+    PLAN_STEP_ID_LIMIT,
+    PLAN_STEP_TEXT_LIMIT,
     SessionRuntimeManager,
 )
 from local_shell_mcp.settings import get_settings
-from local_shell_mcp.state_store import clear_memory_state
+from local_shell_mcp.state_store import MemoryStateStore, clear_memory_state
 
 
 def test_session_progress_and_plan_survive_manager_reload(tmp_path):
@@ -165,6 +169,76 @@ def test_session_list_compacts_large_progress(tmp_path):
     assert progress["blocker_count"] == 50
 
 
+def test_plan_fields_are_bounded_before_persistence(tmp_path):
+    state_dir = tmp_path / ".state"
+    manager = SessionRuntimeManager(state_dir)
+    started = manager.manage("mcp:a", "user", action="start", objective="Task")
+    run_id = started["active_run"]["run_id"]
+    oversized_id = "i" * (PLAN_STEP_ID_LIMIT + 200)
+    plan = manager.manage_plan(
+        "mcp:a",
+        action="start",
+        session_run_id=run_id,
+        objective="o" * (PLAN_OBJECTIVE_LIMIT + 200),
+        steps=[
+            {
+                "id": oversized_id,
+                "text": "t" * (PLAN_STEP_TEXT_LIMIT + 200),
+                "note": "n" * (PLAN_NOTE_LIMIT + 200),
+            }
+        ],
+    )["plan"]
+
+    assert len(plan["objective"]) == PLAN_OBJECTIVE_LIMIT
+    assert len(plan["steps"][0]["id"]) == PLAN_STEP_ID_LIMIT
+    assert len(plan["steps"][0]["text"]) == PLAN_STEP_TEXT_LIMIT
+    assert len(plan["steps"][0]["note"]) == PLAN_NOTE_LIMIT
+
+    updated = manager.manage_plan(
+        "mcp:a",
+        action="update",
+        session_run_id=run_id,
+        objective="u" * (PLAN_OBJECTIVE_LIMIT + 200),
+        step_id=oversized_id,
+        text="x" * (PLAN_STEP_TEXT_LIMIT + 200),
+        note="y" * (PLAN_NOTE_LIMIT + 200),
+    )["plan"]
+    assert len(updated["objective"]) == PLAN_OBJECTIVE_LIMIT
+    assert len(updated["steps"][0]["text"]) == PLAN_STEP_TEXT_LIMIT
+    assert len(updated["steps"][0]["note"]) == PLAN_NOTE_LIMIT
+
+    blocked = manager.manage_plan(
+        "mcp:a",
+        action="block",
+        session_run_id=run_id,
+        note="b" * (PLAN_NOTE_LIMIT + 200),
+    )["plan"]
+    assert len(blocked["note"]) == PLAN_NOTE_LIMIT
+    manager.manage_plan("mcp:a", action="resume", session_run_id=run_id)
+    manager.manage_plan(
+        "mcp:a",
+        action="update",
+        session_run_id=run_id,
+        step_id=oversized_id,
+        status="completed",
+    )
+    finished = manager.manage_plan(
+        "mcp:a",
+        action="finish",
+        session_run_id=run_id,
+        note="f" * (PLAN_NOTE_LIMIT + 200),
+    )["plan"]
+    assert len(finished["note"]) == PLAN_NOTE_LIMIT
+
+    restored = SessionRuntimeManager(state_dir).manage(
+        "mcp:reader", "user", action="get", session_id=started["session_id"]
+    )["plan"]
+    assert len(restored["objective"]) == PLAN_OBJECTIVE_LIMIT
+    assert len(restored["steps"][0]["id"]) == PLAN_STEP_ID_LIMIT
+    assert len(restored["steps"][0]["text"]) == PLAN_STEP_TEXT_LIMIT
+    assert len(restored["steps"][0]["note"]) == PLAN_NOTE_LIMIT
+
+
 def test_plan_continuation_waits_for_inflight_and_backs_off(tmp_path):
     manager = SessionRuntimeManager(tmp_path / ".state")
     started = manager.manage("mcp:a", "user", action="start", objective="Task")
@@ -240,6 +314,68 @@ def test_sessions_use_configured_stateless_state_backend(tmp_path, monkeypatch):
         clear_memory_state()
 
 
+def test_shared_backend_refreshes_sessions_across_controller_instances(tmp_path, monkeypatch):
+    clear_memory_state()
+    monkeypatch.setenv("LOCAL_SHELL_MCP_WORKSPACE_ROOT", str(tmp_path))
+    monkeypatch.setenv("LOCAL_SHELL_MCP_STATE_DIR", str(tmp_path / ".state"))
+    monkeypatch.setenv("LOCAL_SHELL_MCP_STATE_BACKEND", "redis")
+    monkeypatch.setenv("LOCAL_SHELL_MCP_STATE_BACKEND_URL", "redis://state.test/0")
+    monkeypatch.setenv("LOCAL_SHELL_MCP_STATE_BACKEND_PREFIX", "shared-session-runtime-test")
+    get_settings.cache_clear()
+    shared_store = MemoryStateStore("shared-session-runtime-test")
+    monkeypatch.setattr(
+        "local_shell_mcp.session_runtime.get_state_store", lambda: shared_store
+    )
+    try:
+        first = SessionRuntimeManager()
+        second = SessionRuntimeManager()
+        assert second.manage("mcp:reader", "user", action="list")["sessions"] == []
+
+        started = first.manage("mcp:first", "user", action="start", objective="Shared task")
+        session_id = started["session_id"]
+        first_run_id = started["active_run"]["run_id"]
+        assert second.manage(
+            "mcp:reader", "user", action="get", session_id=session_id
+        )["objective"] == "Shared task"
+
+        resumed = second.manage(
+            "mcp:second",
+            "user",
+            action="resume",
+            session_id=session_id,
+            takeover=True,
+        )
+        second_run_id = resumed["active_run"]["run_id"]
+        with pytest.raises(RuntimeError, match="superseded"):
+            first.manage(
+                "mcp:first",
+                "user",
+                action="report",
+                session_id=session_id,
+                session_run_id=first_run_id,
+                summary="stale overwrite",
+            )
+
+        second.manage(
+            "mcp:second",
+            "user",
+            action="report",
+            session_id=session_id,
+            session_run_id=second_run_id,
+            summary="fresh state",
+        )
+        refreshed = first.manage(
+            "mcp:reader-a", "user", action="get", session_id=session_id
+        )
+        assert refreshed["progress"]["summary"] == "fresh state"
+        assert first.manage("mcp:list-a", "user", action="list")["sessions"][0][
+            "session_id"
+        ] == session_id
+    finally:
+        get_settings.cache_clear()
+        clear_memory_state()
+
+
 def test_session_access_is_scoped_to_principal(tmp_path):
     manager = SessionRuntimeManager(tmp_path / ".state")
     started = manager.manage("mcp:a", "alice", action="start", objective="Private task")
@@ -271,12 +407,7 @@ def test_live_workspace_reuses_channel_for_resumed_logical_session(tmp_path):
         session_id=session_id,
         takeover=True,
     )
-    second, _ = live.open(
-        session_key="mcp:agent-b",
-        subject="user",
-        scopes=tuple(ALL_OAUTH_SCOPES),
-        logical_session_id=session_id,
-    )
+    second = live.bind_logical_session("mcp:agent-b", session_id)
 
     assert second is first
     assert second.logical_session_id == session_id

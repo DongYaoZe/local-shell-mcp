@@ -231,7 +231,12 @@ class LiveChannelManager:
     def bind_logical_session(self, session_key: str, logical_session_id: str) -> LiveChannel | None:
         with self._lock:
             self._prune_locked()
-            channel = self.active_for_session(session_key)
+            live_id = self._session_channels.get(session_key)
+            if live_id is None:
+                live_id = self._logical_session_channels.get(logical_session_id)
+                if live_id is not None:
+                    self._session_channels[session_key] = live_id
+            channel = self._channels.get(live_id or "")
             if channel is None:
                 return None
             previous_session_id = channel.logical_session_id

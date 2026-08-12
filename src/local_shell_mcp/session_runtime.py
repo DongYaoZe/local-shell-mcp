@@ -18,6 +18,10 @@ PLAN_MAX_CONTINUATIONS = 10
 PLAN_CONTINUATION_PENDING_TTL_S = 5 * 60
 PLAN_CONTINUATION_FAILURE_BACKOFF_S = 5 * 60
 PLAN_MAX_STEPS = 100
+PLAN_OBJECTIVE_LIMIT = 4_000
+PLAN_STEP_ID_LIMIT = 128
+PLAN_STEP_TEXT_LIMIT = 2_000
+PLAN_NOTE_LIMIT = 2_000
 PLAN_STEP_STATUSES = frozenset({"pending", "active", "completed", "skipped"})
 SESSION_ACTIVITY_LIMIT = 200
 SESSION_REPORT_LIST_LIMIT = 50
@@ -249,6 +253,48 @@ class SessionRuntimeManager:
                 continue
             self._sessions[session.session_id] = session
 
+    def _uses_shared_state_backend(self) -> bool:
+        return self._state_dir_override is None and get_settings().state_backend == "redis"
+
+    def _load_session_from_store_locked(self, session_id: str) -> LogicalSession | None:
+        raw = self._state_store().read_bytes(f"sessions/{session_id}.json")
+        if raw is None:
+            return None
+        try:
+            payload = json.loads(raw.decode("utf-8"))
+            return self._session_from_payload(payload)
+        except (
+            OSError,
+            UnicodeDecodeError,
+            ValueError,
+            TypeError,
+            json.JSONDecodeError,
+        ):
+            return None
+
+    def _refresh_session_locked(self, session_id: str) -> None:
+        if not self._uses_shared_state_backend():
+            return
+        refreshed = self._load_session_from_store_locked(session_id)
+        if refreshed is None:
+            self._sessions.pop(session_id, None)
+        else:
+            self._sessions[session_id] = refreshed
+
+    def _refresh_all_sessions_locked(self) -> None:
+        if not self._uses_shared_state_backend():
+            return
+        refreshed: dict[str, LogicalSession] = {}
+        store = self._state_store()
+        for key in store.list_keys("sessions/"):
+            if not key.endswith(".json"):
+                continue
+            session_id = key.removeprefix("sessions/").removesuffix(".json")
+            session = self._load_session_from_store_locked(session_id)
+            if session is not None:
+                refreshed[session.session_id] = session
+        self._sessions = refreshed
+
     @staticmethod
     def _bounded_text(value: str | None) -> str | None:
         if value is None:
@@ -291,7 +337,11 @@ class SessionRuntimeManager:
         }
 
     @staticmethod
-    def _plan_from_payload(payload: Any) -> PlanState | None:
+    def _bounded_plan_text(value: Any, limit: int) -> str:
+        return str(value or "").strip()[:limit]
+
+    @classmethod
+    def _plan_from_payload(cls, payload: Any) -> PlanState | None:
         if payload is None:
             return None
         if not isinstance(payload, dict):
@@ -301,13 +351,17 @@ class SessionRuntimeManager:
             raise ValueError("invalid plan steps")
         return PlanState(
             plan_id=str(payload["plan_id"]),
-            objective=str(payload["objective"]),
+            objective=cls._bounded_plan_text(payload["objective"], PLAN_OBJECTIVE_LIMIT),
             steps=[
                 PlanStep(
-                    id=str(step["id"]),
-                    text=str(step["text"]),
+                    id=cls._bounded_plan_text(step["id"], PLAN_STEP_ID_LIMIT),
+                    text=cls._bounded_plan_text(step["text"], PLAN_STEP_TEXT_LIMIT),
                     status=str(step.get("status") or "pending"),
-                    note=None if step.get("note") is None else str(step["note"]),
+                    note=(
+                        None
+                        if step.get("note") is None
+                        else cls._bounded_plan_text(step["note"], PLAN_NOTE_LIMIT) or None
+                    ),
                 )
                 for step in steps_payload
                 if isinstance(step, dict)
@@ -316,7 +370,11 @@ class SessionRuntimeManager:
             updated_at=float(payload["updated_at"]),
             status=str(payload.get("status") or "active"),
             revision=int(payload.get("revision") or 1),
-            note=None if payload.get("note") is None else str(payload["note"]),
+            note=(
+                None
+                if payload.get("note") is None
+                else cls._bounded_plan_text(payload["note"], PLAN_NOTE_LIMIT) or None
+            ),
             continuation_count=int(payload.get("continuation_count") or 0),
             continuation_pending=bool(payload.get("continuation_pending")),
             continuation_pending_since=(
@@ -436,7 +494,9 @@ class SessionRuntimeManager:
 
     def _require_session_locked(self, session_id: str, subject: str | None = None) -> LogicalSession:
         self._ensure_loaded_locked()
-        session = self._sessions.get(str(session_id))
+        normalized_id = str(session_id)
+        self._refresh_session_locked(normalized_id)
+        session = self._sessions.get(normalized_id)
         if session is None:
             raise ValueError(f"Unknown logical session: {session_id}")
         if subject is not None and session.subject != subject:
@@ -489,6 +549,8 @@ class SessionRuntimeManager:
             current.updated_at = time.time()
         previous = self._attachments.get(session_key)
         if previous is not None:
+            if previous[0] != session.session_id:
+                self._refresh_session_locked(previous[0])
             previous_session = self._sessions.get(previous[0])
             if previous_session is not None:
                 previous_run = next(
@@ -570,6 +632,7 @@ class SessionRuntimeManager:
                 return self._public_state_locked(logical)
 
             if normalized_action == "list":
+                self._refresh_all_sessions_locked()
                 sessions = [
                     item
                     for item in self._sessions.values()
@@ -849,6 +912,7 @@ class SessionRuntimeManager:
             session_id = str(lease.get("session_id") or "")
             run_id = str(lease.get("run_id") or "")
             call_id = str(lease.get("call_id") or "")
+            self._refresh_session_locked(session_id)
             calls = self._in_flight_calls.get(session_id)
             if calls is not None:
                 calls.pop(call_id, None)
@@ -873,8 +937,8 @@ class SessionRuntimeManager:
                 return f"{type(exc).__name__}: {exc}"
             return None
 
-    @staticmethod
-    def _normalize_plan_steps(steps: list[dict[str, Any]]) -> list[PlanStep]:
+    @classmethod
+    def _normalize_plan_steps(cls, steps: list[dict[str, Any]]) -> list[PlanStep]:
         if not steps:
             raise ValueError("A plan requires at least one step")
         if len(steps) > PLAN_MAX_STEPS:
@@ -882,10 +946,15 @@ class SessionRuntimeManager:
         normalized: list[PlanStep] = []
         seen: set[str] = set()
         for index, raw in enumerate(steps):
-            step_id = str(raw.get("id") or f"step-{index + 1}").strip()
-            text = str(raw.get("text") or raw.get("content") or raw.get("title") or "").strip()
+            step_id = cls._bounded_plan_text(
+                raw.get("id") or f"step-{index + 1}", PLAN_STEP_ID_LIMIT
+            )
+            text = cls._bounded_plan_text(
+                raw.get("text") or raw.get("content") or raw.get("title") or "",
+                PLAN_STEP_TEXT_LIMIT,
+            )
             status = str(raw.get("status") or "pending").strip().lower()
-            note = str(raw.get("note") or "").strip() or None
+            note = cls._bounded_plan_text(raw.get("note"), PLAN_NOTE_LIMIT) or None
             if not step_id or step_id in seen:
                 raise ValueError(f"Plan step ids must be unique; invalid id at index {index}")
             if not text:
@@ -992,7 +1061,7 @@ class SessionRuntimeManager:
         if normalized_action == "start":
             if plan is not None and plan.status in {"active", "blocked"}:
                 raise ValueError("A plan is already active; finish or cancel it before starting another")
-            objective_text = str(objective or "").strip()
+            objective_text = self._bounded_plan_text(objective, PLAN_OBJECTIVE_LIMIT)
             if not objective_text:
                 raise ValueError("objective is required for action=start")
             plan = PlanState(
@@ -1016,7 +1085,7 @@ class SessionRuntimeManager:
                     raise ValueError(f"Cannot update a {plan.status} plan")
                 changed = False
                 if objective is not None:
-                    objective_text = objective.strip()
+                    objective_text = self._bounded_plan_text(objective, PLAN_OBJECTIVE_LIMIT)
                     if not objective_text:
                         raise ValueError("objective cannot be empty")
                     plan.objective = objective_text
@@ -1025,9 +1094,12 @@ class SessionRuntimeManager:
                     plan.steps = self._normalize_plan_steps(list(steps))
                     changed = True
                 if step_id is not None:
-                    target = next((step for step in plan.steps if step.id == step_id), None)
+                    normalized_step_id = self._bounded_plan_text(step_id, PLAN_STEP_ID_LIMIT)
+                    target = next(
+                        (step for step in plan.steps if step.id == normalized_step_id), None
+                    )
                     if target is None:
-                        raise ValueError(f"Unknown plan step: {step_id}")
+                        raise ValueError(f"Unknown plan step: {normalized_step_id}")
                     if status is not None:
                         normalized_status = status.strip().lower()
                         if normalized_status not in PLAN_STEP_STATUSES:
@@ -1039,18 +1111,18 @@ class SessionRuntimeManager:
                         target.status = normalized_status
                         changed = True
                     if text is not None:
-                        normalized_text = text.strip()
+                        normalized_text = self._bounded_plan_text(text, PLAN_STEP_TEXT_LIMIT)
                         if not normalized_text:
                             raise ValueError("step text cannot be empty")
                         target.text = normalized_text
                         changed = True
                     if note is not None:
-                        target.note = note.strip() or None
+                        target.note = self._bounded_plan_text(note, PLAN_NOTE_LIMIT) or None
                         changed = True
                 elif status is not None or text is not None:
                     raise ValueError("step_id is required when updating step status or text")
                 if note is not None and step_id is None:
-                    plan.note = note.strip() or None
+                    plan.note = self._bounded_plan_text(note, PLAN_NOTE_LIMIT) or None
                     changed = True
                 if not changed:
                     raise ValueError("action=update requires objective, steps, step_id, or note")
@@ -1064,7 +1136,7 @@ class SessionRuntimeManager:
             elif normalized_action == "block":
                 if plan.status != "active":
                     raise ValueError(f"Cannot block a {plan.status} plan")
-                reason = str(note or "").strip()
+                reason = self._bounded_plan_text(note, PLAN_NOTE_LIMIT)
                 if not reason:
                     raise ValueError("note is required for action=block")
                 plan.status = "blocked"
@@ -1095,7 +1167,7 @@ class SessionRuntimeManager:
                         "Cannot finish plan while unfinished steps remain: " + ", ".join(unfinished)
                     )
                 plan.status = "completed"
-                plan.note = str(note or "").strip() or plan.note
+                plan.note = self._bounded_plan_text(note, PLAN_NOTE_LIMIT) or plan.note
                 plan.revision += 1
                 plan.updated_at = now
                 plan.continuation_pending = False
@@ -1107,7 +1179,7 @@ class SessionRuntimeManager:
                 if plan.status in {"completed", "cancelled"}:
                     raise ValueError(f"Plan is already {plan.status}")
                 plan.status = "cancelled"
-                plan.note = str(note or "").strip() or plan.note
+                plan.note = self._bounded_plan_text(note, PLAN_NOTE_LIMIT) or plan.note
                 plan.revision += 1
                 plan.updated_at = now
                 plan.continuation_pending = False

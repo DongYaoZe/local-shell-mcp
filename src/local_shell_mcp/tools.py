@@ -597,7 +597,7 @@ def _install_session_run_arguments(mcp: FastMCP) -> None:
     """Expose a run lease on every tool without duplicating it in each function signature."""
 
     for name, tool in mcp._tool_manager._tools.items():  # noqa: SLF001
-        if name in {"session_manage", "plan_manage"}:
+        if name in {"session_manage", "plan_manage", "live_workspace_reconnect"}:
             continue
         argument_model = tool.fn_metadata.arg_model
         extended_model = create_model(
@@ -690,7 +690,7 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
             logical_manager = get_session_runtime_manager()
             live_arguments = _live_event_arguments(__tool_name, safe_call_arguments)
             logical_lease = None
-            if __tool_name != "session_manage":
+            if __tool_name not in {"session_manage", "live_workspace_reconnect"}:
                 require_run_token = not (
                     __tool_name == "plan_manage"
                     and str(call_arguments.get("action") or "").strip().lower() == "get"
