@@ -19,7 +19,9 @@ from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamablehttp_client
 
 from .fs_ops import resolve_path
+from .settings import get_settings
 from .shell_ops import check_command_policy
+from .state_store import get_state_store
 
 _REGISTRY_VERSION = 1
 _MAX_TOOLS_PER_SERVER = 512
@@ -241,10 +243,16 @@ class DynamicMCPManager:
 
     def _load(self) -> dict[str, DynamicMCPServer]:
         try:
-            raw = json.loads(self._path.read_text(encoding="utf-8"))
+            if get_settings().state_backend == "file":
+                raw = json.loads(self._path.read_text(encoding="utf-8"))
+            else:
+                encoded = get_state_store().read_bytes("dynamic-mcp.json")
+                if encoded is None:
+                    return {}
+                raw = json.loads(encoded.decode("utf-8"))
         except FileNotFoundError:
             return {}
-        except (OSError, json.JSONDecodeError) as exc:
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise RuntimeError(f"unable to read dynamic MCP registry: {exc}") from exc
         if raw.get("version") != _REGISTRY_VERSION:
             raise RuntimeError("unsupported dynamic MCP registry version")
@@ -259,7 +267,6 @@ class DynamicMCPManager:
         return servers
 
     def _save(self, servers: dict[str, DynamicMCPServer]) -> None:
-        self._path.parent.mkdir(parents=True, exist_ok=True)
         payload = json.dumps(
             {
                 "version": _REGISTRY_VERSION,
@@ -269,6 +276,10 @@ class DynamicMCPManager:
             separators=(",", ":"),
             sort_keys=True,
         )
+        if get_settings().state_backend != "file":
+            get_state_store().write_bytes("dynamic-mcp.json", (payload + "\n").encode("utf-8"))
+            return
+        self._path.parent.mkdir(parents=True, exist_ok=True)
         fd, temporary_name = tempfile.mkstemp(
             prefix=f".{self._path.name}.", suffix=".tmp", dir=self._path.parent
         )
@@ -393,6 +404,11 @@ class DynamicMCPManager:
 
         if action == "register":
             normalized_transport = (transport or "stdio").strip().lower()
+            if normalized_transport == "stdio" and get_settings().disable_local:
+                raise ValueError(
+                    "stdio dynamic MCP servers are unavailable when local access is disabled; "
+                    "use streamable_http"
+                )
             normalized_args = [str(item) for item in (args or [])]
             normalized_command = command.strip() if command else None
             if normalized_transport == "stdio" and normalized_command:
@@ -481,6 +497,11 @@ class DynamicMCPManager:
                 raise ValueError(f"unknown dynamic MCP server: {name}")
             config = DynamicMCPServer.from_json(server.to_json())
             config_key = _config_key(config)
+        if config.transport == "stdio" and get_settings().disable_local:
+            raise ValueError(
+                "stdio dynamic MCP servers are unavailable when local access is disabled; "
+                "use streamable_http"
+            )
         tools = await self._fetch_tools(config)
         async with self._lock:
             servers = self._load()
@@ -583,6 +604,11 @@ class DynamicMCPManager:
             config = DynamicMCPServer.from_json(server.to_json())
         if not config.enabled:
             raise ValueError(f"dynamic MCP server is disabled: {server_name}")
+        if config.transport == "stdio" and get_settings().disable_local:
+            raise ValueError(
+                "stdio dynamic MCP servers are unavailable when local access is disabled; "
+                "use streamable_http"
+            )
         if not any(tool.get("name") == tool_name for tool in config.tools):
             raise ValueError(
                 f"unknown cached tool {qualified_name}; refresh the server before calling it"

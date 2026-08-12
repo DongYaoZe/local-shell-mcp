@@ -23,12 +23,20 @@ from local_shell_mcp.oauth import ALL_OAUTH_SCOPES
 from local_shell_mcp.settings import get_settings
 
 
-def _configure(tmp_path, monkeypatch, *, remote: bool = False, auth: str = "none"):
+def _configure(
+    tmp_path,
+    monkeypatch,
+    *,
+    remote: bool = False,
+    auth: str = "none",
+    disable_local: bool = False,
+):
     monkeypatch.setenv("LOCAL_SHELL_MCP_WORKSPACE_ROOT", str(tmp_path))
     monkeypatch.setenv("LOCAL_SHELL_MCP_STATE_DIR", str(tmp_path / ".state"))
     monkeypatch.setenv("LOCAL_SHELL_MCP_AUDIT_LOG_PATH", str(tmp_path / "audit.jsonl"))
     monkeypatch.setenv("LOCAL_SHELL_MCP_AUTH_MODE", auth)
     monkeypatch.setenv("LOCAL_SHELL_MCP_REMOTE_ENABLED", str(remote).lower())
+    monkeypatch.setenv("LOCAL_SHELL_MCP_DISABLE_LOCAL", str(disable_local).lower())
     monkeypatch.setenv("LOCAL_SHELL_MCP_UI_WALLPAPER", "none")
     get_settings.cache_clear()
 
@@ -139,6 +147,14 @@ def test_audit_detail_requires_scopes_before_materializing_payloads(tmp_path, mo
     assert set(ui._audit_detail_scopes({"operation": "browser", "node": "local"})) == {
         "shell:read",
         "browser:use",
+    }
+    assert set(ui._audit_detail_scopes({"tool": "job_start", "node": "local"})) == {
+        "shell:read",
+        "shell:execute",
+    }
+    assert set(ui._audit_detail_scopes({"tool": "create_file_link", "node": "local"})) == {
+        "shell:read",
+        "file:share",
     }
     assert set(ui._audit_detail_scopes({"operation": "other", "node": "worker"})) == set(
         ui.UI_FULL_SCOPES
@@ -377,6 +393,47 @@ def test_remote_dispatch_machine_rows_and_errors(tmp_path, monkeypatch):
 
     monkeypatch.setattr(manager, "list_machines", broken)
     assert ui._machine_uses_windows_paths("win-node") is False
+
+
+def test_disable_local_hides_controller_and_blocks_ui_dispatch(tmp_path, monkeypatch):
+    _configure(tmp_path, monkeypatch, remote=True, disable_local=True)
+    manager = FakeRemoteManager()
+    monkeypatch.setattr(ui, "remote_manager", lambda: manager)
+
+    rows = ui._machine_rows()
+    assert all(machine["name"] != "local" for machine in rows["machines"])
+    assert rows["counts"] == {"online": 1, "offline": 0, "total": 1}
+
+    with pytest.raises(RuntimeError, match="Local access is disabled"):
+        asyncio.run(ui._machine_dispatch("local", lambda: {"sync": True}, "x", {}))
+
+    preview = TestClient(Starlette(routes=ui.ui_routes())).get(
+        "/api/ui/files/preview", params={"machine": "local", "path": "."}
+    )
+    assert preview.status_code == 400
+    assert "Local access is disabled" in preview.json()["message"]
+
+    class Socket:
+        headers = {"sec-websocket-protocol": "lsm-ui"}
+        query_params = {}
+
+        def __init__(self):
+            self.closed = []
+
+        async def close(self, code=1000, reason=""):
+            self.closed.append((code, reason))
+
+    monkeypatch.setattr(ui, "_authorize_websocket", lambda websocket: True)
+    socket = Socket()
+    asyncio.run(ui.ui_terminal_websocket(socket))
+    assert socket.closed[0][0] == 4403
+    assert "local access is disabled" in socket.closed[0][1].lower()
+
+    monkeypatch.setattr(ui, "_live_websocket_credentials", lambda websocket: {"session": "live"})
+    live_socket = Socket()
+    asyncio.run(ui.ui_terminal_websocket(live_socket))
+    assert live_socket.closed[0][0] == 4403
+    assert "persistent shell sessions" in live_socket.closed[0][1]
 
 
 def test_remote_file_terminal_audit_and_admin_routes(tmp_path, monkeypatch):

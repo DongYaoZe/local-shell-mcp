@@ -65,6 +65,8 @@ async def _run_machine_shell(
     max_output_bytes: int,
 ) -> CommandResult:
     if machine == "local":
+        if get_settings().disable_local:
+            raise RuntimeError("Local access is disabled; select a remote machine")
         return await run_shell(
             command,
             cwd=cwd,

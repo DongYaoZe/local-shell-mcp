@@ -51,6 +51,22 @@ def test_live_workspace_resource_uri_stays_stable_with_versioned_alias():
     assert f"ui://local-shell-mcp/live-workspace-{digest}.html" == LIVE_RESOURCE_VERSIONED_URI
 
 
+@pytest.mark.asyncio
+async def test_remote_only_live_workspace_rejects_local_git_shell(tmp_path, monkeypatch):
+    _configure(tmp_path, monkeypatch, auth="none")
+    monkeypatch.setenv("LOCAL_SHELL_MCP_DISABLE_LOCAL", "true")
+    get_settings.cache_clear()
+
+    with pytest.raises(RuntimeError, match="Local access is disabled"):
+        await live_routes._run_machine_shell(
+            "local",
+            "git status --short --branch",
+            cwd=".",
+            timeout_s=5,
+            max_output_bytes=1024,
+        )
+
+
 def test_live_workspace_tokens_rotate_and_events_are_bounded():
     manager = LiveChannelManager()
     parent_deadline = time.time() + 60

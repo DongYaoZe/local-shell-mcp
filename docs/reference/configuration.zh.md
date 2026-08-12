@@ -34,6 +34,11 @@ LOCAL_SHELL_MCP_OAUTH_JWT_SECRET=change-me-long-random-secret
 | `audit_log_path` | `LOCAL_SHELL_MCP_AUDIT_LOG_PATH` | `PosixPath('/workspace/.local-shell-mcp/audit.jsonl')` | 审计日志路径。 |
 | `agent_config_dir` | `LOCAL_SHELL_MCP_AGENT_CONFIG_DIR` | `PosixPath('/workspace/.local-shell-mcp/agent_config')` | agent 配置目录。 |
 | `allow_full_container` | `LOCAL_SHELL_MCP_ALLOW_FULL_CONTAINER` | `False` | 为 true 时禁用工作区 / 路径限制；只在一次性边界内使用。 |
+| `disable_local` | `LOCAL_SHELL_MCP_DISABLE_LOCAL` | `False` | 禁用控制器主机作为 shell / 文件 / 浏览器执行目标；远程 worker 与控制平面服务仍可使用。 |
+| `stateless_controller` | `LOCAL_SHELL_MCP_STATELESS_CONTROLLER` | `False` | 面向临时实例/serverless 的无状态控制器模式；隐含 `disable_local`，默认使用内存状态后端。使用默认的 `auth_mode=oauth` 时，需要显式配置强 `oauth_jwt_secret`。 |
+| `state_backend` | `LOCAL_SHELL_MCP_STATE_BACKEND` | `'file'` | `file`、`memory` 或 `redis`；serverless 冷启动后需要保留状态时使用 Redis。 |
+| `state_backend_url` | `LOCAL_SHELL_MCP_STATE_BACKEND_URL` | `None` | `state_backend=redis` 时的 Redis URL；诊断输出会隐藏。 |
+| `state_backend_prefix` | `LOCAL_SHELL_MCP_STATE_BACKEND_PREFIX` | `'local-shell-mcp'` | 内存/Redis 控制面状态的命名空间。 |
 
 ### 限制
 
@@ -86,6 +91,17 @@ LOCAL_SHELL_MCP_OAUTH_JWT_SECRET=change-me-long-random-secret
 | `remote_job_timeout_s` | `LOCAL_SHELL_MCP_REMOTE_JOB_TIMEOUT_S` | `3600` | 远程 job 默认超时。 |
 | `remote_max_pending_jobs` | `LOCAL_SHELL_MCP_REMOTE_MAX_PENDING_JOBS` | `256` | 每个 worker 最多排队或等待完成的 job 数。 |
 | `remote_cancelled_job_ttl_s` | `LOCAL_SHELL_MCP_REMOTE_CANCELLED_JOB_TTL_S` | `3600` | 用于跳过已超时排队任务的取消标记保留时间。 |
+| `remote_transfer_strategy` | `LOCAL_SHELL_MCP_REMOTE_TRANSFER_STRATEGY` | `'auto'` | `auto`、`relay`、`direct` 或 `object_store`；`auto` 依次尝试已启用的 worker 直传、S3，再回退到 controller 有界内存 relay。 |
+| `remote_peer_transfer_enabled` | `LOCAL_SHELL_MCP_REMOTE_PEER_TRANSFER_ENABLED` | `False` | 启用目标 worker 的一次性 HTTP receiver 进行 worker→worker 直传；仅建议在 VPC/Tailscale 等可信私网中开启。 |
+| `remote_peer_transfer_bind_host` | `LOCAL_SHELL_MCP_REMOTE_PEER_TRANSFER_BIND_HOST` | `'0.0.0.0'` | 一次性 receiver 的监听地址。 |
+| `remote_peer_transfer_advertise_host` | `LOCAL_SHELL_MCP_REMOTE_PEER_TRANSFER_ADVERTISE_HOST` | `None` | 告知源 worker 的目标地址；默认使用目标 worker 主机名/FQDN。 |
+| `remote_peer_transfer_port` | `LOCAL_SHELL_MCP_REMOTE_PEER_TRANSFER_PORT` | `0` | receiver 端口；`0` 表示自动选择临时端口。 |
+| `remote_peer_transfer_timeout_s` | `LOCAL_SHELL_MCP_REMOTE_PEER_TRANSFER_TIMEOUT_S` | `3600` | 一次性直传 receiver 的超时/存活时间。 |
+| `remote_transfer_s3_bucket` | `LOCAL_SHELL_MCP_REMOTE_TRANSFER_S3_BUCKET` | `None` | 可选 S3 兼容 bucket，用于预签名 URL 传输；需安装 `s3` extra。 |
+| `remote_transfer_s3_prefix` | `LOCAL_SHELL_MCP_REMOTE_TRANSFER_S3_PREFIX` | `'local-shell-mcp'` | 临时对象 key 前缀。 |
+| `remote_transfer_s3_region` | `LOCAL_SHELL_MCP_REMOTE_TRANSFER_S3_REGION` | `None` | 可选 S3 region。 |
+| `remote_transfer_s3_endpoint_url` | `LOCAL_SHELL_MCP_REMOTE_TRANSFER_S3_ENDPOINT_URL` | `None` | 可选 S3 兼容 endpoint。 |
+| `remote_transfer_s3_presign_ttl_s` | `LOCAL_SHELL_MCP_REMOTE_TRANSFER_S3_PRESIGN_TTL_S` | `3600` | 预签名 PUT/GET URL 有效期；传输结束后自动删除临时对象。 |
 
 ### Shell 与可执行路径
 
@@ -132,11 +148,24 @@ mode: mcp
 workspace_root: /workspace
 auth_mode: oauth
 remote_enabled: true
+disable_local: false
 file_download_enabled: true
 shell_env_blocked_prefixes:
   - LOCAL_SHELL_MCP_
   - DOCKER_
 ```
+
+Serverless 控制器并使用 Redis 持久化控制面状态：
+
+```yaml
+mode: mcp
+stateless_controller: true
+state_backend: redis
+state_backend_url: redis://redis.internal:6379/0
+remote_transfer_strategy: auto
+```
+
+`stateless_controller` 不要求 controller 挂载持久卷。`memory` 后端是完全临时的：冷启动会使待使用的 remote invite 和 worker identity 失效，并丢弃 OAuth client、job 与 audit 状态。需要这些状态跨冷启动保留（包括可靠的 worker revoke 语义）时应使用 Redis。使用默认的 `auth_mode=oauth` 时，同时通过 `LOCAL_SHELL_MCP_OAUTH_JWT_SECRET` 注入至少 32 字节的随机密钥。当前远程 RPC 的活动队列/等待 future 仍位于 controller 进程内，因此使用 remote worker 时应保持单个 active controller 实例，而不是多个负载均衡副本。
 
 ## 运维建议
 

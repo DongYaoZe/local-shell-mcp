@@ -74,6 +74,8 @@ _POSITIVE_INTEGER_SETTINGS = (
     "remote_invite_ttl_s",
     "remote_poll_timeout_s",
     "remote_job_timeout_s",
+    "remote_peer_transfer_timeout_s",
+    "remote_transfer_s3_presign_ttl_s",
     "remote_max_pending_jobs",
     "remote_cancelled_job_ttl_s",
     "mcp_session_idle_timeout_s",
@@ -86,6 +88,7 @@ _NONNEGATIVE_INTEGER_SETTINGS = (
     "file_download_default_max_downloads",
     "file_download_max_file_bytes",
     "oauth_access_token_ttl_s",
+    "remote_peer_transfer_port",
 )
 
 
@@ -100,6 +103,8 @@ def _validate_numeric_settings(settings: Settings) -> None:
             raise ValueError(f"{name} must be greater than or equal to zero")
     if int(settings.port) > 65535:
         raise ValueError("port must be <= 65535")
+    if int(settings.remote_peer_transfer_port) > 65535:
+        raise ValueError("remote_peer_transfer_port must be <= 65535")
     if settings.max_timeout_s < settings.default_timeout_s:
         raise ValueError("max_timeout_s must be >= default_timeout_s")
     if settings.file_download_max_ttl_s < settings.file_download_default_ttl_s:
@@ -218,6 +223,13 @@ def _ensure_oauth_jwt_secret(settings: Settings) -> Settings:
     if settings.auth_mode != "oauth":
         return settings
     current = str(settings.oauth_jwt_secret or "")
+    if settings.stateless_controller and (
+        current in _WEAK_OAUTH_SECRET_VALUES or len(current.encode("utf-8")) < 32
+    ):
+        raise RuntimeError(
+            "LOCAL_SHELL_MCP_OAUTH_JWT_SECRET must be explicitly configured with at least "
+            "32 bytes when stateless_controller=true"
+        )
     if current not in _WEAK_OAUTH_SECRET_VALUES:
         return settings
     return _replace_settings(
@@ -264,6 +276,7 @@ SENSITIVE_SETTING_KEYS = {
     "cf_access_allowed_email_domains",
     "oauth_admin_pin",
     "oauth_jwt_secret",
+    "state_backend_url",
 }
 
 
@@ -314,6 +327,15 @@ if _PYDANTIC_AVAILABLE:
 
         # By default, tools are limited to workspace_root. Set true only inside a disposable container.
         allow_full_container: bool = False
+        # Disable the controller host as an execution/workspace target while keeping
+        # remote workers and control-plane services available.
+        disable_local: bool = False
+        # Run the controller without persistent local state. This implies disable_local
+        # and defaults the state backend to process memory unless Redis is configured.
+        stateless_controller: bool = False
+        state_backend: Literal["file", "memory", "redis"] = "file"
+        state_backend_url: str | None = None
+        state_backend_prefix: str = "local-shell-mcp"
 
         default_timeout_s: int = 60
         max_timeout_s: int = 3600
@@ -369,6 +391,17 @@ if _PYDANTIC_AVAILABLE:
         remote_job_timeout_s: int = 3600
         remote_max_pending_jobs: int = 256
         remote_cancelled_job_ttl_s: int = 3600
+        remote_transfer_strategy: Literal["auto", "relay", "direct", "object_store"] = "auto"
+        remote_peer_transfer_enabled: bool = False
+        remote_peer_transfer_bind_host: str = "0.0.0.0"
+        remote_peer_transfer_advertise_host: str | None = None
+        remote_peer_transfer_port: int = 0
+        remote_peer_transfer_timeout_s: int = 3600
+        remote_transfer_s3_bucket: str | None = None
+        remote_transfer_s3_prefix: str = "local-shell-mcp"
+        remote_transfer_s3_region: str | None = None
+        remote_transfer_s3_endpoint_url: str | None = None
+        remote_transfer_s3_presign_ttl_s: int = 3600
 
         shell_executable: str = Field(default_factory=default_shell_executable)
         shell_env_blocklist: Annotated[list[str], NoDecode] = Field(
@@ -454,6 +487,14 @@ if _PYDANTIC_AVAILABLE:
         @model_validator(mode="after")
         def disable_builtin_restrictions_in_full_container_mode(self) -> Settings:
             _validate_numeric_settings(self)
+            if self.stateless_controller:
+                self.disable_local = True
+                if self.state_backend == "file":
+                    self.state_backend = "memory"
+                self.file_download_enabled = False
+                self.ui_wallpaper = "none"
+            if self.state_backend == "redis" and not self.state_backend_url:
+                raise ValueError("state_backend_url is required when state_backend=redis")
             if self.allow_full_container:
                 self.command_denylist = []
                 self.path_denylist = []
@@ -519,6 +560,11 @@ else:
         agent_config_dir: Path = DEFAULT_AGENT_CONFIG_DIR
 
         allow_full_container: bool = False
+        disable_local: bool = False
+        stateless_controller: bool = False
+        state_backend: Literal["file", "memory", "redis"] = "file"
+        state_backend_url: str | None = None
+        state_backend_prefix: str = "local-shell-mcp"
 
         default_timeout_s: int = 60
         max_timeout_s: int = 3600
@@ -567,6 +613,17 @@ else:
         remote_job_timeout_s: int = 3600
         remote_max_pending_jobs: int = 256
         remote_cancelled_job_ttl_s: int = 3600
+        remote_transfer_strategy: Literal["auto", "relay", "direct", "object_store"] = "auto"
+        remote_peer_transfer_enabled: bool = False
+        remote_peer_transfer_bind_host: str = "0.0.0.0"
+        remote_peer_transfer_advertise_host: str | None = None
+        remote_peer_transfer_port: int = 0
+        remote_peer_transfer_timeout_s: int = 3600
+        remote_transfer_s3_bucket: str | None = None
+        remote_transfer_s3_prefix: str = "local-shell-mcp"
+        remote_transfer_s3_region: str | None = None
+        remote_transfer_s3_endpoint_url: str | None = None
+        remote_transfer_s3_presign_ttl_s: int = 3600
 
         shell_executable: str = field(default_factory=default_shell_executable)
         shell_env_blocklist: list[str] = field(default_factory=lambda: ["CLOUDFLARE_TUNNEL_TOKEN"])
@@ -642,6 +699,14 @@ else:
                 )
             self.ui_path = normalize_ui_path(self.ui_path)
             _validate_numeric_settings(self)
+            if self.stateless_controller:
+                self.disable_local = True
+                if self.state_backend == "file":
+                    self.state_backend = "memory"
+                self.file_download_enabled = False
+                self.ui_wallpaper = "none"
+            if self.state_backend == "redis" and not self.state_backend_url:
+                raise ValueError("state_backend_url is required when state_backend=redis")
             if self.allow_full_container:
                 self.command_denylist = []
                 self.path_denylist = []
@@ -685,11 +750,14 @@ def get_settings() -> Settings:
     if config:
         settings = settings.apply_yaml(Path(config).expanduser())
     settings = settings.with_workspace_relative_defaults()
-    settings.workspace_root.mkdir(parents=True, exist_ok=True)
-    settings.state_dir.mkdir(parents=True, exist_ok=True)
+    if not settings.stateless_controller:
+        settings.workspace_root.mkdir(parents=True, exist_ok=True)
+    if settings.state_backend == "file":
+        settings.state_dir.mkdir(parents=True, exist_ok=True)
     settings = _ensure_oauth_jwt_secret(settings)
-    settings.audit_log_path.parent.mkdir(parents=True, exist_ok=True)
-    settings.agent_config_dir.mkdir(parents=True, exist_ok=True)
+    if settings.state_backend == "file":
+        settings.audit_log_path.parent.mkdir(parents=True, exist_ok=True)
+        settings.agent_config_dir.mkdir(parents=True, exist_ok=True)
     return settings
 
 
