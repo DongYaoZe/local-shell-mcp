@@ -21,6 +21,17 @@ from local_shell_mcp.jobs import (
 from local_shell_mcp.settings import get_settings
 
 
+async def _wait_for_shell_job_completion(job_id: str, timeout_s: float = 15.0):
+    deadline = time.monotonic() + timeout_s
+    while True:
+        row = next(
+            job for job in (await list_jobs())["jobs"] if job["job_id"] == job_id
+        )
+        if row["status"] != "running" or time.monotonic() >= deadline:
+            return row
+        await asyncio.sleep(0.1)
+
+
 def test_job_store_lock_retries_then_succeeds(tmp_path, monkeypatch):
     lock_path = tmp_path / "jobs.lock"
     attempts = 0
@@ -724,12 +735,7 @@ async def test_completed_job_retains_output_and_exit_code(tmp_path, monkeypatch)
     get_settings.cache_clear()
 
     job = await start_job("printf 'completed-output\n'; exit 3")
-    row = job
-    for _ in range(50):
-        await asyncio.sleep(0.1)
-        row = (await list_jobs())["jobs"][0]
-        if row["status"] != "running":
-            break
+    row = await _wait_for_shell_job_completion(job["job_id"])
 
     assert row["status"] == "failed"
     assert row["exit_code"] == 3
@@ -748,12 +754,7 @@ async def test_job_log_is_bounded_and_reports_truncation(tmp_path, monkeypatch):
     get_settings.cache_clear()
 
     job = await start_job("python3 -c \"print('x' * 200)\"")
-    row = job
-    for _ in range(50):
-        await asyncio.sleep(0.1)
-        row = (await list_jobs())["jobs"][0]
-        if row["status"] != "running":
-            break
+    row = await _wait_for_shell_job_completion(job["job_id"])
 
     assert row["status"] == "succeeded"
     assert row["log_truncated"] is True
