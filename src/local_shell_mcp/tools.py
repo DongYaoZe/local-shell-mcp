@@ -17,7 +17,7 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import CallToolResult, ImageContent, TextContent, ToolAnnotations
 from pathspec.gitignore import GitIgnoreSpec
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, create_model
 
 from . import __version__
 from .audit import audit, audit_call_context, audit_result_ok
@@ -298,11 +298,18 @@ MCP_INSTRUCTIONS = (
     "provide a capability, use mcp_tool_search, then mcp_tool_inspect, then mcp_tool_call; "
     "dynamic MCP tools never appear directly in tools/list. For substantive tool-driven work, "
     "create a durable logical task context first with session_manage(action='start', objective=...). "
+    "While a logical session is attached, pass its active_run.run_id as session_run_id on subsequent "
+    "tool calls; after resume/takeover, switch to the newly returned run id. "
     "Keep that session current with session_manage(action='report', ...) at meaningful checkpoints and "
     "before handing work off. When continuing work from another ChatGPT run or MCP transport, call "
     "session_manage(action='resume', session_id=..., takeover=true) before using execution tools. "
     "Logical sessions are not bound to machines or working directories. plan_manage is optional Goal mode "
     "owned by the current logical session, not by Live Workspace."
+)
+
+SESSION_RUN_ARGUMENT_DESCRIPTION = (
+    "Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical "
+    "session is attached; use the new value after resume/takeover."
 )
 
 
@@ -586,6 +593,49 @@ def _timeout_payload_for_tool(tool_name: str, exc: Exception) -> dict | str:
     return _handled_error(exc)
 
 
+def _install_session_run_arguments(mcp: FastMCP) -> None:
+    """Expose a run lease on every tool without duplicating it in each function signature."""
+
+    for name, tool in mcp._tool_manager._tools.items():  # noqa: SLF001
+        if name in {"session_manage", "plan_manage"}:
+            continue
+        argument_model = tool.fn_metadata.arg_model
+        extended_model = create_model(
+            f"{argument_model.__name__}WithSessionRun",
+            __base__=argument_model,
+            session_run_id=(
+                str | None,
+                Field(default=None, description=SESSION_RUN_ARGUMENT_DESCRIPTION),
+            ),
+        )
+        tool.fn_metadata.arg_model = extended_model
+        tool.parameters = extended_model.model_json_schema()
+
+
+def _finish_session_tool_activity(
+    manager: Any,
+    lease: dict[str, Any] | None,
+    event_type: str,
+    data: dict[str, Any],
+    *,
+    tool_name: str,
+    call_id: str,
+    stage: str,
+) -> None:
+    try:
+        persistence_error = manager.finish_tool_call(lease, event_type, data=data)
+    except Exception as exc:  # noqa: BLE001 - activity failures must not mask tool results.
+        persistence_error = f"{type(exc).__name__}: {exc}"
+    if persistence_error:
+        audit(
+            "session_activity_persistence_failed",
+            tool=tool_name,
+            call_id=call_id,
+            stage=stage,
+            error=persistence_error,
+        )
+
+
 def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
     for tool in mcp._tool_manager._tools.values():  # noqa: SLF001
         original = tool.fn
@@ -607,11 +657,17 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
             **kwargs,
         ):
             require_current_scopes(__required_scopes)
+            session_run_id = kwargs.get("session_run_id")
+            invoke_kwargs = dict(kwargs)
+            if __tool_name not in {"session_manage", "plan_manage"}:
+                invoke_kwargs.pop("session_run_id", None)
             try:
-                bound = __signature.bind_partial(*args, **kwargs)
+                bound = __signature.bind_partial(*args, **invoke_kwargs)
                 call_arguments = dict(bound.arguments)
             except TypeError:
-                call_arguments = dict(kwargs)
+                call_arguments = dict(invoke_kwargs)
+            if session_run_id is not None:
+                call_arguments["session_run_id"] = session_run_id
             local_access_error = _disabled_local_access_error(__tool_name, call_arguments)
             if any(call_arguments.get(name) for name in REMOTE_MACHINE_ARGUMENTS):
                 require_current_scopes(("remote:use",))
@@ -632,12 +688,33 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
             live_session_key = mcp_session_key(mcp)
             live_manager = get_live_channel_manager()
             logical_manager = get_session_runtime_manager()
+            live_arguments = _live_event_arguments(__tool_name, safe_call_arguments)
+            logical_lease = None
             if __tool_name != "session_manage":
-                logical_manager.assert_current_run(live_session_key)
+                require_run_token = not (
+                    __tool_name == "plan_manage"
+                    and str(call_arguments.get("action") or "").strip().lower() == "get"
+                )
+                logical_lease = logical_manager.begin_tool_call(
+                    live_session_key,
+                    call_id,
+                    expected_run_id=(
+                        str(session_run_id) if session_run_id is not None else None
+                    ),
+                    require_run_token=require_run_token,
+                    data=live_arguments,
+                )
+                if logical_lease and logical_lease.get("persistence_error"):
+                    audit(
+                        "session_activity_persistence_failed",
+                        tool=__tool_name,
+                        call_id=call_id,
+                        stage="started",
+                        error=str(logical_lease["persistence_error"]),
+                    )
             if __tool_name not in {"open_live_workspace", "live_workspace_reconnect"}:
                 live_subject = _current_principal_subject()
                 live_manager.claim_recovery_session(live_session_key, live_subject)
-            live_arguments = _live_event_arguments(__tool_name, safe_call_arguments)
             live_manager.publish_for_session(
                 live_session_key,
                 "tool.started",
@@ -655,10 +732,10 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
                     if local_access_error is not None:
                         result = _handled_error(RuntimeError(local_access_error))
                     elif __tool_name in NON_CANCELLABLE_TOOL_NAMES:
-                        result = await __original(*args, **kwargs)
+                        result = await __original(*args, **invoke_kwargs)
                     else:
                         result = await asyncio.wait_for(
-                            __original(*args, **kwargs), timeout=PUBLIC_TOOL_TIMEOUT_S
+                            __original(*args, **invoke_kwargs), timeout=PUBLIC_TOOL_TIMEOUT_S
                         )
                 serialized_result = _safe_audit_result(__tool_name, result)
                 call_ok = audit_result_ok(result) and not bool(call_state["failed"])
@@ -689,10 +766,14 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
                     "tool.completed" if call_ok else "tool.failed",
                     data=completion_data,
                 )
-                logical_manager.record_activity(
-                    live_session_key,
+                _finish_session_tool_activity(
+                    logical_manager,
+                    logical_lease,
                     "tool.completed" if call_ok else "tool.failed",
-                    data=completion_data,
+                    completion_data,
+                    tool_name=__tool_name,
+                    call_id=call_id,
+                    stage="completed",
                 )
                 return result
             except TimeoutError:
@@ -730,8 +811,14 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
                     "tool.failed",
                     data=failure_data,
                 )
-                logical_manager.record_activity(
-                    live_session_key, "tool.failed", data=failure_data
+                _finish_session_tool_activity(
+                    logical_manager,
+                    logical_lease,
+                    "tool.failed",
+                    failure_data,
+                    tool_name=__tool_name,
+                    call_id=call_id,
+                    stage="timeout",
                 )
                 return result
             except Exception as exc:
@@ -758,8 +845,14 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
                     "tool.failed",
                     data=failure_data,
                 )
-                logical_manager.record_activity(
-                    live_session_key, "tool.failed", data=failure_data
+                _finish_session_tool_activity(
+                    logical_manager,
+                    logical_lease,
+                    "tool.failed",
+                    failure_data,
+                    tool_name=__tool_name,
+                    call_id=call_id,
+                    stage="failed",
                 )
                 raise
 
@@ -858,7 +951,6 @@ READ_ONLY_OPEN_WORLD_TOOL_NAMES = {
 NON_DESTRUCTIVE_MUTATION_TOOL_NAMES = {
     "create_file_link",
     "open_live_workspace",
-    "plan_manage",
 }
 
 
@@ -2654,6 +2746,7 @@ def _register_maintenance_tools(mcp: FastMCP, read_only_tool: ToolAnnotations) -
     async def session_manage(
         action: str,
         session_id: str | None = None,
+        session_run_id: str | None = None,
         label: str | None = None,
         objective: str | None = None,
         summary: str | None = None,
@@ -2662,7 +2755,7 @@ def _register_maintenance_tools(mcp: FastMCP, read_only_tool: ToolAnnotations) -
         blockers: list[str] | None = None,
         takeover: bool = False,
     ) -> ToolResult:
-        """Manage a durable logical task session independent of machine and cwd. Start one before substantive tool-driven work; report semantic progress at meaningful checkpoints; resume by session_id to hand work to a new GPT/MCP run. resume with takeover=true supersedes any still-active previous run, which is then prevented from continuing. Actions: start, resume, get, report, list, finish, cancel. start may include label/objective; report accepts summary/findings/next/blockers/objective/label."""
+        """Manage a durable logical task session independent of machine and cwd. Start one before substantive tool-driven work; report semantic progress at meaningful checkpoints; resume by session_id to hand work to a new GPT/MCP run. resume with takeover=true always creates a new agent run and supersedes the old one. Use the returned active_run.run_id as session_run_id for report/finish/cancel and subsequent tools. Actions: start, resume, get, report, list, finish, cancel. start may include label/objective; report accepts summary/findings/next/blockers/objective/label."""
         session_key = mcp_session_key(mcp)
         result = await _tool_call(
             get_session_runtime_manager().manage,
@@ -2670,6 +2763,7 @@ def _register_maintenance_tools(mcp: FastMCP, read_only_tool: ToolAnnotations) -
             _current_principal_subject(),
             action=action,
             session_id=session_id,
+            session_run_id=session_run_id,
             label=label,
             objective=objective,
             summary=summary,
@@ -2677,6 +2771,7 @@ def _register_maintenance_tools(mcp: FastMCP, read_only_tool: ToolAnnotations) -
             next=next,
             blockers=blockers,
             takeover=takeover,
+            require_run_token=True,
         )
         if isinstance(result, dict) and result.get("ok"):
             data = result.get("data")
@@ -2700,6 +2795,7 @@ def _register_maintenance_tools(mcp: FastMCP, read_only_tool: ToolAnnotations) -
     @mcp.tool(structured_output=True, meta=shell_write_meta)
     async def plan_manage(
         action: str,
+        session_run_id: str | None = None,
         objective: str | None = None,
         steps: list[dict[str, Any]] | None = None,
         step_id: str | None = None,
@@ -2707,11 +2803,13 @@ def _register_maintenance_tools(mcp: FastMCP, read_only_tool: ToolAnnotations) -
         text: str | None = None,
         note: str | None = None,
     ) -> ToolResult:
-        """Manage the optional Goal plan owned by the current logical session. An active plan enables automatic continuation after 15 minutes without agent activity, capped at 10 accepted continuation messages. Start or resume a logical session with session_manage first. Actions: start, get, update, block, resume, finish, cancel. start requires objective and steps; finish requires every step to be completed or skipped."""
+        """Manage the optional Goal plan owned by the current logical session. An active plan enables automatic continuation after 15 minutes without agent activity, capped at 10 continuation attempts. Start or resume a logical session with session_manage first. Mutating actions require that session's active_run.run_id as session_run_id. Actions: start, get, update, block, resume, finish, cancel. start requires objective and steps; finish requires every step to be completed or skipped."""
         return await _tool_call(
             get_session_runtime_manager().manage_plan,
             mcp_session_key(mcp),
             action=action,
+            session_run_id=session_run_id,
+            require_run_token=True,
             objective=objective,
             steps=steps,
             step_id=step_id,
@@ -3122,5 +3220,6 @@ def build_mcp() -> FastMCP:
     _remove_remote_tools_when_disabled(mcp)
     _remove_local_only_tools_when_disabled(mcp)
     _install_tool_annotations(mcp)
+    _install_session_run_arguments(mcp)
     _install_mcp_tool_watchdogs(mcp)
     return mcp

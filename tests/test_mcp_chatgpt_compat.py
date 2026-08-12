@@ -211,12 +211,16 @@ async def test_tool_annotations_are_conservative_and_mode_independent(
     assert tools["mcp_manage"].annotations.openWorldHint is True
     assert tools["mcp_tool_call"].annotations.destructiveHint is True
     assert tools["mcp_tool_call"].annotations.openWorldHint is True
+    assert tools["plan_manage"].annotations.destructiveHint is True
     assert tools["read_file"].annotations.readOnlyHint is True
     assert tools["read_file"].annotations.openWorldHint is True
     assert tools["view_image"].annotations.readOnlyHint is True
     assert tools["view_image"].annotations.openWorldHint is True
     assert tools["search"].annotations.readOnlyHint is True
     assert tools["search"].annotations.openWorldHint is False
+    assert "session_run_id" in tools["run_shell_tool"].inputSchema["properties"]
+    assert "session_run_id" in tools["plan_manage"].inputSchema["properties"]
+    assert "session_run_id" in tools["session_manage"].inputSchema["properties"]
     assert all(tool.annotations is not None for tool in tools.values())
 
     monkeypatch.setenv("LOCAL_SHELL_MCP_ALLOW_FULL_CONTAINER", "false")

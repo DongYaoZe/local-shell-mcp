@@ -31,7 +31,7 @@ Docker、VS Code 擴展、二進制、Python 和 stdio 是運行時；ChatGPT �
 
 ## 它提供什麼
 
-`local-shell-mcp` 會把一個受控的本地或容器工作區暴露給 ChatGPT 和其它 MCP 客戶端。它提供 Shell、持久 Shell、文件系統、搜索、補丁、Git、Playwright、審計、todo、臨時文件鏈接和遠程節點工具，並支持 ChatGPT 兼容的 MCP over HTTP 與 OAuth。
+`local-shell-mcp` 會把一個受控的本地或容器工作區暴露給 ChatGPT 和其它 MCP 客戶端。它提供 Shell、持久 Shell、文件系統、搜索、補丁、Git、Playwright、審計、持久邏輯會話與可選 Goal plan、臨時文件鏈接和遠程節點工具，並支持 ChatGPT 兼容的 MCP over HTTP 與 OAuth。
 
 適用場景包括：檢查倉庫、運行測試、修改代碼、操作 Git、採集網頁證據、生成可下載產物，或者控制只能主動連接控制端的遠程機器。
 

@@ -107,4 +107,4 @@ async def test_todo_tombstones_point_to_plan_manage() -> None:
     for name in ("todo_read_tool", "todo_write_tool"):
         result = await mcp.call_tool(name, {})
         assert result["data"]["replacement"] == "plan_manage"
-        assert result["data"]["removed_in"] == "3.3.0"
+        assert result["data"]["removed_in"] == "4.0.0"

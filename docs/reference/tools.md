@@ -28,6 +28,7 @@ Search workspace files and return ChatGPT connector-compatible results.
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
 | `query` | `string` | required |  |
+| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -38,6 +39,7 @@ Fetch a workspace file by id returned from search.
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
 | `id` | `string` | required |  |
+| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -51,6 +53,7 @@ Open or reuse the interactive Live Workspace for real-time human/agent collabora
 |---|---|---|---|
 | `machine` | `string \| null` | `null` |  |
 | `cwd` | `string` | `"."` |  |
+| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -65,6 +68,7 @@ Return version, workspace, auth, policy, and environment information locally or 
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
 | `machine` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -73,6 +77,10 @@ When `machine` is supplied, the call additionally requires `remote:use` and runs
 ### `skills_list`
 
 List installed agent skills without loading their instructions. The MCP tool surface stays fixed; adding or removing skill directories is reflected on the next call.
+
+| Parameter | Type | Required/default | Description |
+|---|---|---|---|
+| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -83,6 +91,7 @@ Load one installed agent skill by the exact name returned from skills_list. Retu
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
 | `name` | `string` | required |  |
+| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -94,6 +103,7 @@ Read one related text file from an installed Skill.
 |---|---|---|---|
 | `name` | `string` | required |  |
 | `path` | `string` | required |  |
+| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -106,17 +116,19 @@ Scan local workspace text files for common secrets before commit or push.
 | `cwd` | `string` | `"."` |  |
 | `glob` | `string \| null` | `null` |  |
 | `max_results` | `integer` | `200` |  |
+| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
 ### `session_manage`
 
-Manage a durable logical task session independent of machine and cwd. Start one before substantive tool-driven work; report semantic progress at meaningful checkpoints; resume by session_id to hand work to a new GPT/MCP run. resume with takeover=true supersedes any still-active previous run, which is then prevented from continuing. Actions: start, resume, get, report, list, finish, cancel. start may include label/objective; report accepts summary/findings/next/blockers/objective/label.
+Manage a durable logical task session independent of machine and cwd. Start one before substantive tool-driven work; report semantic progress at meaningful checkpoints; resume by session_id to hand work to a new GPT/MCP run. resume with takeover=true always creates a new agent run and supersedes the old one. Use the returned active_run.run_id as session_run_id for report/finish/cancel and subsequent tools. Actions: start, resume, get, report, list, finish, cancel. start may include label/objective; report accepts summary/findings/next/blockers/objective/label.
 
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
 | `action` | `string` | required |  |
 | `session_id` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | `null` |  |
 | `label` | `string \| null` | `null` |  |
 | `objective` | `string \| null` | `null` |  |
 | `summary` | `string \| null` | `null` |  |
@@ -129,11 +141,12 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 
 ### `plan_manage`
 
-Manage the optional Goal plan owned by the current logical session. An active plan enables automatic continuation after 15 minutes without agent activity, capped at 10 accepted continuation messages. Start or resume a logical session with session_manage first. Actions: start, get, update, block, resume, finish, cancel. start requires objective and steps; finish requires every step to be completed or skipped.
+Manage the optional Goal plan owned by the current logical session. An active plan enables automatic continuation after 15 minutes without agent activity, capped at 10 continuation attempts. Start or resume a logical session with session_manage first. Mutating actions require that session's active_run.run_id as session_run_id. Actions: start, get, update, block, resume, finish, cancel. start requires objective and steps; finish requires every step to be completed or skipped.
 
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
 | `action` | `string` | required |  |
+| `session_run_id` | `string \| null` | `null` |  |
 | `objective` | `string \| null` | `null` |  |
 | `steps` | `array[object] \| null` | `null` |  |
 | `step_id` | `string \| null` | `null` |  |
@@ -150,6 +163,7 @@ Read recent local audit log entries.
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
 | `lines` | `integer` | `100` |  |
+| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -168,6 +182,7 @@ Run one non-interactive shell command locally or on a remote machine. Use for bu
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -185,6 +200,7 @@ Write and run a short Python script locally or on a remote machine.
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -202,6 +218,7 @@ Start a persistent interactive shell locally or on a remote machine.
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -217,6 +234,7 @@ Send input to a persistent local or remote shell session.
 | `input_text` | `string` | required |  |
 | `enter` | `boolean` | `true` |  |
 | `machine` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -231,6 +249,7 @@ Read recent output from a persistent local or remote shell session.
 | `session_id` | `string` | required |  |
 | `lines` | `integer` | `200` |  |
 | `machine` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -244,6 +263,7 @@ Terminate a persistent local or remote shell session.
 |---|---|---|---|
 | `session_id` | `string` | required |  |
 | `machine` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -256,6 +276,7 @@ List persistent shell sessions locally or on a remote machine.
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
 | `machine` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -273,6 +294,7 @@ Start a tracked long-running job locally or on a remote machine.
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -286,6 +308,7 @@ List tracked jobs locally or on a remote machine.
 |---|---|---|---|
 | `include_finished` | `boolean` | `true` |  |
 | `machine` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -300,6 +323,7 @@ Read recent output for a tracked local or remote job.
 | `job_id` | `string` | required |  |
 | `lines` | `integer` | `200` |  |
 | `machine` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -313,6 +337,7 @@ Stop a tracked local or remote job.
 |---|---|---|---|
 | `job_id` | `string` | required |  |
 | `machine` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -328,6 +353,7 @@ Restart a stopped or exited tracked local or remote job.
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -345,6 +371,7 @@ List files and directories locally or on a remote machine.
 | `recursive` | `boolean` | `false` |  |
 | `max_entries` | `integer` | `500` |  |
 | `machine` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -360,6 +387,7 @@ Return a compact directory tree locally or on a remote machine.
 | `depth` | `integer` | `3` |  |
 | `max_entries` | `integer` | `500` |  |
 | `machine` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -375,6 +403,7 @@ Find paths by glob locally or on a remote machine.
 | `cwd` | `string` | `"."` |  |
 | `max_results` | `integer` | `500` |  |
 | `machine` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -393,6 +422,7 @@ Search file contents locally or on a remote machine.
 | `case_sensitive` | `boolean` | `true` |  |
 | `max_results` | `integer \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -410,6 +440,7 @@ Read one file or a list of files locally or on a remote machine.
 | `binary_preview` | `string \| null` | `null` |  |
 | `binary_preview_bytes` | `integer` | `256` |  |
 | `machine` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -423,6 +454,7 @@ View a PNG, JPEG, GIF, or WebP file as native MCP image content locally or on a 
 |---|---|---|---|
 | `path` | `string` | required |  |
 | `machine` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -440,6 +472,7 @@ Write a UTF-8 text file locally or on a remote machine.
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -456,6 +489,7 @@ Apply one or more exact-text edits to one local or remote file. Each edits entry
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -472,6 +506,7 @@ Delete a local or remote file or directory. recursive=false deletes files or emp
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -488,6 +523,7 @@ Check and apply a unified diff or an apply_patch envelope locally or remotely.
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -495,7 +531,7 @@ When `machine` is supplied, the call additionally requires `remote:use` and runs
 
 ### `remote_transfer`
 
-Start a tracked job that copies a file or directory between the controller and remote machines. Remote uploads use resumable raw-binary chunks; use job_list, job_tail, job_stop, and job_retry to manage the transfer. Worker-to-worker transfers never stage the payload on controller disk: `auto` can use an opt-in peer-direct path, an S3-compatible presigned object path, or a bounded-memory controller relay fallback.
+Start a tracked job that copies a file or directory between the controller and remote machines. Remote uploads use resumable raw-binary chunks; use job_list, job_tail, job_stop, and job_retry to manage the transfer.
 
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
@@ -507,10 +543,11 @@ Start a tracked job that copies a file or directory between the controller and r
 | `chunk_size` | `integer \| null` | `null` |  |
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
-At least one of `source_machine` and `destination_machine` must be supplied. Omitted endpoints refer to the controller workspace; the source may be either a file or a directory. With `disable_local=true`, both endpoints must be remote workers.
+At least one of `source_machine` and `destination_machine` must be supplied. Omitted endpoints refer to the controller workspace; the source may be either a file or a directory.
 
 ### `create_file_link`
 
@@ -523,6 +560,7 @@ Create a temporary browser-accessible URL for a local file. By default the respo
 | `filename` | `string \| null` | `null` |  |
 | `max_downloads` | `integer \| null` | `null` |  |
 | `inline` | `boolean` | `false` |  |
+| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -533,6 +571,7 @@ List generated local file download URLs.
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
 | `include_expired` | `boolean` | `false` |  |
+| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -543,6 +582,7 @@ Revoke a generated local file download URL.
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
 | `token` | `string` | required |  |
+| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -568,6 +608,7 @@ Register, list, get, enable, disable, refresh, remove, or update the isolated en
 | `refresh` | `boolean` | `true` |  |
 | `key` | `string \| null` | `null` |  |
 | `value` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -580,6 +621,7 @@ Search cached lightweight tool summaries from enabled dynamic MCP servers. Dynam
 | `query` | `string` | `""` |  |
 | `server` | `string \| null` | `null` |  |
 | `limit` | `integer` | `20` |  |
+| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -590,6 +632,7 @@ Return the full cached schema for one dynamic MCP tool named <server>:<tool>. Re
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
 | `name` | `string` | required |  |
+| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -602,6 +645,7 @@ Call one cached dynamic MCP tool named <server>:<tool>. Discover it with mcp_too
 | `name` | `string` | required |  |
 | `arguments` | `object \| null` | `null` |  |
 | `timeout_s` | `integer \| null` | `null` |  |
+| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -625,6 +669,7 @@ Start, list, close, or clean up persistent high-level browser sessions locally o
 | `storage_state_path` | `string \| null` | `null` |  |
 | `save_storage_state_path` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -644,6 +689,7 @@ Capture a persistent browser page: title, URL, bounded visible text, interactive
 | `max_text_chars` | `integer` | `100000` |  |
 | `max_elements` | `integer` | `100` |  |
 | `machine` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -660,6 +706,7 @@ Run structured actions in a persistent browser session. Supports navigate, new_p
 | `page_id` | `string \| null` | `null` |  |
 | `timeout_ms` | `integer` | `30000` |  |
 | `machine` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -675,6 +722,7 @@ Run a full Python Playwright script locally or on a remote machine.
 | `cwd` | `string` | `"."` |  |
 | `timeout_s` | `integer` | `60` |  |
 | `machine` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -694,6 +742,7 @@ Manage remote workers with action=invite, list, revoke, or rename. invite accept
 | `ttl_s` | `integer \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
 | `new_name` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 

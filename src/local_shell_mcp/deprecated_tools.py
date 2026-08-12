@@ -91,8 +91,8 @@ DEPRECATED_TOOLS: dict[str, DeprecatedTool] = {
     "remote_revoke_machine": DeprecatedTool("remote_manage", removed_in="3.3.0"),
     "remote_rename_machine": DeprecatedTool("remote_manage", removed_in="3.3.0"),
     "transfer_path": DeprecatedTool("remote_transfer", removed_in="3.3.0"),
-    "todo_read_tool": DeprecatedTool("plan_manage", removed_in="3.3.0"),
-    "todo_write_tool": DeprecatedTool("plan_manage", removed_in="3.3.0"),
+    "todo_read_tool": DeprecatedTool("plan_manage", removed_in="4.0.0"),
+    "todo_write_tool": DeprecatedTool("plan_manage", removed_in="4.0.0"),
 }
 
 

@@ -17,7 +17,7 @@
 
 ---
 
-`local-shell-mcp` gives ChatGPT Developer Mode and other MCP clients controlled access to a real execution environment. It exposes a dedicated workspace with shell, persistent shell, filesystem, search, patch, Playwright, audit, todo, public file links, and outbound remote-worker access. Git is handled through ordinary shell commands instead of a parallel wrapper API.
+`local-shell-mcp` gives ChatGPT Developer Mode and other MCP clients controlled access to a real execution environment. It exposes a dedicated workspace with shell, persistent shell, filesystem, search, patch, Playwright, audit, durable logical sessions with optional Goal plans, public file links, and outbound remote-worker access. Git is handled through ordinary shell commands instead of a parallel wrapper API.
 
 ```text
 Runtime: Docker / VS Code extension / binary / Python / stdio

@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import contextlib
 import json
-import os
 import secrets
 import threading
 import time
@@ -13,16 +11,19 @@ from pathlib import Path
 from typing import Any
 
 from .settings import get_settings
+from .state_store import FileStateStore, get_state_store
 
 PLAN_EXECUTION_LEASE_S = 15 * 60
 PLAN_MAX_CONTINUATIONS = 10
 PLAN_CONTINUATION_PENDING_TTL_S = 5 * 60
+PLAN_CONTINUATION_FAILURE_BACKOFF_S = 5 * 60
 PLAN_MAX_STEPS = 100
 PLAN_STEP_STATUSES = frozenset({"pending", "active", "completed", "skipped"})
 SESSION_ACTIVITY_LIMIT = 200
 SESSION_REPORT_LIST_LIMIT = 50
 SESSION_TEXT_LIMIT = 20_000
 SESSION_LIST_LIMIT = 100
+SESSION_LIST_TEXT_LIMIT = 500
 
 
 @dataclass(slots=True)
@@ -53,14 +54,18 @@ class PlanState:
     continuation_pending: bool = False
     continuation_pending_since: float | None = None
     last_continuation_at: float | None = None
+    continuation_retry_after: float | None = None
     last_agent_activity: float = 0.0
 
     def has_unfinished_steps(self) -> bool:
         return any(step.status in {"pending", "active"} for step in self.steps)
 
-    def public_state(self, now: float | None = None) -> dict[str, Any]:
+    def public_state(
+        self, now: float | None = None, *, in_flight_calls: int = 0
+    ) -> dict[str, Any]:
         current = time.time() if now is None else now
         due_at = self.last_agent_activity + PLAN_EXECUTION_LEASE_S
+        retry_due = self.continuation_retry_after is None or current >= self.continuation_retry_after
         return {
             "plan_id": self.plan_id,
             "objective": self.objective,
@@ -73,15 +78,19 @@ class PlanState:
             "continuation_count": self.continuation_count,
             "continuation_pending": self.continuation_pending,
             "last_continuation_at": self.last_continuation_at,
+            "continuation_retry_after": self.continuation_retry_after,
             "last_agent_activity": self.last_agent_activity,
+            "in_flight_calls": in_flight_calls,
             "execution_lease_s": PLAN_EXECUTION_LEASE_S,
             "continuation_due_at": due_at,
             "continuation_due": (
                 self.status == "active"
                 and self.has_unfinished_steps()
                 and not self.continuation_pending
+                and in_flight_calls == 0
                 and self.continuation_count < PLAN_MAX_CONTINUATIONS
                 and current >= due_at
+                and retry_due
             ),
             "max_continuations": PLAN_MAX_CONTINUATIONS,
             "auto_continue_exhausted": self.continuation_count >= PLAN_MAX_CONTINUATIONS,
@@ -122,6 +131,18 @@ class ProgressState:
             "updated_at": self.updated_at,
         }
 
+    def list_state(self) -> dict[str, Any]:
+        def compact(value: str | None) -> str | None:
+            return None if value is None else value[:SESSION_LIST_TEXT_LIMIT]
+
+        return {
+            "summary": compact(self.summary),
+            "next": compact(self.next),
+            "finding_count": len(self.findings),
+            "blocker_count": len(self.blockers),
+            "updated_at": self.updated_at,
+        }
+
 
 @dataclass(slots=True)
 class LogicalSession:
@@ -146,7 +167,9 @@ class LogicalSession:
             return None
         return next((run for run in self.runs if run.run_id == self.active_run_id), None)
 
-    def public_state(self, *, recent_activity: int = 30) -> dict[str, Any]:
+    def public_state(
+        self, *, recent_activity: int = 30, in_flight_calls: int = 0
+    ) -> dict[str, Any]:
         active = self.active_run()
         return {
             "session_id": self.session_id,
@@ -158,7 +181,11 @@ class LogicalSession:
             "active_run": active.public_state() if active else None,
             "runs": [run.public_state() for run in self.runs[-20:]],
             "progress": self.progress.public_state(),
-            "plan": self.plan.public_state() if self.plan else None,
+            "plan": (
+                self.plan.public_state(in_flight_calls=in_flight_calls)
+                if self.plan
+                else None
+            ),
             "recent_activity": (
                 list(self.activity)[-min(recent_activity, 100) :]
                 if recent_activity > 0
@@ -173,28 +200,52 @@ class SessionRuntimeManager:
     def __init__(self, state_dir: Path | None = None) -> None:
         self._lock = threading.RLock()
         self._state_dir_override = state_dir
-        self._loaded_dir: Path | None = None
+        self._loaded_storage: tuple[str, ...] | None = None
         self._sessions: dict[str, LogicalSession] = {}
         self._attachments: dict[str, tuple[str, str]] = {}
+        self._in_flight_calls: dict[str, dict[str, str]] = {}
 
-    def _session_dir(self) -> Path:
-        base = self._state_dir_override or get_settings().state_dir
-        return Path(base) / "sessions"
+    def _state_store(self):  # noqa: ANN202
+        if self._state_dir_override is not None:
+            return FileStateStore(Path(self._state_dir_override))
+        return get_state_store()
+
+    def _storage_signature(self) -> tuple[str, ...]:
+        if self._state_dir_override is not None:
+            return ("override", str(Path(self._state_dir_override).resolve()))
+        settings = get_settings()
+        return (
+            settings.state_backend,
+            settings.state_backend_url or "",
+            settings.state_backend_prefix,
+            str(settings.state_dir),
+        )
 
     def _ensure_loaded_locked(self) -> None:
-        directory = self._session_dir()
-        if self._loaded_dir == directory:
+        signature = self._storage_signature()
+        if self._loaded_storage == signature:
             return
         self._sessions.clear()
         self._attachments.clear()
-        self._loaded_dir = directory
-        if not directory.exists():
-            return
-        for path in sorted(directory.glob("*.json")):
+        self._in_flight_calls.clear()
+        self._loaded_storage = signature
+        store = self._state_store()
+        for key in store.list_keys("sessions/"):
+            if not key.endswith(".json"):
+                continue
             try:
-                payload = json.loads(path.read_text(encoding="utf-8"))
+                raw = store.read_bytes(key)
+                if raw is None:
+                    continue
+                payload = json.loads(raw.decode("utf-8"))
                 session = self._session_from_payload(payload)
-            except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            except (
+                OSError,
+                UnicodeDecodeError,
+                ValueError,
+                TypeError,
+                json.JSONDecodeError,
+            ):
                 continue
             self._sessions[session.session_id] = session
 
@@ -235,6 +286,7 @@ class SessionRuntimeManager:
             "continuation_pending": plan.continuation_pending,
             "continuation_pending_since": plan.continuation_pending_since,
             "last_continuation_at": plan.last_continuation_at,
+            "continuation_retry_after": plan.continuation_retry_after,
             "last_agent_activity": plan.last_agent_activity,
         }
 
@@ -276,6 +328,11 @@ class SessionRuntimeManager:
                 None
                 if payload.get("last_continuation_at") is None
                 else float(payload["last_continuation_at"])
+            ),
+            continuation_retry_after=(
+                None
+                if payload.get("continuation_retry_after") is None
+                else float(payload["continuation_retry_after"])
             ),
             last_agent_activity=float(payload.get("last_agent_activity") or 0.0),
         )
@@ -362,31 +419,12 @@ class SessionRuntimeManager:
         }
 
     def _save_locked(self, session: LogicalSession) -> None:
-        directory = self._session_dir()
-        directory.mkdir(parents=True, exist_ok=True)
-        with contextlib.suppress(OSError):
-            directory.chmod(0o700)
-        path = directory / f"{session.session_id}.json"
-        temporary = directory / f".{session.session_id}.{os.getpid()}.{threading.get_ident()}.tmp"
         data = json.dumps(
             self._session_to_payload(session),
             ensure_ascii=False,
             separators=(",", ":"),
-        )
-        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        try:
-            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-                handle.write(data)
-                handle.write("\n")
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.replace(temporary, path)
-            with contextlib.suppress(OSError):
-                path.chmod(0o600)
-        except Exception:
-            with contextlib.suppress(OSError):
-                temporary.unlink(missing_ok=True)
-            raise
+        ).encode("utf-8") + b"\n"
+        self._state_store().write_bytes(f"sessions/{session.session_id}.json", data)
 
     @staticmethod
     def _new_session_id() -> str:
@@ -440,7 +478,7 @@ class SessionRuntimeManager:
     ) -> AgentRun:
         current = session.active_run()
         if current is not None and current.status == "active":
-            if current.session_key == session_key:
+            if current.session_key == session_key and not takeover:
                 self._attachments[session_key] = (session.session_id, current.run_id)
                 return current
             if not takeover:
@@ -456,7 +494,11 @@ class SessionRuntimeManager:
                 previous_run = next(
                     (run for run in previous_session.runs if run.run_id == previous[1]), None
                 )
-                if previous_run is not None and previous_run.status == "active":
+                if (
+                    previous_run is not None
+                    and previous_run.status == "active"
+                    and previous_run is not current
+                ):
                     previous_run.status = "detached"
                     previous_run.updated_at = time.time()
                     if previous_session.active_run_id == previous_run.run_id:
@@ -476,6 +518,17 @@ class SessionRuntimeManager:
         self._attachments[session_key] = (session.session_id, run.run_id)
         return run
 
+    def _in_flight_count_locked(self, session_id: str) -> int:
+        return len(self._in_flight_calls.get(session_id, {}))
+
+    def _public_state_locked(
+        self, session: LogicalSession, *, recent_activity: int = 30
+    ) -> dict[str, Any]:
+        return session.public_state(
+            recent_activity=recent_activity,
+            in_flight_calls=self._in_flight_count_locked(session.session_id),
+        )
+
     def manage(
         self,
         session_key: str,
@@ -490,6 +543,8 @@ class SessionRuntimeManager:
         next: str | None = None,
         blockers: list[str] | None = None,
         takeover: bool = False,
+        session_run_id: str | None = None,
+        require_run_token: bool = False,
     ) -> dict[str, Any]:
         normalized_action = str(action).strip().lower()
         with self._lock:
@@ -512,7 +567,7 @@ class SessionRuntimeManager:
                     actor="agent",
                     data={"run_id": run.run_id},
                 )
-                return logical.public_state()
+                return self._public_state_locked(logical)
 
             if normalized_action == "list":
                 sessions = [
@@ -525,14 +580,22 @@ class SessionRuntimeManager:
                     "sessions": [
                         {
                             "session_id": item.session_id,
-                            "label": item.label,
-                            "objective": item.objective,
+                            "label": (
+                                item.label[:SESSION_LIST_TEXT_LIMIT]
+                                if item.label is not None
+                                else None
+                            ),
+                            "objective": (
+                                item.objective[:SESSION_LIST_TEXT_LIMIT]
+                                if item.objective is not None
+                                else None
+                            ),
                             "status": item.status,
                             "updated_at": item.updated_at,
                             "active_run": item.active_run().public_state()
                             if item.active_run()
                             else None,
-                            "progress": item.progress.public_state(),
+                            "progress": item.progress.list_state(),
                             "goal_mode": bool(
                                 item.plan and item.plan.status in {"active", "blocked"}
                             ),
@@ -553,7 +616,7 @@ class SessionRuntimeManager:
             logical = self._require_session_locked(target_id, subject)
 
             if normalized_action == "get":
-                return logical.public_state()
+                return self._public_state_locked(logical)
 
             if normalized_action == "resume":
                 if logical.status != "active":
@@ -565,9 +628,14 @@ class SessionRuntimeManager:
                     actor="agent",
                     data={"run_id": run.run_id, "takeover": takeover},
                 )
-                return logical.public_state()
+                return self._public_state_locked(logical)
 
-            self._assert_attachment_locked(session_key, logical.session_id)
+            self._assert_attachment_locked(
+                session_key,
+                logical.session_id,
+                expected_run_id=session_run_id,
+                require_run_token=require_run_token,
+            )
             run = logical.active_run()
             if run is None:
                 raise RuntimeError("Logical session has no active agent run")
@@ -611,7 +679,7 @@ class SessionRuntimeManager:
                     },
                     touch_plan=True,
                 )
-                return logical.public_state()
+                return self._public_state_locked(logical)
 
             if normalized_action == "finish":
                 if logical.plan is not None and logical.plan.status in {"active", "blocked"}:
@@ -629,7 +697,7 @@ class SessionRuntimeManager:
                     actor="agent",
                     data={"run_id": run.run_id},
                 )
-                return logical.public_state()
+                return self._public_state_locked(logical)
 
             if normalized_action == "cancel":
                 logical.status = "cancelled"
@@ -648,13 +716,20 @@ class SessionRuntimeManager:
                     actor="agent",
                     data={"run_id": run.run_id},
                 )
-                return logical.public_state()
+                return self._public_state_locked(logical)
 
             raise ValueError(
                 "action must be one of: start, resume, get, report, list, finish, cancel"
             )
 
-    def _assert_attachment_locked(self, session_key: str, session_id: str | None = None) -> LogicalSession:
+    def _assert_attachment_locked(
+        self,
+        session_key: str,
+        session_id: str | None = None,
+        *,
+        expected_run_id: str | None = None,
+        require_run_token: bool = False,
+    ) -> LogicalSession:
         attachment = self._attachments.get(session_key)
         if attachment is None:
             raise RuntimeError(
@@ -662,6 +737,14 @@ class SessionRuntimeManager:
             )
         if session_id is not None and attachment[0] != session_id:
             raise RuntimeError("Current agent run is attached to a different logical session")
+        if require_run_token and not expected_run_id:
+            raise RuntimeError(
+                "session_run_id is required while a logical session is attached; use the active_run.run_id returned by session_manage"
+            )
+        if expected_run_id is not None and attachment[1] != expected_run_id:
+            raise RuntimeError(
+                "This agent run has been superseded; resume the logical session and use its new active_run.run_id"
+            )
         logical = self._require_session_locked(attachment[0])
         if logical.status != "active":
             raise RuntimeError(f"Logical session is {logical.status}; start or resume another session")
@@ -675,13 +758,6 @@ class SessionRuntimeManager:
                 "This agent run is no longer active. Resume the logical session before continuing."
             )
         return logical
-
-    def assert_current_run(self, session_key: str) -> None:
-        with self._lock:
-            self._ensure_loaded_locked()
-            if session_key not in self._attachments:
-                return
-            self._assert_attachment_locked(session_key)
 
     def current_session_id(self, session_key: str) -> str | None:
         with self._lock:
@@ -698,43 +774,104 @@ class SessionRuntimeManager:
     def get(self, session_id: str, *, subject: str | None = None) -> dict[str, Any]:
         with self._lock:
             logical = self._require_session_locked(session_id, subject)
-            return logical.public_state()
+            return self._public_state_locked(logical)
 
     def plan_state(self, session_id: str | None) -> dict[str, Any] | None:
         if not session_id:
             return None
         with self._lock:
             logical = self._require_session_locked(session_id)
-            return logical.plan.public_state() if logical.plan else None
+            return (
+                logical.plan.public_state(
+                    in_flight_calls=self._in_flight_count_locked(logical.session_id)
+                )
+                if logical.plan
+                else None
+            )
 
-    def record_activity(
+    def begin_tool_call(
         self,
         session_key: str,
-        event_type: str,
+        call_id: str,
         *,
-        actor: str = "agent",
+        expected_run_id: str | None,
+        require_run_token: bool = True,
         data: dict[str, Any] | None = None,
-        touch_plan: bool = True,
     ) -> dict[str, Any] | None:
+        """Acquire a per-run lease for one tool call and record its start.
+
+        Persistence failures are returned as warnings because they must not turn a
+        successfully executed external mutation into a retryable tool failure.
+        """
         with self._lock:
             self._ensure_loaded_locked()
-            attachment = self._attachments.get(session_key)
-            if attachment is None:
+            if session_key not in self._attachments:
                 return None
-            try:
-                logical = self._assert_attachment_locked(session_key)
-            except RuntimeError:
-                return None
+            logical = self._assert_attachment_locked(
+                session_key,
+                expected_run_id=expected_run_id,
+                require_run_token=require_run_token,
+            )
             run = logical.active_run()
+            if run is None:
+                raise RuntimeError("Logical session has no active agent run")
+            self._in_flight_calls.setdefault(logical.session_id, {})[call_id] = run.run_id
+            run.updated_at = time.time()
+            persistence_error = None
+            try:
+                self._append_activity_locked(
+                    logical,
+                    "tool.started",
+                    actor="agent",
+                    data={"call_id": call_id, **(data or {})},
+                    touch_plan=True,
+                )
+            except Exception as exc:  # noqa: BLE001 - warning is surfaced by caller.
+                persistence_error = f"{type(exc).__name__}: {exc}"
+            return {
+                "session_id": logical.session_id,
+                "run_id": run.run_id,
+                "call_id": call_id,
+                "persistence_error": persistence_error,
+            }
+
+    def finish_tool_call(
+        self,
+        lease: dict[str, Any] | None,
+        event_type: str,
+        *,
+        data: dict[str, Any] | None = None,
+    ) -> str | None:
+        if lease is None:
+            return None
+        with self._lock:
+            self._ensure_loaded_locked()
+            session_id = str(lease.get("session_id") or "")
+            run_id = str(lease.get("run_id") or "")
+            call_id = str(lease.get("call_id") or "")
+            calls = self._in_flight_calls.get(session_id)
+            if calls is not None:
+                calls.pop(call_id, None)
+                if not calls:
+                    self._in_flight_calls.pop(session_id, None)
+            logical = self._sessions.get(session_id)
+            if logical is None:
+                return None
+            run = next((item for item in logical.runs if item.run_id == run_id), None)
             if run is not None:
                 run.updated_at = time.time()
-            return self._append_activity_locked(
-                logical,
-                event_type,
-                actor=actor,
-                data=data,
-                touch_plan=touch_plan and actor == "agent",
-            )
+            stale_run = logical.active_run_id != run_id
+            try:
+                self._append_activity_locked(
+                    logical,
+                    event_type,
+                    actor="agent",
+                    data={"call_id": call_id, "stale_run": stale_run, **(data or {})},
+                    touch_plan=not stale_run,
+                )
+            except Exception as exc:  # noqa: BLE001 - never mask the tool result.
+                return f"{type(exc).__name__}: {exc}"
+            return None
 
     @staticmethod
     def _normalize_plan_steps(steps: list[dict[str, Any]]) -> list[PlanStep]:
@@ -779,6 +916,8 @@ class SessionRuntimeManager:
         session_key: str,
         *,
         action: str,
+        session_run_id: str | None = None,
+        require_run_token: bool = False,
         objective: str | None = None,
         steps: list[dict[str, Any]] | None = None,
         step_id: str | None = None,
@@ -789,7 +928,12 @@ class SessionRuntimeManager:
     ) -> dict[str, Any]:
         with self._lock:
             self._ensure_loaded_locked()
-            logical = self._assert_attachment_locked(session_key)
+            normalized_action = action.strip().lower()
+            logical = self._assert_attachment_locked(
+                session_key,
+                expected_run_id=session_run_id,
+                require_run_token=require_run_token and normalized_action != "get",
+            )
             return self._manage_plan_locked(
                 logical,
                 action=action,
@@ -834,7 +978,13 @@ class SessionRuntimeManager:
             return {
                 "session_id": logical.session_id,
                 "goal_mode": bool(plan and plan.status in {"active", "blocked"}),
-                "plan": plan.public_state() if plan else None,
+                "plan": (
+                    plan.public_state(
+                        in_flight_calls=self._in_flight_count_locked(logical.session_id)
+                    )
+                    if plan
+                    else None
+                ),
             }
         now = time.time()
         event_type = ""
@@ -908,6 +1058,7 @@ class SessionRuntimeManager:
                 plan.revision += 1
                 plan.updated_at = now
                 plan.last_agent_activity = now
+                plan.continuation_retry_after = None
                 event_type = "plan.updated"
                 event_data = {"plan_id": plan.plan_id, "revision": plan.revision}
             elif normalized_action == "block":
@@ -932,6 +1083,7 @@ class SessionRuntimeManager:
                 plan.revision += 1
                 plan.updated_at = now
                 plan.last_agent_activity = now
+                plan.continuation_retry_after = None
                 event_type = "plan.resumed"
                 event_data = {"plan_id": plan.plan_id}
             elif normalized_action == "finish":
@@ -948,6 +1100,7 @@ class SessionRuntimeManager:
                 plan.updated_at = now
                 plan.continuation_pending = False
                 plan.continuation_pending_since = None
+                plan.continuation_retry_after = None
                 event_type = "plan.completed"
                 event_data = {"plan_id": plan.plan_id}
             elif normalized_action == "cancel":
@@ -959,6 +1112,7 @@ class SessionRuntimeManager:
                 plan.updated_at = now
                 plan.continuation_pending = False
                 plan.continuation_pending_since = None
+                plan.continuation_retry_after = None
                 event_type = "plan.cancelled"
                 event_data = {"plan_id": plan.plan_id}
             else:
@@ -975,7 +1129,9 @@ class SessionRuntimeManager:
         return {
             "session_id": logical.session_id,
             "goal_mode": plan.status in {"active", "blocked"},
-            "plan": plan.public_state(now),
+            "plan": plan.public_state(
+                now, in_flight_calls=self._in_flight_count_locked(logical.session_id)
+            ),
         }
 
     def claim_plan_continuation(self, session_id: str, *, subject: str | None = None) -> dict[str, Any] | None:
@@ -985,6 +1141,8 @@ class SessionRuntimeManager:
             if plan is None or plan.status != "active" or not plan.has_unfinished_steps():
                 return None
             now = time.time()
+            if self._in_flight_count_locked(logical.session_id):
+                return None
             if plan.continuation_pending:
                 pending_since = plan.continuation_pending_since or now
                 if now - pending_since < PLAN_CONTINUATION_PENDING_TTL_S:
@@ -992,6 +1150,8 @@ class SessionRuntimeManager:
                 plan.continuation_pending = False
                 plan.continuation_pending_since = None
             if plan.continuation_count >= PLAN_MAX_CONTINUATIONS:
+                return None
+            if plan.continuation_retry_after is not None and now < plan.continuation_retry_after:
                 return None
             if now < plan.last_agent_activity + PLAN_EXECUTION_LEASE_S:
                 return None
@@ -1006,7 +1166,9 @@ class SessionRuntimeManager:
             )
             return {
                 "session_id": logical.session_id,
-                "plan": plan.public_state(now),
+                "plan": plan.public_state(
+                    now, in_flight_calls=self._in_flight_count_locked(logical.session_id)
+                ),
                 "recent_events": list(logical.activity)[-20:],
                 "continuation_count": plan.continuation_count + 1,
             }
@@ -1029,10 +1191,13 @@ class SessionRuntimeManager:
             now = time.time()
             plan.continuation_pending = False
             plan.continuation_pending_since = None
+            plan.continuation_count += 1
+            plan.last_continuation_at = now
             if accepted:
-                plan.continuation_count += 1
-                plan.last_continuation_at = now
                 plan.last_agent_activity = now
+                plan.continuation_retry_after = None
+            else:
+                plan.continuation_retry_after = now + PLAN_CONTINUATION_FAILURE_BACKOFF_S
             plan.updated_at = now
             self._append_activity_locked(
                 logical,
@@ -1044,7 +1209,9 @@ class SessionRuntimeManager:
                     **({"error": error[:500]} if error else {}),
                 },
             )
-            return plan.public_state(now)
+            return plan.public_state(
+                now, in_flight_calls=self._in_flight_count_locked(logical.session_id)
+            )
 
 
 _MANAGER = SessionRuntimeManager()

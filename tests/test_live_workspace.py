@@ -140,6 +140,28 @@ def test_live_workspace_can_reattach_a_second_mcp_session_by_live_id():
         )
 
 
+def test_live_workspace_logical_session_binding_replaces_old_mapping():
+    manager = LiveChannelManager()
+    assert manager.bind_logical_session("missing", "s_missing") is None
+
+    channel, _ = manager.open(
+        session_key="mcp:model",
+        subject="user",
+        scopes=tuple(ALL_OAUTH_SCOPES),
+    )
+    attached = manager.bind_logical_session("mcp:model", "s_first")
+    assert attached is channel
+    assert channel.logical_session_id == "s_first"
+    assert manager._logical_session_channels["s_first"] == channel.live_id
+    assert channel.events[-1]["type"] == "session.attached"
+
+    rebound = manager.bind_logical_session("mcp:model", "s_second")
+    assert rebound is channel
+    assert channel.logical_session_id == "s_second"
+    assert "s_first" not in manager._logical_session_channels
+    assert manager._logical_session_channels["s_second"] == channel.live_id
+
+
 def test_live_workspace_recovery_is_one_shot_and_does_not_merge_same_subject_sessions():
     manager = LiveChannelManager()
     first, _ = manager.open(
@@ -330,10 +352,14 @@ def test_plan_continuation_lease_rejection_and_hard_cap(tmp_path, monkeypatch):
     assert rejected is not None
     assert rejected["continuation_count"] == 1
     sessions.report_plan_continuation(session_id, accepted=False, error="host busy")
-    assert sessions.plan_state(session_id)["continuation_count"] == 0
+    assert sessions.plan_state(session_id)["continuation_count"] == 1
+    assert sessions.claim_plan_continuation(session_id) is None
 
-    for expected in range(1, session_runtime_module.PLAN_MAX_CONTINUATIONS + 1):
-        now[0] += session_runtime_module.PLAN_EXECUTION_LEASE_S + 1
+    for expected in range(2, session_runtime_module.PLAN_MAX_CONTINUATIONS + 1):
+        now[0] += max(
+            session_runtime_module.PLAN_EXECUTION_LEASE_S,
+            session_runtime_module.PLAN_CONTINUATION_FAILURE_BACKOFF_S,
+        ) + 1
         claim = sessions.claim_plan_continuation(session_id)
         assert claim is not None
         assert claim["continuation_count"] == expected
@@ -460,7 +486,10 @@ async def test_live_workspace_reconnect_restores_persisted_logical_session(
         {"action": "start", "objective": "Persist across workspace recovery"},
     )
     session_id = started["data"]["session_id"]
-    opened = await mcp.call_tool("open_live_workspace", {"cwd": "."})
+    run_id = started["data"]["active_run"]["run_id"]
+    opened = await mcp.call_tool(
+        "open_live_workspace", {"cwd": ".", "session_run_id": run_id}
+    )
     assert isinstance(opened, CallToolResult)
     old_live_id = opened.structuredContent["live_id"]
     assert opened.structuredContent["session_id"] == session_id
@@ -485,6 +514,74 @@ async def test_live_workspace_reconnect_restores_persisted_logical_session(
     recovered = live_channel_module.get_live_channel_manager().active_for_session("direct")
     assert recovered is not None
     assert recovered.logical_session_id == session_id
+
+
+@pytest.mark.asyncio
+async def test_mcp_run_lease_blocks_stale_same_transport_agent(tmp_path, monkeypatch):
+    _configure(tmp_path, monkeypatch, auth="none")
+    mcp = build_mcp()
+
+    _, started = await mcp.call_tool(
+        "session_manage", {"action": "start", "objective": "Lease protected task"}
+    )
+    session_id = started["data"]["session_id"]
+    first_run_id = started["data"]["active_run"]["run_id"]
+    _, resumed = await mcp.call_tool(
+        "session_manage",
+        {"action": "resume", "session_id": session_id, "takeover": True},
+    )
+    second_run_id = resumed["data"]["active_run"]["run_id"]
+    assert second_run_id != first_run_id
+
+    with pytest.raises(Exception, match="superseded"):
+        await mcp.call_tool(
+            "write_file",
+            {
+                "path": "stale.txt",
+                "content": "must not be written",
+                "session_run_id": first_run_id,
+            },
+        )
+    assert not (tmp_path / "stale.txt").exists()
+
+    _, written = await mcp.call_tool(
+        "write_file",
+        {
+            "path": "current.txt",
+            "content": "current run",
+            "session_run_id": second_run_id,
+        },
+    )
+    assert written["ok"] is True
+    assert (tmp_path / "current.txt").read_text(encoding="utf-8") == "current run"
+
+
+@pytest.mark.asyncio
+async def test_completed_tool_result_survives_session_activity_write_failure(
+    tmp_path, monkeypatch
+):
+    _configure(tmp_path, monkeypatch, auth="none")
+    mcp = build_mcp()
+    _, started = await mcp.call_tool(
+        "session_manage", {"action": "start", "objective": "Persist activity"}
+    )
+    run_id = started["data"]["active_run"]["run_id"]
+    manager = session_runtime_module.get_session_runtime_manager()
+
+    def fail_save(_session):
+        raise OSError("state volume full")
+
+    monkeypatch.setattr(manager, "_save_locked", fail_save)
+    _, result = await mcp.call_tool(
+        "write_file",
+        {
+            "path": "completed.txt",
+            "content": "completed once",
+            "session_run_id": run_id,
+        },
+    )
+    assert result["ok"] is True
+    assert (tmp_path / "completed.txt").read_text(encoding="utf-8") == "completed once"
 
 
 @pytest.mark.asyncio
@@ -561,6 +658,38 @@ def test_live_http_token_cors_and_collaborative_human_mutation(tmp_path, monkeyp
             objective="Exercise human goal controls",
             steps=[{"id": "work", "text": "Do the work"}],
         )
+        not_due = client.post(
+            "/api/live/plan/continuation",
+            headers=headers,
+            json={"action": "claim"},
+        )
+        assert not_due.status_code == 200
+        assert not_due.json()["data"]["claimed"] is False
+
+        logical_state = session_manager._sessions[logical["session_id"]]
+        assert logical_state.plan is not None
+        logical_state.plan.last_agent_activity -= session_runtime_module.PLAN_EXECUTION_LEASE_S + 1
+        claimed = client.post(
+            "/api/live/plan/continuation",
+            headers=headers,
+            json={"action": "claim"},
+        )
+        assert claimed.status_code == 200
+        assert claimed.json()["data"]["claimed"] is True
+        reported = client.post(
+            "/api/live/plan/continuation",
+            headers=headers,
+            json={"action": "report", "accepted": True},
+        )
+        assert reported.status_code == 200
+        assert reported.json()["data"]["plan"]["continuation_count"] == 1
+        invalid_continuation = client.post(
+            "/api/live/plan/continuation",
+            headers=headers,
+            json={"action": "invalid"},
+        )
+        assert invalid_continuation.status_code == 400
+
         paused = client.post("/api/live/plan", headers=headers, json={"action": "pause"})
         assert paused.status_code == 200
         assert paused.json()["data"]["plan"]["status"] == "blocked"
@@ -574,6 +703,10 @@ def test_live_http_token_cors_and_collaborative_human_mutation(tmp_path, monkeyp
             event["type"] == "plan.cancelled" and event["actor"] == "human"
             for event in channel.events
         )
+        invalid_plan = client.post(
+            "/api/live/plan", headers=headers, json={"action": "invalid"}
+        )
+        assert invalid_plan.status_code == 400
 
         written = client.post(
             "/api/ui/files/write",
@@ -646,6 +779,16 @@ def test_live_http_token_authenticates_when_global_auth_is_disabled(tmp_path, mo
             "/api/live/snapshot",
             headers={"Authorization": f"Bearer {token}", "Origin": "https://chatgpt.com"},
         )
+        no_session_continuation = client.post(
+            "/api/live/plan/continuation",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"action": "claim"},
+        )
+        no_session_plan = client.post(
+            "/api/live/plan",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"action": "pause"},
+        )
         _, replacement = manager.open(
             session_key="mcp:no-auth-http",
             subject="user",
@@ -663,6 +806,13 @@ def test_live_http_token_authenticates_when_global_auth_is_disabled(tmp_path, mo
     assert anonymous_cross_origin.status_code == 401
     assert snapshot.status_code == 200
     assert snapshot.json()["data"]["channel"]["live_id"] == channel.live_id
+    assert no_session_continuation.status_code == 200
+    assert no_session_continuation.json()["data"] == {
+        "claimed": False,
+        "plan": None,
+        "session_id": None,
+    }
+    assert no_session_plan.status_code == 409
     assert stale_ui.status_code == 401
     assert current_ui.status_code == 200
 

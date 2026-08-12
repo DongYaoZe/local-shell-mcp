@@ -31,7 +31,7 @@ Attach NAT, firewall, or HPC machines through outbound worker connections withou
 
 ## What it provides
 
-`local-shell-mcp` exposes a controlled local or container workspace to ChatGPT and other MCP clients. It provides shell, persistent shell, filesystem, search, patch, Git, Playwright, audit, todo, tokenized file-link, and remote-worker tools through a ChatGPT-compatible MCP server with OAuth support.
+`local-shell-mcp` exposes a controlled local or container workspace to ChatGPT and other MCP clients. It provides shell, persistent shell, filesystem, search, patch, Git, Playwright, audit, durable logical sessions with optional Goal plans, tokenized file-link, and remote-worker tools through a ChatGPT-compatible MCP server with OAuth support.
 
 Use it when the AI needs to inspect a repository, run tests, edit files, operate Git, collect browser evidence, produce downloadable artifacts, or control a remote machine that can only connect outbound to the control server.
 

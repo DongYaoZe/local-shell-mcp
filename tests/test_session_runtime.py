@@ -1,10 +1,19 @@
 from __future__ import annotations
 
+import time
+
 import pytest
 
 from local_shell_mcp.live_channel import LiveChannelManager
 from local_shell_mcp.oauth import ALL_OAUTH_SCOPES
-from local_shell_mcp.session_runtime import SessionRuntimeManager
+from local_shell_mcp.session_runtime import (
+    PLAN_CONTINUATION_FAILURE_BACKOFF_S,
+    PLAN_EXECUTION_LEASE_S,
+    PLAN_MAX_STEPS,
+    SessionRuntimeManager,
+)
+from local_shell_mcp.settings import get_settings
+from local_shell_mcp.state_store import clear_memory_state
 
 
 def test_session_progress_and_plan_survive_manager_reload(tmp_path):
@@ -18,10 +27,12 @@ def test_session_progress_and_plan_survive_manager_reload(tmp_path):
         objective="Implement durable logical sessions",
     )
     session_id = started["session_id"]
+    run_id = started["active_run"]["run_id"]
     manager.manage(
         "mcp:first",
         "user",
         action="report",
+        session_run_id=run_id,
         summary="Runtime is implemented",
         findings=["Live channels must not own plans"],
         next="Run integration tests",
@@ -30,6 +41,7 @@ def test_session_progress_and_plan_survive_manager_reload(tmp_path):
     manager.manage_plan(
         "mcp:first",
         action="start",
+        session_run_id=run_id,
         objective="Ship the change",
         steps=[{"id": "test", "text": "Run tests"}],
     )
@@ -73,17 +85,159 @@ def test_resume_takeover_supersedes_previous_agent_run(tmp_path):
     )
 
     with pytest.raises(RuntimeError, match="superseded"):
-        manager.assert_current_run("mcp:agent-a")
+        manager.begin_tool_call(
+            "mcp:agent-a", "stale", expected_run_id=first_run_id
+        )
 
-    manager.assert_current_run("mcp:agent-b")
+    second_run_id = resumed["active_run"]["run_id"]
+    lease = manager.begin_tool_call(
+        "mcp:agent-b", "current", expected_run_id=second_run_id
+    )
+    assert manager.finish_tool_call(lease, "tool.completed") is None
     reported = manager.manage(
         "mcp:agent-b",
         "user",
         action="report",
         session_id=session_id,
+        session_run_id=second_run_id,
         summary="Agent B took over",
     )
     assert reported["progress"]["summary"] == "Agent B took over"
+
+
+def test_takeover_on_same_transport_creates_new_run_lease(tmp_path):
+    manager = SessionRuntimeManager(tmp_path / ".state")
+    started = manager.manage("mcp:same", "user", action="start", objective="Task")
+    session_id = started["session_id"]
+    first_run_id = started["active_run"]["run_id"]
+
+    resumed = manager.manage(
+        "mcp:same",
+        "user",
+        action="resume",
+        session_id=session_id,
+        takeover=True,
+    )
+    second_run_id = resumed["active_run"]["run_id"]
+
+    assert second_run_id != first_run_id
+    assert next(run for run in resumed["runs"] if run["run_id"] == first_run_id)["status"] == (
+        "superseded"
+    )
+    with pytest.raises(RuntimeError, match="superseded"):
+        manager.begin_tool_call(
+            "mcp:same", "stale", expected_run_id=first_run_id
+        )
+    lease = manager.begin_tool_call(
+        "mcp:same", "current", expected_run_id=second_run_id
+    )
+    assert manager.finish_tool_call(lease, "tool.completed") is None
+
+
+def test_session_list_compacts_large_progress(tmp_path):
+    manager = SessionRuntimeManager(tmp_path / ".state")
+    started = manager.manage("mcp:a", "user", action="start", objective="Task")
+    run_id = started["active_run"]["run_id"]
+    manager.manage(
+        "mcp:a",
+        "user",
+        action="report",
+        session_run_id=run_id,
+        summary="s" * 2000,
+        findings=["f" * 2000] * 50,
+        next="n" * 2000,
+        blockers=["b" * 2000] * 50,
+    )
+
+    progress = manager.manage("mcp:reader", "user", action="list")["sessions"][0][
+        "progress"
+    ]
+    assert set(progress) == {
+        "summary",
+        "next",
+        "finding_count",
+        "blocker_count",
+        "updated_at",
+    }
+    assert len(progress["summary"]) == 500
+    assert len(progress["next"]) == 500
+    assert progress["finding_count"] == 50
+    assert progress["blocker_count"] == 50
+
+
+def test_plan_continuation_waits_for_inflight_and_backs_off(tmp_path):
+    manager = SessionRuntimeManager(tmp_path / ".state")
+    started = manager.manage("mcp:a", "user", action="start", objective="Task")
+    session_id = started["session_id"]
+    run_id = started["active_run"]["run_id"]
+    manager.manage_plan(
+        "mcp:a",
+        action="start",
+        session_run_id=run_id,
+        objective="Task",
+        steps=[{"id": "work", "text": "Work"}],
+    )
+
+    lease = manager.begin_tool_call(
+        "mcp:a", "call-1", expected_run_id=run_id, data={"tool": "remote_transfer"}
+    )
+    logical = manager._sessions[session_id]
+    assert logical.plan is not None
+    logical.plan.last_agent_activity = time.time() - PLAN_EXECUTION_LEASE_S - 1
+    assert manager.claim_plan_continuation(session_id, subject="user") is None
+
+    assert manager.finish_tool_call(lease, "tool.completed", data={"ok": True}) is None
+    logical.plan.last_agent_activity = time.time() - PLAN_EXECUTION_LEASE_S - 1
+    claimed = manager.claim_plan_continuation(session_id, subject="user")
+    assert claimed is not None
+    failed = manager.report_plan_continuation(
+        session_id, accepted=False, error="host unavailable", subject="user"
+    )
+    assert failed["continuation_count"] == 1
+    assert failed["continuation_retry_after"] is not None
+    assert failed["continuation_retry_after"] >= time.time() + PLAN_CONTINUATION_FAILURE_BACKOFF_S - 1
+    logical.plan.last_agent_activity = time.time() - PLAN_EXECUTION_LEASE_S - 1
+    assert manager.claim_plan_continuation(session_id, subject="user") is None
+    logical.plan.continuation_retry_after = time.time() - 1
+    assert manager.claim_plan_continuation(session_id, subject="user") is not None
+
+
+def test_session_activity_persistence_failure_keeps_tool_lease_recoverable(
+    tmp_path, monkeypatch
+):
+    manager = SessionRuntimeManager(tmp_path / ".state")
+    started = manager.manage("mcp:a", "user", action="start", objective="Task")
+    run_id = started["active_run"]["run_id"]
+
+    def fail_save(_session):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(manager, "_save_locked", fail_save)
+    lease = manager.begin_tool_call("mcp:a", "call-1", expected_run_id=run_id)
+    assert lease is not None
+    assert "disk full" in lease["persistence_error"]
+    error = manager.finish_tool_call(lease, "tool.completed", data={"ok": True})
+    assert error is not None and "disk full" in error
+
+
+def test_sessions_use_configured_stateless_state_backend(tmp_path, monkeypatch):
+    clear_memory_state()
+    monkeypatch.setenv("LOCAL_SHELL_MCP_WORKSPACE_ROOT", str(tmp_path))
+    monkeypatch.setenv("LOCAL_SHELL_MCP_STATE_DIR", str(tmp_path / ".state"))
+    monkeypatch.setenv("LOCAL_SHELL_MCP_STATE_BACKEND", "memory")
+    monkeypatch.setenv("LOCAL_SHELL_MCP_STATE_BACKEND_PREFIX", "session-runtime-test")
+    get_settings.cache_clear()
+    try:
+        manager = SessionRuntimeManager()
+        started = manager.manage("mcp:a", "user", action="start", objective="Task")
+        restored = SessionRuntimeManager().manage(
+            "mcp:reader", "user", action="get", session_id=started["session_id"]
+        )
+        assert restored["objective"] == "Task"
+        assert not (tmp_path / ".state" / "sessions").exists()
+    finally:
+        get_settings.cache_clear()
+        clear_memory_state()
 
 
 def test_session_access_is_scoped_to_principal(tmp_path):
@@ -131,19 +285,280 @@ def test_live_workspace_reuses_channel_for_resumed_logical_session(tmp_path):
 
 def test_session_finish_requires_terminal_plan(tmp_path):
     manager = SessionRuntimeManager(tmp_path / ".state")
-    manager.manage("mcp:a", "user", action="start", objective="Task")
+    started = manager.manage("mcp:a", "user", action="start", objective="Task")
+    run_id = started["active_run"]["run_id"]
     manager.manage_plan(
         "mcp:a",
         action="start",
+        session_run_id=run_id,
         objective="Task",
         steps=[{"id": "work", "text": "Work"}],
     )
 
     with pytest.raises(ValueError, match="plan is active or blocked"):
-        manager.manage("mcp:a", "user", action="finish")
+        manager.manage("mcp:a", "user", action="finish", session_run_id=run_id)
 
-    manager.manage_plan("mcp:a", action="update", step_id="work", status="completed")
-    manager.manage_plan("mcp:a", action="finish")
-    finished = manager.manage("mcp:a", "user", action="finish")
+    manager.manage_plan(
+        "mcp:a", action="update", session_run_id=run_id, step_id="work", status="completed"
+    )
+    manager.manage_plan("mcp:a", action="finish", session_run_id=run_id)
+    finished = manager.manage(
+        "mcp:a", "user", action="finish", session_run_id=run_id
+    )
     assert finished["status"] == "completed"
     assert finished["active_run"] is None
+
+
+def test_session_runtime_validation_and_attachment_edges(tmp_path):
+    manager = SessionRuntimeManager(tmp_path / ".state")
+
+    assert manager.current_session_id("missing") is None
+    assert manager.plan_state(None) is None
+    assert manager.begin_tool_call("missing", "call", expected_run_id=None) is None
+    assert manager.finish_tool_call(None, "tool.completed") is None
+    with pytest.raises(ValueError, match="No logical session is attached"):
+        manager.manage("missing", "user", action="get")
+    with pytest.raises(ValueError, match="Unknown logical session"):
+        manager.get("s_missing")
+
+    first = manager.manage(
+        "mcp:a",
+        "user",
+        action="start",
+        label="  label  ",
+        objective="  objective  ",
+    )
+    first_id = first["session_id"]
+    first_run = first["active_run"]["run_id"]
+    assert first["label"] == "label"
+    assert first["objective"] == "objective"
+    assert manager.current_session_id("mcp:a") == first_id
+    assert manager.plan_state(first_id) is None
+
+    with pytest.raises(RuntimeError, match="session_run_id is required"):
+        manager.begin_tool_call("mcp:a", "missing-token", expected_run_id=None)
+
+    second = manager.manage("mcp:a", "user", action="start", objective="second")
+    second_id = second["session_id"]
+    second_run = second["active_run"]["run_id"]
+    detached = manager.get(first_id)
+    assert detached["active_run"] is None
+    assert detached["runs"][-1]["status"] == "detached"
+
+    with pytest.raises(RuntimeError, match="different logical session"):
+        manager._assert_attachment_locked("mcp:a", first_id)
+    with pytest.raises(RuntimeError, match="superseded"):
+        manager.begin_tool_call("mcp:a", "old-token", expected_run_id=first_run)
+
+    manager._sessions[second_id].status = "cancelled"
+    with pytest.raises(RuntimeError, match="cancelled"):
+        manager._assert_attachment_locked("mcp:a")
+    manager._sessions[second_id].status = "active"
+    manager._sessions[second_id].runs[-1].status = "completed"
+    with pytest.raises(RuntimeError, match="no longer active"):
+        manager._assert_attachment_locked("mcp:a")
+    manager._sessions[second_id].runs[-1].status = "active"
+
+    lease = manager.begin_tool_call(
+        "mcp:a", "stale-finish", expected_run_id=second_run
+    )
+    takeover = manager.manage(
+        "mcp:a", "user", action="resume", session_id=second_id, takeover=True
+    )
+    assert takeover["active_run"]["run_id"] != second_run
+    assert manager.finish_tool_call(lease, "tool.completed") is None
+    assert manager.get(second_id)["recent_activity"][-1]["data"]["stale_run"] is True
+
+    assert manager.finish_tool_call(
+        {"session_id": "missing", "run_id": "missing", "call_id": "missing"},
+        "tool.completed",
+    ) is None
+
+    current_run = takeover["active_run"]["run_id"]
+    report = manager.manage(
+        "mcp:a",
+        "user",
+        action="report",
+        session_id=second_id,
+        session_run_id=current_run,
+        require_run_token=True,
+        findings=["finding", "  "],
+        blockers=["blocker"],
+        objective="updated objective",
+        label="updated label",
+    )
+    assert report["progress"]["findings"] == ["finding"]
+    assert report["progress"]["blockers"] == ["blocker"]
+    assert report["objective"] == "updated objective"
+    assert report["label"] == "updated label"
+    with pytest.raises(ValueError, match="action=report requires"):
+        manager.manage(
+            "mcp:a",
+            "user",
+            action="report",
+            session_id=second_id,
+            session_run_id=current_run,
+            require_run_token=True,
+        )
+    with pytest.raises(ValueError, match="action must be one of"):
+        manager.manage(
+            "mcp:a",
+            "user",
+            action="unknown",
+            session_id=second_id,
+            session_run_id=current_run,
+            require_run_token=True,
+        )
+
+
+def test_plan_validation_update_and_terminal_edges(tmp_path):
+    manager = SessionRuntimeManager(tmp_path / ".state")
+    started = manager.manage("mcp:plan", "user", action="start")
+    session_id = started["session_id"]
+
+    assert manager.manage_plan("mcp:plan", action="get")["plan"] is None
+    with pytest.raises(ValueError, match="objective is required"):
+        manager.manage_plan("mcp:plan", action="start", objective=" ", steps=[])
+    with pytest.raises(ValueError, match="at least one step"):
+        manager.manage_plan("mcp:plan", action="start", objective="Goal", steps=[])
+    with pytest.raises(ValueError, match="at most"):
+        manager._normalize_plan_steps(
+            [{"text": str(index)} for index in range(PLAN_MAX_STEPS + 1)]
+        )
+    with pytest.raises(ValueError, match="unique"):
+        manager._normalize_plan_steps(
+            [{"id": "same", "text": "one"}, {"id": "same", "text": "two"}]
+        )
+    with pytest.raises(ValueError, match="has no text"):
+        manager._normalize_plan_steps([{"id": "blank", "text": " "}])
+    with pytest.raises(ValueError, match="Unsupported plan step status"):
+        manager._normalize_plan_steps([{"text": "work", "status": "weird"}])
+    with pytest.raises(ValueError, match="at most one active"):
+        manager._normalize_plan_steps(
+            [
+                {"text": "one", "status": "active"},
+                {"text": "two", "status": "active"},
+            ]
+        )
+
+    plan = manager.manage_plan(
+        "mcp:plan",
+        action="start",
+        objective="Goal",
+        steps=[
+            {"id": "a", "text": "A", "note": "note"},
+            {"id": "b", "text": "B"},
+        ],
+    )
+    assert plan["plan"]["steps"][0]["note"] == "note"
+    with pytest.raises(ValueError, match="already active"):
+        manager.manage_plan(
+            "mcp:plan", action="start", objective="Again", steps=[{"text": "x"}]
+        )
+
+    with pytest.raises(ValueError, match="objective cannot be empty"):
+        manager.manage_plan("mcp:plan", action="update", objective=" ")
+    with pytest.raises(ValueError, match="Unknown plan step"):
+        manager.manage_plan("mcp:plan", action="update", step_id="missing", status="completed")
+    with pytest.raises(ValueError, match="Unsupported plan step status"):
+        manager.manage_plan("mcp:plan", action="update", step_id="a", status="weird")
+    with pytest.raises(ValueError, match="step text cannot be empty"):
+        manager.manage_plan("mcp:plan", action="update", step_id="a", text=" ")
+    with pytest.raises(ValueError, match="step_id is required"):
+        manager.manage_plan("mcp:plan", action="update", status="completed")
+    with pytest.raises(ValueError, match="action=update requires"):
+        manager.manage_plan("mcp:plan", action="update")
+
+    updated = manager.manage_plan(
+        "mcp:plan",
+        action="update",
+        objective="Revised",
+        step_id="b",
+        status="active",
+        text="B revised",
+        note="step note",
+    )
+    statuses = {step["id"]: step["status"] for step in updated["plan"]["steps"]}
+    assert statuses == {"a": "pending", "b": "active"}
+    assert updated["plan"]["objective"] == "Revised"
+    assert updated["plan"]["steps"][1]["text"] == "B revised"
+    assert updated["plan"]["steps"][1]["note"] == "step note"
+    manager.manage_plan("mcp:plan", action="update", note="plan note")
+    manager.manage_plan(
+        "mcp:plan",
+        action="update",
+        steps=[
+            {"id": "done", "text": "Done", "status": "completed"},
+            {"id": "skip", "text": "Skip", "status": "skipped"},
+        ],
+    )
+
+    with pytest.raises(ValueError, match="note is required"):
+        manager.manage_plan("mcp:plan", action="block", note=" ")
+    blocked = manager.manage_plan("mcp:plan", action="block", note="human input")
+    assert blocked["plan"]["status"] == "blocked"
+    with pytest.raises(ValueError, match="Cannot block"):
+        manager.manage_plan("mcp:plan", action="block", note="again")
+    resumed = manager.manage_plan("mcp:plan", action="resume")
+    assert resumed["plan"]["status"] == "active"
+    with pytest.raises(ValueError, match="Only a blocked"):
+        manager.manage_plan("mcp:plan", action="resume")
+
+    finished = manager.manage_plan("mcp:plan", action="finish")
+    assert finished["plan"]["status"] == "completed"
+    with pytest.raises(ValueError, match="Cannot finish"):
+        manager.manage_plan("mcp:plan", action="finish")
+    with pytest.raises(ValueError, match="already completed"):
+        manager.manage_plan("mcp:plan", action="cancel")
+    with pytest.raises(ValueError, match="Cannot update"):
+        manager.manage_plan("mcp:plan", action="update", note="late")
+    with pytest.raises(ValueError, match="action must be one of"):
+        manager.manage_plan("mcp:plan", action="unknown")
+
+    terminal = manager.manage(
+        "mcp:plan", "user", action="finish", session_id=session_id
+    )
+    assert terminal["status"] == "completed"
+    with pytest.raises(ValueError, match="Cannot resume a completed session"):
+        manager.manage(
+            "mcp:new", "user", action="resume", session_id=session_id, takeover=True
+        )
+
+
+def test_plan_cancel_and_continuation_pending_expiry(tmp_path, monkeypatch):
+    manager = SessionRuntimeManager(tmp_path / ".state")
+    now = [10_000.0]
+    monkeypatch.setattr("local_shell_mcp.session_runtime.time.time", lambda: now[0])
+    started = manager.manage("mcp:a", "user", action="start", objective="Goal")
+    session_id = started["session_id"]
+    run_id = started["active_run"]["run_id"]
+    manager.manage_plan(
+        "mcp:a",
+        action="start",
+        objective="Goal",
+        steps=[{"id": "work", "text": "Work"}],
+    )
+    now[0] += PLAN_EXECUTION_LEASE_S + 1
+    assert manager.claim_plan_continuation(session_id) is not None
+    now[0] += 5 * 60 + 1
+    reclaimed = manager.claim_plan_continuation(session_id)
+    assert reclaimed is not None
+    manager.report_plan_continuation(session_id, accepted=True)
+    with pytest.raises(ValueError, match="No plan continuation is pending"):
+        manager.report_plan_continuation(session_id, accepted=True)
+
+    cancelled = manager.manage(
+        "mcp:a",
+        "user",
+        action="cancel",
+        session_id=session_id,
+        session_run_id=run_id,
+    )
+    assert cancelled["status"] == "cancelled"
+    assert cancelled["plan"]["status"] == "cancelled"
+    assert manager.current_session_id("mcp:a") is None
+    assert manager.claim_plan_continuation(session_id) is None
+
+    no_plan = manager.manage("mcp:b", "user", action="start", objective="No plan")
+    with pytest.raises(ValueError, match="No plan exists"):
+        manager.report_plan_continuation(no_plan["session_id"], accepted=False)
