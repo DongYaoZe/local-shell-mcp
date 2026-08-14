@@ -1196,3 +1196,40 @@ def test_live_workspace_detaches_deleted_logical_session():
     assert channel.logical_session_id is None
     assert "s_deleted" not in manager._logical_session_channels
     assert channel.events[-1]["type"] == "session.detached"
+
+
+
+@pytest.mark.asyncio
+async def test_live_workspace_session_lookups_run_off_event_loop(tmp_path, monkeypatch):
+    _configure(tmp_path, monkeypatch, auth="none")
+    manager = session_runtime_module.get_session_runtime_manager()
+    target = manager.manage(
+        "other-transport",
+        "local-mcp-client",
+        action="start",
+        objective="Reconnect target",
+    )
+    loop_thread = threading.get_ident()
+    current_threads: list[int] = []
+    get_threads: list[int] = []
+    original_current = manager.current_session_id
+    original_get = manager.get
+
+    def observed_current(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
+        current_threads.append(threading.get_ident())
+        return original_current(*args, **kwargs)
+
+    def observed_get(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
+        get_threads.append(threading.get_ident())
+        return original_get(*args, **kwargs)
+
+    monkeypatch.setattr(manager, "current_session_id", observed_current)
+    monkeypatch.setattr(manager, "get", observed_get)
+    mcp = build_mcp()
+    await mcp.call_tool(
+        "live_workspace_reconnect",
+        {"cwd": ".", "session_id": target["session_id"]},
+    )
+
+    assert current_threads and all(thread_id != loop_thread for thread_id in current_threads)
+    assert get_threads and all(thread_id != loop_thread for thread_id in get_threads)

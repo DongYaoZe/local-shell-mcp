@@ -3129,11 +3129,14 @@ def _register_live_workspace_tools(
             else tuple(sorted(principal_scopes(principal))) or tuple(ALL_OAUTH_SCOPES)
         )
         session_key = mcp_session_key(mcp)
-        logical_session_id = get_session_runtime_manager().current_session_id(
-            session_key, subject=subject
+        session_manager = get_session_runtime_manager()
+        logical_session_id = await asyncio.to_thread(
+            session_manager.current_session_id,
+            session_key,
+            subject=subject,
         )
         if logical_session_id is None and session_id:
-            get_session_runtime_manager().get(session_id, subject=subject)
+            await asyncio.to_thread(session_manager.get, session_id, subject=subject)
             logical_session_id = session_id
         channel, live_token = get_live_channel_manager().open(
             session_key=session_key,

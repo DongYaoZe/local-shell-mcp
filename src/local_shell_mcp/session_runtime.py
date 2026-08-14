@@ -616,6 +616,9 @@ class SessionRuntimeManager:
             if previous[0] != session.session_id:
                 self._refresh_session_locked(previous[0])
             previous_session = self._sessions.get(previous[0])
+            if previous_session is not None and previous_session.subject != session.subject:
+                self._attachments.pop(session_key, None)
+                previous_session = None
             if previous_session is not None:
                 previous_run = next(
                     (run for run in previous_session.runs if run.run_id == previous[1]), None
@@ -1072,7 +1075,8 @@ class SessionRuntimeManager:
                 return None
             try:
                 self._assert_attachment_locked(session_key, subject=subject)
-            except (RuntimeError, PermissionError):
+            except (RuntimeError, PermissionError, ValueError):
+                self._attachments.pop(session_key, None)
                 return None
             return attachment[0]
 

@@ -108,3 +108,28 @@ def test_existing_attachment_is_rejected_after_principal_change(tmp_path, monkey
     with pytest.raises(PermissionError, match="different principal"):
         manager.manage_plan("mcp:a", action="get")
     assert manager.current_session_id("mcp:a") is None
+
+
+
+def test_cross_principal_transport_reuse_does_not_detach_previous_run(tmp_path):
+    manager = SessionRuntimeManager(tmp_path / ".state")
+    first = manager.manage("shared", "alice", action="start", objective="Alice task")
+    first_id = first["session_id"]
+    first_run_id = first["active_run"]["run_id"]
+
+    second = manager.manage("shared", "bob", action="start", objective="Bob task")
+
+    alice = manager.get(first_id, subject="alice")
+    assert alice["active_run"]["run_id"] == first_run_id
+    assert alice["active_run"]["status"] == "active"
+    assert manager.current_session_id("shared", subject="bob") == second["session_id"]
+
+
+def test_current_session_id_drops_attachment_for_missing_session(tmp_path):
+    manager = SessionRuntimeManager(tmp_path / ".state")
+    started = manager.manage("mcp:a", "user", action="start", objective="Task")
+    session_id = started["session_id"]
+    manager._sessions.pop(session_id)
+
+    assert manager.current_session_id("mcp:a", subject="user") is None
+    assert "mcp:a" not in manager._attachments
