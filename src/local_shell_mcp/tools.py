@@ -2783,10 +2783,11 @@ def _register_maintenance_tools(mcp: FastMCP, read_only_tool: ToolAnnotations) -
     ) -> ToolResult:
         """Manage a durable logical task session independent of machine and cwd. Start one before substantive tool-driven work; report semantic progress at meaningful checkpoints; resume by session_id to hand work to a new GPT/MCP run. resume with takeover=true always creates a new agent run and supersedes the old one. Use the returned active_run.run_id as session_run_id for report/finish/cancel and subsequent tools. Actions: start, resume, get, report, list, finish, cancel, delete. start may include label/objective; report accepts summary/findings/next/blockers/objective/label. delete permanently removes a detached or terminal Session and frees retained history capacity."""
         session_key = mcp_session_key(mcp)
+        subject = _current_principal_subject()
         result = await _tool_call(
             get_session_runtime_manager().manage,
             session_key,
-            _current_principal_subject(),
+            subject,
             action=action,
             session_id=session_id,
             session_run_id=session_run_id,
@@ -2805,7 +2806,7 @@ def _register_maintenance_tools(mcp: FastMCP, read_only_tool: ToolAnnotations) -
                 "start", "resume"
             }:
                 get_live_channel_manager().bind_logical_session(
-                    session_key, str(data["session_id"])
+                    session_key, str(data["session_id"]), subject
                 )
         return result
 

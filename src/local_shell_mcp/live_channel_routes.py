@@ -215,9 +215,21 @@ async def live_plan_continuation(request: Request) -> Response:
                     }
                 )
             return _ok({"claimed": True, **claimed})
+        if action == "validate":
+            claim_id = str(body.get("claim_id") or "").strip()
+            if not claim_id:
+                raise HTTPException(status_code=400, detail="claim_id is required")
+            return _ok(
+                session_manager.validate_plan_continuation(
+                    channel.logical_session_id,
+                    claim_id,
+                    subject=channel.subject,
+                )
+            )
         if action == "report":
             accepted = bool(body.get("accepted"))
             error = str(body.get("error") or "").strip() or None
+            claim_id = str(body.get("claim_id") or "").strip() or None
             return _ok(
                 {
                     "session_id": channel.logical_session_id,
@@ -225,11 +237,12 @@ async def live_plan_continuation(request: Request) -> Response:
                         channel.logical_session_id,
                         accepted=accepted,
                         error=error,
+                        claim_id=claim_id,
                         subject=channel.subject,
                     ),
                 }
             )
-        raise HTTPException(status_code=400, detail="action must be claim or report")
+        raise HTTPException(status_code=400, detail="action must be claim, validate, or report")
     except Exception as exc:
         return _error(exc)
 

@@ -183,6 +183,47 @@ def test_session_switch_waits_for_previous_inflight_tool(tmp_path):
     assert resumed["active_run"]["run_id"] != target_run_id
 
 
+@pytest.mark.parametrize("failure_stage", ["detach", "started"])
+def test_session_start_failure_restores_previous_attachment(tmp_path, monkeypatch, failure_stage):
+    state_dir = tmp_path / ".state"
+    manager = SessionRuntimeManager(state_dir)
+    first = manager.manage("mcp:a", "user", action="start", objective="First")
+    first_id = first["session_id"]
+    first_run_id = first["active_run"]["run_id"]
+    original_save = manager._save_locked
+    failed = False
+
+    def fail_once(session):
+        nonlocal failed
+        should_fail = False
+        if not failed and failure_stage == "detach" and session.session_id == first_id:
+            run = next((item for item in session.runs if item.run_id == first_run_id), None)
+            should_fail = run is not None and run.status == "detached"
+        if not failed and failure_stage == "started" and session.session_id != first_id:
+            should_fail = bool(session.activity and session.activity[-1]["type"] == "session.started")
+        if should_fail:
+            failed = True
+            raise OSError(f"forced {failure_stage} failure")
+        return original_save(session)
+
+    monkeypatch.setattr(manager, "_save_locked", fail_once)
+    with pytest.raises(OSError, match=f"forced {failure_stage} failure"):
+        manager.manage("mcp:a", "user", action="start", objective="Second")
+
+    assert failed is True
+    assert manager.current_session_id("mcp:a", subject="user") == first_id
+    restored = manager.get(first_id, subject="user")
+    assert restored["active_run"]["run_id"] == first_run_id
+    assert restored["active_run"]["status"] == "active"
+    assert len(manager.manage("mcp:reader", "user", action="list")["sessions"]) == 1
+
+    restarted = SessionRuntimeManager(state_dir)
+    durable = restarted.get(first_id, subject="user")
+    assert durable["active_run"]["run_id"] == first_run_id
+    assert durable["active_run"]["status"] == "active"
+    assert len(restarted.manage("mcp:reader", "user", action="list")["sessions"]) == 1
+
+
 def test_session_list_compacts_large_progress(tmp_path):
     manager = SessionRuntimeManager(tmp_path / ".state")
     started = manager.manage("mcp:a", "user", action="start", objective="Task")
@@ -804,7 +845,7 @@ def test_live_workspace_reuses_channel_for_resumed_logical_session(tmp_path):
         session_id=session_id,
         takeover=True,
     )
-    second = live.bind_logical_session("mcp:agent-b", session_id)
+    second = live.bind_logical_session("mcp:agent-b", session_id, "user")
 
     assert second is first
     assert second.logical_session_id == session_id

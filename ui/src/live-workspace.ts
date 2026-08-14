@@ -63,6 +63,7 @@ type PlanState = {
   note?: string | null
   continuation_count: number
   continuation_pending: boolean
+  continuation_claim_id?: string | null
   last_agent_activity: number
   execution_lease_s: number
   continuation_due_at: number
@@ -1306,7 +1307,7 @@ async function checkPlanContinuation(): Promise<void> {
   if (!config || continuationChecking) return
   continuationChecking = true
   try {
-    const claim = await api<{ claimed: boolean; plan?: PlanState | null; recent_events?: LiveEvent[]; continuation_count?: number; session_id?: string | null }>("/api/live/plan/continuation", {
+    const claim = await api<{ claimed: boolean; claim_id?: string | null; plan?: PlanState | null; recent_events?: LiveEvent[]; continuation_count?: number; session_id?: string | null }>("/api/live/plan/continuation", {
       method: "POST",
       body: JSON.stringify({ action: "claim" }),
     })
@@ -1320,6 +1321,8 @@ async function checkPlanContinuation(): Promise<void> {
     const sessionId = String(claim.session_id || config.sessionId || "")
     if (sessionId) config.sessionId = sessionId
     const attempt = Number(claim.continuation_count || plan.continuation_count + 1)
+    const claimId = String(claim.claim_id || plan.continuation_claim_id || "")
+    if (!claimId) throw new Error("Continuation claim did not include an identifier")
     const checkpoint = {
       sessionId,
       objective: plan.objective,
@@ -1335,6 +1338,15 @@ async function checkPlanContinuation(): Promise<void> {
         content: [{ type: "text", text: `Active local-shell-mcp Goal checkpoint:\n${truncateContext(JSON.stringify(checkpoint, null, 2), 20_000)}` }],
         structuredContent: { localShellMcpSessionId: sessionId, localShellMcpPlan: plan, localShellMcpRecentActivity: recent },
       })
+      const validation = await api<{ valid: boolean; plan?: PlanState | null }>("/api/live/plan/continuation", {
+        method: "POST",
+        body: JSON.stringify({ action: "validate", claim_id: claimId }),
+      })
+      plan = validation.plan || plan
+      if (!validation.valid) {
+        if (activeTab === "activity") renderActivity()
+        return
+      }
       const resumeInstruction = sessionId
         ? `First call session_manage(action="resume", session_id="${sessionId}", takeover=true) so this agent run inherits the durable task context. `
         : ""
@@ -1352,7 +1364,7 @@ async function checkPlanContinuation(): Promise<void> {
     try {
       const report = await api<{ plan: PlanState }>("/api/live/plan/continuation", {
         method: "POST",
-        body: JSON.stringify({ action: "report", accepted, error: error || null }),
+        body: JSON.stringify({ action: "report", claim_id: claimId, accepted, error: error || null }),
       })
       plan = report.plan
     } catch (reportError) {

@@ -148,24 +148,41 @@ def test_live_workspace_can_reattach_a_second_mcp_session_by_live_id():
 
 def test_live_workspace_logical_session_binding_replaces_old_mapping():
     manager = LiveChannelManager()
-    assert manager.bind_logical_session("missing", "s_missing") is None
+    assert manager.bind_logical_session("missing", "s_missing", "user") is None
 
     channel, _ = manager.open(
         session_key="mcp:model",
         subject="user",
         scopes=tuple(ALL_OAUTH_SCOPES),
     )
-    attached = manager.bind_logical_session("mcp:model", "s_first")
+    attached = manager.bind_logical_session("mcp:model", "s_first", "user")
     assert attached is channel
     assert channel.logical_session_id == "s_first"
     assert manager._logical_session_channels["s_first"] == channel.live_id
     assert channel.events[-1]["type"] == "session.attached"
 
-    rebound = manager.bind_logical_session("mcp:model", "s_second")
+    rebound = manager.bind_logical_session("mcp:model", "s_second", "user")
     assert rebound is channel
     assert channel.logical_session_id == "s_second"
     assert "s_first" not in manager._logical_session_channels
     assert manager._logical_session_channels["s_second"] == channel.live_id
+
+
+def test_live_workspace_logical_session_binding_rejects_principal_reuse():
+    manager = LiveChannelManager()
+    channel, _ = manager.open(
+        session_key="mcp:reused",
+        subject="alice",
+        scopes=tuple(ALL_OAUTH_SCOPES),
+    )
+    assert manager.bind_logical_session("mcp:reused", "s_alice", "alice") is channel
+
+    assert manager.bind_logical_session("mcp:reused", "s_bob", "bob") is None
+    assert manager.active_for_session("mcp:reused") is None
+    assert channel.subject == "alice"
+    assert channel.logical_session_id == "s_alice"
+    assert manager._logical_session_channels["s_alice"] == channel.live_id
+    assert "s_bob" not in manager._logical_session_channels
 
 
 def test_live_workspace_recovery_is_one_shot_and_does_not_merge_same_subject_sessions():
@@ -779,10 +796,19 @@ def test_live_http_token_cors_and_collaborative_human_mutation(tmp_path, monkeyp
         )
         assert claimed.status_code == 200
         assert claimed.json()["data"]["claimed"] is True
+        claim_id = claimed.json()["data"]["claim_id"]
+        assert claim_id
+        validated = client.post(
+            "/api/live/plan/continuation",
+            headers=headers,
+            json={"action": "validate", "claim_id": claim_id},
+        )
+        assert validated.status_code == 200
+        assert validated.json()["data"]["valid"] is True
         reported = client.post(
             "/api/live/plan/continuation",
             headers=headers,
-            json={"action": "report", "accepted": True},
+            json={"action": "report", "claim_id": claim_id, "accepted": True},
         )
         assert reported.status_code == 200
         assert reported.json()["data"]["plan"]["continuation_count"] == 1
@@ -793,9 +819,23 @@ def test_live_http_token_cors_and_collaborative_human_mutation(tmp_path, monkeyp
         )
         assert invalid_continuation.status_code == 400
 
+        logical_state.plan.last_agent_activity -= session_runtime_module.PLAN_EXECUTION_LEASE_S + 1
+        stale_claim = client.post(
+            "/api/live/plan/continuation",
+            headers=headers,
+            json={"action": "claim"},
+        )
+        stale_claim_id = stale_claim.json()["data"]["claim_id"]
         paused = client.post("/api/live/plan", headers=headers, json={"action": "pause"})
         assert paused.status_code == 200
         assert paused.json()["data"]["plan"]["status"] == "blocked"
+        invalidated = client.post(
+            "/api/live/plan/continuation",
+            headers=headers,
+            json={"action": "validate", "claim_id": stale_claim_id},
+        )
+        assert invalidated.status_code == 200
+        assert invalidated.json()["data"]["valid"] is False
         resumed = client.post("/api/live/plan", headers=headers, json={"action": "resume"})
         assert resumed.status_code == 200
         assert resumed.json()["data"]["plan"]["status"] == "active"
