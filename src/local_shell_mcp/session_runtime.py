@@ -93,7 +93,6 @@ class PlanState:
             "continuation_due_at": due_at,
             "continuation_due": (
                 self.status == "active"
-                and self.has_unfinished_steps()
                 and not self.continuation_pending
                 and in_flight_calls == 0
                 and self.continuation_count < PLAN_MAX_CONTINUATIONS
@@ -592,6 +591,27 @@ class SessionRuntimeManager:
         *,
         takeover: bool,
     ) -> AgentRun:
+        previous = self._attachments.get(session_key)
+        previous_session = None
+        previous_run = None
+        if previous is not None:
+            if previous[0] != session.session_id:
+                self._refresh_session_locked(previous[0])
+            previous_session = self._sessions.get(previous[0])
+            if previous_session is not None:
+                previous_run = next(
+                    (run for run in previous_session.runs if run.run_id == previous[1]), None
+                )
+                if (
+                    previous_session.session_id != session.session_id
+                    and previous_run is not None
+                    and previous_run.status == "active"
+                    and self._in_flight_count_locked(previous_session.session_id)
+                ):
+                    raise ValueError(
+                        "Cannot switch logical sessions while tool calls are still in flight; retry after they complete"
+                    )
+
         current = session.active_run()
         if current is not None and current.status == "active":
             if current.session_key == session_key and not takeover:
@@ -607,26 +627,18 @@ class SessionRuntimeManager:
                 )
             current.status = "superseded"
             current.updated_at = time.time()
-        previous = self._attachments.get(session_key)
-        if previous is not None:
-            if previous[0] != session.session_id:
-                self._refresh_session_locked(previous[0])
-            previous_session = self._sessions.get(previous[0])
-            if previous_session is not None:
-                previous_run = next(
-                    (run for run in previous_session.runs if run.run_id == previous[1]), None
-                )
-                if (
-                    previous_run is not None
-                    and previous_run.status == "active"
-                    and previous_run is not current
-                ):
-                    previous_run.status = "detached"
-                    previous_run.updated_at = time.time()
-                    if previous_session.active_run_id == previous_run.run_id:
-                        previous_session.active_run_id = None
-                    previous_session.updated_at = previous_run.updated_at
-                    self._save_locked(previous_session)
+        if (
+            previous_session is not None
+            and previous_run is not None
+            and previous_run.status == "active"
+            and previous_run is not current
+        ):
+            previous_run.status = "detached"
+            previous_run.updated_at = time.time()
+            if previous_session.active_run_id == previous_run.run_id:
+                previous_session.active_run_id = None
+            previous_session.updated_at = previous_run.updated_at
+            self._save_locked(previous_session)
         now = time.time()
         run = AgentRun(
             run_id=self._new_run_id(),
@@ -729,7 +741,11 @@ class SessionRuntimeManager:
                     objective=self._bounded_text(objective),
                 )
                 self._sessions[logical.session_id] = logical
-                run = self._attach_new_run_locked(logical, session_key, takeover=True)
+                try:
+                    run = self._attach_new_run_locked(logical, session_key, takeover=True)
+                except Exception:
+                    self._sessions.pop(logical.session_id, None)
+                    raise
                 self._append_activity_locked(
                     logical,
                     "session.started",
@@ -1390,7 +1406,7 @@ class SessionRuntimeManager:
                     )
             logical = self._require_session_locked(session_id, subject)
             plan = logical.plan
-            if plan is None or plan.status != "active" or not plan.has_unfinished_steps():
+            if plan is None or plan.status != "active":
                 return None
             now = time.time()
             if self._in_flight_count_locked(logical.session_id):

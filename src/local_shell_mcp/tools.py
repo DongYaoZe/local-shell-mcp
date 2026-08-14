@@ -612,7 +612,7 @@ def _install_session_run_arguments(mcp: FastMCP) -> None:
         tool.parameters = extended_model.model_json_schema()
 
 
-def _finish_session_tool_activity(
+async def _finish_session_tool_activity(
     manager: Any,
     lease: dict[str, Any] | None,
     event_type: str,
@@ -623,7 +623,9 @@ def _finish_session_tool_activity(
     stage: str,
 ) -> None:
     try:
-        persistence_error = manager.finish_tool_call(lease, event_type, data=data)
+        persistence_error = await asyncio.to_thread(
+            manager.finish_tool_call, lease, event_type, data=data
+        )
     except Exception as exc:  # noqa: BLE001 - activity failures must not mask tool results.
         persistence_error = f"{type(exc).__name__}: {exc}"
     if persistence_error:
@@ -695,7 +697,8 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
                     __tool_name == "plan_manage"
                     and str(call_arguments.get("action") or "").strip().lower() == "get"
                 )
-                logical_lease = logical_manager.begin_tool_call(
+                logical_lease = await asyncio.to_thread(
+                    logical_manager.begin_tool_call,
                     live_session_key,
                     call_id,
                     expected_run_id=(
@@ -767,7 +770,7 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
                     "tool.completed" if call_ok else "tool.failed",
                     data=completion_data,
                 )
-                _finish_session_tool_activity(
+                await _finish_session_tool_activity(
                     logical_manager,
                     logical_lease,
                     "tool.completed" if call_ok else "tool.failed",
@@ -813,7 +816,7 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
                     "tool.failed",
                     data=failure_data,
                 )
-                _finish_session_tool_activity(
+                await _finish_session_tool_activity(
                     logical_manager,
                     logical_lease,
                     "tool.failed",
@@ -848,7 +851,7 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
                     "tool.failed",
                     data=failure_data,
                 )
-                _finish_session_tool_activity(
+                await _finish_session_tool_activity(
                     logical_manager,
                     logical_lease,
                     "tool.failed",
@@ -868,7 +871,7 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
                         "cancelled": True,
                         **live_arguments,
                     }
-                    _finish_session_tool_activity(
+                    await _finish_session_tool_activity(
                         logical_manager,
                         logical_lease,
                         "tool.cancelled",

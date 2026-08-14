@@ -140,6 +140,48 @@ def test_takeover_on_same_transport_creates_new_run_lease(tmp_path):
     assert manager.finish_tool_call(lease, "tool.completed") is None
 
 
+def test_session_switch_waits_for_previous_inflight_tool(tmp_path):
+    manager = SessionRuntimeManager(tmp_path / ".state")
+    first = manager.manage("mcp:a", "user", action="start", objective="First")
+    first_id = first["session_id"]
+    first_run_id = first["active_run"]["run_id"]
+    lease = manager.begin_tool_call(
+        "mcp:a",
+        "call-1",
+        expected_run_id=first_run_id,
+        data={"tool": "remote_transfer"},
+    )
+
+    with pytest.raises(ValueError, match="switch logical sessions"):
+        manager.manage("mcp:a", "user", action="start", objective="Blocked switch")
+    assert manager.current_session_id("mcp:a") == first_id
+    assert len(manager.manage("mcp:reader", "user", action="list")["sessions"]) == 1
+
+    target = manager.manage("mcp:b", "user", action="start", objective="Target")
+    target_id = target["session_id"]
+    target_run_id = target["active_run"]["run_id"]
+    with pytest.raises(ValueError, match="switch logical sessions"):
+        manager.manage(
+            "mcp:a",
+            "user",
+            action="resume",
+            session_id=target_id,
+            takeover=True,
+        )
+    assert manager.get(target_id)["active_run"]["run_id"] == target_run_id
+
+    assert manager.finish_tool_call(lease, "tool.completed") is None
+    resumed = manager.manage(
+        "mcp:a",
+        "user",
+        action="resume",
+        session_id=target_id,
+        takeover=True,
+    )
+    assert resumed["session_id"] == target_id
+    assert resumed["active_run"]["run_id"] != target_run_id
+
+
 def test_session_list_compacts_large_progress(tmp_path):
     manager = SessionRuntimeManager(tmp_path / ".state")
     started = manager.manage("mcp:a", "user", action="start", objective="Task")
@@ -976,3 +1018,34 @@ def test_human_resume_preserves_overdue_goal_lease(tmp_path):
 
     assert resumed["plan"]["last_agent_activity"] == overdue
     assert manager.claim_plan_continuation(session_id, subject="user") is not None
+
+
+def test_completed_plan_steps_remain_eligible_for_cleanup_continuation(tmp_path):
+    manager = SessionRuntimeManager(tmp_path / ".state")
+    started = manager.manage("mcp:a", "user", action="start", objective="Goal")
+    session_id = started["session_id"]
+    run_id = started["active_run"]["run_id"]
+    manager.manage_plan(
+        "mcp:a",
+        action="start",
+        session_run_id=run_id,
+        objective="Goal",
+        steps=[{"id": "work", "text": "Work"}],
+    )
+    manager.manage_plan(
+        "mcp:a",
+        action="update",
+        session_run_id=run_id,
+        step_id="work",
+        status="completed",
+    )
+    logical = manager._sessions[session_id]
+    assert logical.plan is not None
+    assert logical.plan.status == "active"
+    assert logical.plan.has_unfinished_steps() is False
+    logical.plan.last_agent_activity = time.time() - PLAN_EXECUTION_LEASE_S - 1
+
+    assert logical.plan.public_state()["continuation_due"] is True
+    claimed = manager.claim_plan_continuation(session_id, subject="user")
+    assert claimed is not None
+    assert claimed["plan"]["status"] == "active"

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import subprocess
+import threading
 import time
 from pathlib import Path
 
@@ -577,6 +578,22 @@ async def test_cancelled_tool_call_releases_logical_inflight_lease(tmp_path, mon
     run_id = started["active_run"]["run_id"]
     entered = asyncio.Event()
     never = asyncio.Event()
+    event_loop_thread = threading.get_ident()
+    begin_threads: list[int] = []
+    finish_threads: list[int] = []
+    original_begin = manager.begin_tool_call
+    original_finish = manager.finish_tool_call
+
+    def observed_begin(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
+        begin_threads.append(threading.get_ident())
+        return original_begin(*args, **kwargs)
+
+    def observed_finish(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
+        finish_threads.append(threading.get_ident())
+        return original_finish(*args, **kwargs)
+
+    monkeypatch.setattr(manager, "begin_tool_call", observed_begin)
+    monkeypatch.setattr(manager, "finish_tool_call", observed_finish)
     mcp = FastMCP("cancel-test")
 
     @mcp.tool()
@@ -598,6 +615,8 @@ async def test_cancelled_tool_call_releases_logical_inflight_lease(tmp_path, mon
         await task
 
     assert manager._sessions[session_id].in_flight_calls == {}
+    assert begin_threads and all(thread_id != event_loop_thread for thread_id in begin_threads)
+    assert finish_threads and all(thread_id != event_loop_thread for thread_id in finish_threads)
 
 
 @pytest.mark.asyncio
