@@ -1,0 +1,42 @@
+name: PR 162 follow-up fix v3
+
+on:
+  push:
+    branches: [feat/logical-session-runtime-v4]
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/logical-session-runtime-v4
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Apply fixes
+        run: |
+          sed -n "/^[[:space:]]*python - <<'PY'$/,/^[[:space:]]*PY$/p" .github/workflows/pr162-followup-fix.yml | sed '1d;$d;s/^          //' > /tmp/pr162-fix.py
+          python /tmp/pr162-fix.py
+          python .github/pr162-fix-tests.py
+      - name: Install dependencies
+        run: python -m pip install -e '.[dev,docs]'
+      - name: Focused tests
+        run: PYTHONPATH=src python -m pytest -q tests/test_session_runtime.py tests/test_session_runtime_review_followup.py tests/test_live_workspace.py
+      - name: Full Python suite
+        run: PYTHONPATH=src python -m pytest -q
+      - name: Lint
+        run: |
+          python -m ruff check src/local_shell_mcp/session_runtime.py tests/test_session_runtime.py tests/test_session_runtime_review_followup.py tests/test_live_workspace.py
+          git diff --check
+      - name: Commit and push
+        run: |
+          git config user.name Castronaut
+          git config user.email caoyuhang@fwerkor.com
+          git add src/local_shell_mcp/session_runtime.py tests/test_session_runtime.py tests/test_session_runtime_review_followup.py tests/test_live_workspace.py README.md docs/guides/human-interface.md
+          git commit -m 'fix: harden session recovery and lease safety'
+          git push origin HEAD:feat/logical-session-runtime-v4
