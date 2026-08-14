@@ -21,6 +21,7 @@ from typing import Any, BinaryIO
 
 from .audit import audit
 from .fs_ops import resolve_path
+from .process_utils import managed_process_kwargs
 from .settings import get_settings
 from .shell_environment import filtered_subprocess_env
 from .shell_ops import (
@@ -1652,6 +1653,7 @@ def run_job_runner_cli(argv: list[str] | None = None) -> None:
             env=filtered_subprocess_env(blocked_names, blocked_prefixes),
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
+            **managed_process_kwargs(),
         )
         if process.stdout is None:
             raise RuntimeError("job process did not expose stdout")

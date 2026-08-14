@@ -5,6 +5,8 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
+from .process_utils import managed_process_kwargs
+
 _BEGIN_PATCH = "*** Begin Patch"
 _END_PATCH = "*** End Patch"
 _ACTION_PREFIXES = {
@@ -37,6 +39,7 @@ def git_apply_prefix(git_bin: str, cwd: str) -> str | None:
             capture_output=True,
             text=True,
             check=False,
+            **managed_process_kwargs(),
         )
     except OSError:
         return None

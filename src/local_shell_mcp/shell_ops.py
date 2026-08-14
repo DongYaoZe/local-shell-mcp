@@ -21,6 +21,7 @@ from .audit import audit
 from .errors import process_start_not_found_error
 from .fs_ops import relative_display, resolve_path
 from .models import CommandResult
+from .process_utils import managed_process_kwargs
 from .settings import get_settings
 from .shell_environment import (
     persistent_shell_args,
@@ -217,6 +218,7 @@ async def _spawn_process(command: str, cwd: str) -> asyncio.subprocess.Process:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             start_new_session=(sys.platform != "win32"),
+            **managed_process_kwargs(),
         )
     except FileNotFoundError as exc:
         raise process_start_not_found_error(
@@ -425,6 +427,7 @@ async def _run_exec(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             start_new_session=(sys.platform != "win32"),
+            **managed_process_kwargs(),
         )
         reader_tasks.extend(
             [
@@ -593,6 +596,7 @@ async def _native_start_shell(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
             start_new_session=(sys.platform != "win32"),
+            **managed_process_kwargs(),
         )
     except FileNotFoundError as exc:
         raise process_start_not_found_error(
@@ -633,6 +637,7 @@ def _native_descendant_pids(parent_pid: int) -> list[int]:
             text=True,
             check=False,
             timeout=1,
+            **managed_process_kwargs(),
         )
     except (OSError, subprocess.SubprocessError):
         return []
