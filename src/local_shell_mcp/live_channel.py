@@ -158,8 +158,10 @@ class LiveChannelManager:
                 and channel.logical_session_id not in {None, logical_session_id}
             ):
                 channel = self._channels.get(logical_live_id or "")
-            if live_id and channel is not None and channel.subject != subject:
-                raise PermissionError("Live workspace belongs to a different principal")
+            if channel is not None and channel.subject != subject:
+                if live_id:
+                    raise PermissionError("Live workspace belongs to a different principal")
+                channel = None
             if channel is None:
                 token = secrets.token_urlsafe(32)
                 digest = self._digest(token)

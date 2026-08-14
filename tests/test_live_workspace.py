@@ -529,6 +529,41 @@ async def test_live_workspace_reconnect_restores_persisted_logical_session(
 
 
 @pytest.mark.asyncio
+async def test_live_workspace_reconnect_drops_attachment_after_principal_change(
+    tmp_path, monkeypatch
+):
+    _configure(tmp_path, monkeypatch, auth="none")
+    subject = ["alice"]
+    monkeypatch.setattr(
+        "local_shell_mcp.tools._current_principal_subject", lambda: subject[0]
+    )
+    mcp = build_mcp()
+
+    _, started = await mcp.call_tool(
+        "session_manage",
+        {"action": "start", "objective": "Private task"},
+    )
+    session_id = started["data"]["session_id"]
+    run_id = started["data"]["active_run"]["run_id"]
+    opened = await mcp.call_tool(
+        "open_live_workspace", {"cwd": ".", "session_run_id": run_id}
+    )
+    assert opened.structuredContent["session_id"] == session_id
+
+    subject[0] = "bob"
+    reconnected = await mcp.call_tool(
+        "live_workspace_reconnect",
+        {"cwd": "."},
+    )
+
+    assert reconnected.structuredContent["session_id"] is None
+    with pytest.raises(PermissionError, match="different principal"):
+        session_runtime_module.get_session_runtime_manager().get(
+            session_id, subject="bob"
+        )
+
+
+@pytest.mark.asyncio
 async def test_mcp_run_lease_blocks_stale_same_transport_agent(tmp_path, monkeypatch):
     _configure(tmp_path, monkeypatch, auth="none")
     mcp = build_mcp()

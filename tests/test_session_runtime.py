@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 import time
 
 import pytest
@@ -376,6 +377,138 @@ def test_shared_backend_refreshes_sessions_across_controller_instances(tmp_path,
         clear_memory_state()
 
 
+def test_shared_backend_serializes_session_mutations_across_controllers(tmp_path, monkeypatch):
+    clear_memory_state()
+    monkeypatch.setenv("LOCAL_SHELL_MCP_WORKSPACE_ROOT", str(tmp_path))
+    monkeypatch.setenv("LOCAL_SHELL_MCP_STATE_DIR", str(tmp_path / ".state"))
+    monkeypatch.setenv("LOCAL_SHELL_MCP_STATE_BACKEND", "redis")
+    monkeypatch.setenv("LOCAL_SHELL_MCP_STATE_BACKEND_URL", "redis://state.test/0")
+    monkeypatch.setenv("LOCAL_SHELL_MCP_STATE_BACKEND_PREFIX", "session-rmw-lock-test")
+    get_settings.cache_clear()
+    shared_store = MemoryStateStore("session-rmw-lock-test")
+    monkeypatch.setattr(
+        "local_shell_mcp.session_runtime.get_state_store", lambda: shared_store
+    )
+    try:
+        first = SessionRuntimeManager()
+        second = SessionRuntimeManager()
+        started = first.manage("mcp:first", "user", action="start", objective="Shared task")
+        session_id = started["session_id"]
+        run_id = started["active_run"]["run_id"]
+        first.manage_plan(
+            "mcp:first",
+            action="start",
+            session_run_id=run_id,
+            objective="Shared task",
+            steps=[{"id": "work", "text": "Work"}],
+        )
+
+        save_started = threading.Event()
+        release_save = threading.Event()
+        original_save = first._save_locked
+
+        def pause_report_save(session):
+            if threading.current_thread().name == "session-report":
+                save_started.set()
+                assert release_save.wait(2)
+            original_save(session)
+
+        monkeypatch.setattr(first, "_save_locked", pause_report_save)
+        errors: list[BaseException] = []
+
+        def report_progress() -> None:
+            try:
+                first.manage(
+                    "mcp:first",
+                    "user",
+                    action="report",
+                    session_run_id=run_id,
+                    summary="report survives",
+                )
+            except BaseException as exc:  # pragma: no cover - asserted below.
+                errors.append(exc)
+
+        def block_plan() -> None:
+            try:
+                second.manage_plan_for_session(
+                    session_id,
+                    action="block",
+                    note="needs input",
+                    subject="user",
+                )
+            except BaseException as exc:  # pragma: no cover - asserted below.
+                errors.append(exc)
+
+        reporter = threading.Thread(target=report_progress, name="session-report")
+        blocker = threading.Thread(target=block_plan, name="session-block")
+        reporter.start()
+        assert save_started.wait(1)
+        blocker.start()
+        time.sleep(0.1)
+        release_save.set()
+        reporter.join(2)
+        blocker.join(2)
+
+        assert not reporter.is_alive()
+        assert not blocker.is_alive()
+        assert errors == []
+        restored = SessionRuntimeManager().get(session_id, subject="user")
+        assert restored["progress"]["summary"] == "report survives"
+        assert restored["plan"]["status"] == "blocked"
+        assert restored["plan"]["note"] == "needs input"
+    finally:
+        get_settings.cache_clear()
+        clear_memory_state()
+
+
+def test_shared_backend_takeover_waits_for_remote_inflight_tool(tmp_path, monkeypatch):
+    clear_memory_state()
+    monkeypatch.setenv("LOCAL_SHELL_MCP_WORKSPACE_ROOT", str(tmp_path))
+    monkeypatch.setenv("LOCAL_SHELL_MCP_STATE_DIR", str(tmp_path / ".state"))
+    monkeypatch.setenv("LOCAL_SHELL_MCP_STATE_BACKEND", "redis")
+    monkeypatch.setenv("LOCAL_SHELL_MCP_STATE_BACKEND_URL", "redis://state.test/0")
+    monkeypatch.setenv("LOCAL_SHELL_MCP_STATE_BACKEND_PREFIX", "session-inflight-test")
+    get_settings.cache_clear()
+    shared_store = MemoryStateStore("session-inflight-test")
+    monkeypatch.setattr(
+        "local_shell_mcp.session_runtime.get_state_store", lambda: shared_store
+    )
+    try:
+        first = SessionRuntimeManager()
+        second = SessionRuntimeManager()
+        started = first.manage("mcp:first", "user", action="start", objective="Shared task")
+        session_id = started["session_id"]
+        run_id = started["active_run"]["run_id"]
+        lease = first.begin_tool_call(
+            "mcp:first",
+            "remote-call",
+            expected_run_id=run_id,
+            data={"tool": "remote_transfer"},
+        )
+
+        with pytest.raises(ValueError, match="tool calls are still in flight"):
+            second.manage(
+                "mcp:second",
+                "user",
+                action="resume",
+                session_id=session_id,
+                takeover=True,
+            )
+
+        assert first.finish_tool_call(lease, "tool.completed") is None
+        resumed = second.manage(
+            "mcp:second",
+            "user",
+            action="resume",
+            session_id=session_id,
+            takeover=True,
+        )
+        assert resumed["active_run"]["run_id"] != run_id
+    finally:
+        get_settings.cache_clear()
+        clear_memory_state()
+
+
 def test_session_access_is_scoped_to_principal(tmp_path):
     manager = SessionRuntimeManager(tmp_path / ".state")
     started = manager.manage("mcp:a", "alice", action="start", objective="Private task")
@@ -384,6 +517,15 @@ def test_session_access_is_scoped_to_principal(tmp_path):
         manager.manage(
             "mcp:b", "bob", action="get", session_id=started["session_id"]
         )
+
+
+def test_current_attachment_is_discarded_when_principal_changes(tmp_path):
+    manager = SessionRuntimeManager(tmp_path / ".state")
+    started = manager.manage("mcp:a", "alice", action="start", objective="Private task")
+
+    assert manager.current_session_id("mcp:a", subject="alice") == started["session_id"]
+    assert manager.current_session_id("mcp:a", subject="bob") is None
+    assert "mcp:a" not in manager._attachments
 
 
 def test_live_workspace_reuses_channel_for_resumed_logical_session(tmp_path):
@@ -493,12 +635,16 @@ def test_session_runtime_validation_and_attachment_edges(tmp_path):
     lease = manager.begin_tool_call(
         "mcp:a", "stale-finish", expected_run_id=second_run
     )
+    with pytest.raises(ValueError, match="tool calls are still in flight"):
+        manager.manage(
+            "mcp:a", "user", action="resume", session_id=second_id, takeover=True
+        )
+    assert manager.finish_tool_call(lease, "tool.completed") is None
+    assert manager.get(second_id)["recent_activity"][-1]["data"]["stale_run"] is False
     takeover = manager.manage(
         "mcp:a", "user", action="resume", session_id=second_id, takeover=True
     )
     assert takeover["active_run"]["run_id"] != second_run
-    assert manager.finish_tool_call(lease, "tool.completed") is None
-    assert manager.get(second_id)["recent_activity"][-1]["data"]["stale_run"] is True
 
     assert manager.finish_tool_call(
         {"session_id": "missing", "run_id": "missing", "call_id": "missing"},
@@ -693,3 +839,32 @@ def test_plan_cancel_and_continuation_pending_expiry(tmp_path, monkeypatch):
     no_plan = manager.manage("mcp:b", "user", action="start", objective="No plan")
     with pytest.raises(ValueError, match="No plan exists"):
         manager.report_plan_continuation(no_plan["session_id"], accepted=False)
+
+
+def test_human_resume_preserves_overdue_goal_lease(tmp_path):
+    manager = SessionRuntimeManager(tmp_path / ".state")
+    started = manager.manage("mcp:a", "user", action="start", objective="Goal")
+    session_id = started["session_id"]
+    run_id = started["active_run"]["run_id"]
+    manager.manage_plan(
+        "mcp:a",
+        action="start",
+        session_run_id=run_id,
+        objective="Goal",
+        steps=[{"id": "work", "text": "Work"}],
+    )
+    manager.manage_plan(
+        "mcp:a", action="block", session_run_id=run_id, note="human input"
+    )
+    overdue = time.time() - PLAN_EXECUTION_LEASE_S - 1
+    manager._sessions[session_id].plan.last_agent_activity = overdue
+
+    resumed = manager.manage_plan_for_session(
+        session_id,
+        action="resume",
+        actor="human",
+        subject="user",
+    )
+
+    assert resumed["plan"]["last_agent_activity"] == overdue
+    assert manager.claim_plan_continuation(session_id, subject="user") is not None

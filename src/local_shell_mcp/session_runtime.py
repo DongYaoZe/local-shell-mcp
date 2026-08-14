@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import secrets
 import threading
 import time
 import uuid
 from collections import deque
+from collections.abc import Iterator
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -24,6 +26,7 @@ PLAN_STEP_TEXT_LIMIT = 2_000
 PLAN_NOTE_LIMIT = 2_000
 PLAN_STEP_STATUSES = frozenset({"pending", "active", "completed", "skipped"})
 SESSION_ACTIVITY_LIMIT = 200
+SESSION_IN_FLIGHT_LEASE_S = 2 * 60 * 60
 SESSION_REPORT_LIST_LIMIT = 50
 SESSION_TEXT_LIMIT = 20_000
 SESSION_LIST_LIMIT = 100
@@ -161,6 +164,7 @@ class LogicalSession:
     runs: list[AgentRun] = field(default_factory=list)
     progress: ProgressState = field(default_factory=ProgressState)
     plan: PlanState | None = None
+    in_flight_calls: dict[str, dict[str, Any]] = field(default_factory=dict)
     activity_seq: int = 0
     activity: deque[dict[str, Any]] = field(
         default_factory=lambda: deque(maxlen=SESSION_ACTIVITY_LIMIT)
@@ -207,7 +211,6 @@ class SessionRuntimeManager:
         self._loaded_storage: tuple[str, ...] | None = None
         self._sessions: dict[str, LogicalSession] = {}
         self._attachments: dict[str, tuple[str, str]] = {}
-        self._in_flight_calls: dict[str, dict[str, str]] = {}
 
     def _state_store(self):  # noqa: ANN202
         if self._state_dir_override is not None:
@@ -231,7 +234,6 @@ class SessionRuntimeManager:
             return
         self._sessions.clear()
         self._attachments.clear()
-        self._in_flight_calls.clear()
         self._loaded_storage = signature
         store = self._state_store()
         for key in store.list_keys("sessions/"):
@@ -294,6 +296,18 @@ class SessionRuntimeManager:
             if session is not None:
                 refreshed[session.session_id] = session
         self._sessions = refreshed
+
+    @contextlib.contextmanager
+    def _shared_session_locks_locked(self, session_ids: list[str]) -> Iterator[None]:
+        normalized = sorted({str(item) for item in session_ids if item})
+        if not normalized or not self._uses_shared_state_backend():
+            yield
+            return
+        store = self._state_store()
+        with contextlib.ExitStack() as stack:
+            for session_id in normalized:
+                stack.enter_context(store.lock(f"sessions/{session_id}"))
+            yield
 
     @staticmethod
     def _bounded_text(value: str | None) -> str | None:
@@ -408,6 +422,9 @@ class SessionRuntimeManager:
         activity_payload = payload.get("activity") or []
         if not isinstance(activity_payload, list):
             raise ValueError("invalid activity state")
+        in_flight_payload = payload.get("in_flight_calls") or {}
+        if not isinstance(in_flight_payload, dict):
+            raise ValueError("invalid in-flight tool state")
         return LogicalSession(
             session_id=str(payload["session_id"]),
             subject=str(payload["subject"]),
@@ -442,6 +459,14 @@ class SessionRuntimeManager:
                 ),
             ),
             plan=cls._plan_from_payload(payload.get("plan")),
+            in_flight_calls={
+                str(call_id): {
+                    "run_id": str(value.get("run_id") or ""),
+                    "started_at": float(value.get("started_at") or 0.0),
+                }
+                for call_id, value in in_flight_payload.items()
+                if isinstance(value, dict) and value.get("run_id")
+            },
             activity_seq=int(payload.get("activity_seq") or 0),
             activity=deque(
                 [item for item in activity_payload if isinstance(item, dict)],
@@ -472,6 +497,7 @@ class SessionRuntimeManager:
             ],
             "progress": asdict(session.progress),
             "plan": cls._plan_to_payload(session.plan),
+            "in_flight_calls": session.in_flight_calls,
             "activity_seq": session.activity_seq,
             "activity": list(session.activity),
         }
@@ -545,6 +571,10 @@ class SessionRuntimeManager:
                 raise ValueError(
                     "Session already has an active agent run; retry resume with takeover=true to supersede it"
                 )
+            if self._in_flight_count_locked(session.session_id):
+                raise ValueError(
+                    "Cannot take over a logical session while tool calls are still in flight; retry after they complete"
+                )
             current.status = "superseded"
             current.updated_at = time.time()
         previous = self._attachments.get(session_key)
@@ -580,8 +610,23 @@ class SessionRuntimeManager:
         self._attachments[session_key] = (session.session_id, run.run_id)
         return run
 
+    @staticmethod
+    def _prune_in_flight_locked(session: LogicalSession, now: float | None = None) -> None:
+        current = time.time() if now is None else now
+        expired = [
+            call_id
+            for call_id, lease in session.in_flight_calls.items()
+            if current - float(lease.get("started_at") or 0.0) >= SESSION_IN_FLIGHT_LEASE_S
+        ]
+        for call_id in expired:
+            session.in_flight_calls.pop(call_id, None)
+
     def _in_flight_count_locked(self, session_id: str) -> int:
-        return len(self._in_flight_calls.get(session_id, {}))
+        session = self._sessions.get(session_id)
+        if session is None:
+            return 0
+        self._prune_in_flight_locked(session)
+        return len(session.in_flight_calls)
 
     def _public_state_locked(
         self, session: LogicalSession, *, recent_activity: int = 30
@@ -607,10 +652,41 @@ class SessionRuntimeManager:
         takeover: bool = False,
         session_run_id: str | None = None,
         require_run_token: bool = False,
+        _state_locks_held: bool = False,
     ) -> dict[str, Any]:
         normalized_action = str(action).strip().lower()
         with self._lock:
             self._ensure_loaded_locked()
+            if not _state_locks_held and normalized_action not in {"get", "list"}:
+                attachment = self._attachments.get(session_key)
+                lock_ids: list[str] = []
+                if normalized_action == "start":
+                    if attachment is not None:
+                        lock_ids.append(attachment[0])
+                else:
+                    target_id = str(session_id or (attachment[0] if attachment else ""))
+                    if target_id:
+                        lock_ids.append(target_id)
+                    if attachment is not None and attachment[0] != target_id:
+                        lock_ids.append(attachment[0])
+                if lock_ids and self._uses_shared_state_backend():
+                    with self._shared_session_locks_locked(lock_ids):
+                        return self.manage(
+                            session_key,
+                            subject,
+                            action=action,
+                            session_id=session_id,
+                            label=label,
+                            objective=objective,
+                            summary=summary,
+                            findings=findings,
+                            next=next,
+                            blockers=blockers,
+                            takeover=takeover,
+                            session_run_id=session_run_id,
+                            require_run_token=require_run_token,
+                            _state_locks_held=True,
+                        )
             if normalized_action == "start":
                 now = time.time()
                 logical = LogicalSession(
@@ -822,15 +898,18 @@ class SessionRuntimeManager:
             )
         return logical
 
-    def current_session_id(self, session_key: str) -> str | None:
+    def current_session_id(self, session_key: str, *, subject: str | None = None) -> str | None:
         with self._lock:
             self._ensure_loaded_locked()
             attachment = self._attachments.get(session_key)
             if attachment is None:
                 return None
             try:
-                self._assert_attachment_locked(session_key)
+                logical = self._assert_attachment_locked(session_key)
             except RuntimeError:
+                return None
+            if subject is not None and logical.subject != subject:
+                self._attachments.pop(session_key, None)
                 return None
             return attachment[0]
 
@@ -860,6 +939,7 @@ class SessionRuntimeManager:
         expected_run_id: str | None,
         require_run_token: bool = True,
         data: dict[str, Any] | None = None,
+        _state_lock_held: bool = False,
     ) -> dict[str, Any] | None:
         """Acquire a per-run lease for one tool call and record its start.
 
@@ -870,6 +950,17 @@ class SessionRuntimeManager:
             self._ensure_loaded_locked()
             if session_key not in self._attachments:
                 return None
+            attachment = self._attachments[session_key]
+            if not _state_lock_held and self._uses_shared_state_backend():
+                with self._shared_session_locks_locked([attachment[0]]):
+                    return self.begin_tool_call(
+                        session_key,
+                        call_id,
+                        expected_run_id=expected_run_id,
+                        require_run_token=require_run_token,
+                        data=data,
+                        _state_lock_held=True,
+                    )
             logical = self._assert_attachment_locked(
                 session_key,
                 expected_run_id=expected_run_id,
@@ -878,8 +969,9 @@ class SessionRuntimeManager:
             run = logical.active_run()
             if run is None:
                 raise RuntimeError("Logical session has no active agent run")
-            self._in_flight_calls.setdefault(logical.session_id, {})[call_id] = run.run_id
-            run.updated_at = time.time()
+            now = time.time()
+            logical.in_flight_calls[call_id] = {"run_id": run.run_id, "started_at": now}
+            run.updated_at = now
             persistence_error = None
             try:
                 self._append_activity_locked(
@@ -904,6 +996,7 @@ class SessionRuntimeManager:
         event_type: str,
         *,
         data: dict[str, Any] | None = None,
+        _state_lock_held: bool = False,
     ) -> str | None:
         if lease is None:
             return None
@@ -912,15 +1005,19 @@ class SessionRuntimeManager:
             session_id = str(lease.get("session_id") or "")
             run_id = str(lease.get("run_id") or "")
             call_id = str(lease.get("call_id") or "")
+            if not _state_lock_held and self._uses_shared_state_backend():
+                with self._shared_session_locks_locked([session_id]):
+                    return self.finish_tool_call(
+                        lease,
+                        event_type,
+                        data=data,
+                        _state_lock_held=True,
+                    )
             self._refresh_session_locked(session_id)
-            calls = self._in_flight_calls.get(session_id)
-            if calls is not None:
-                calls.pop(call_id, None)
-                if not calls:
-                    self._in_flight_calls.pop(session_id, None)
             logical = self._sessions.get(session_id)
             if logical is None:
                 return None
+            logical.in_flight_calls.pop(call_id, None)
             run = next((item for item in logical.runs if item.run_id == run_id), None)
             if run is not None:
                 run.updated_at = time.time()
@@ -994,10 +1091,33 @@ class SessionRuntimeManager:
         text: str | None = None,
         note: str | None = None,
         actor: str = "agent",
+        _state_lock_held: bool = False,
     ) -> dict[str, Any]:
         with self._lock:
             self._ensure_loaded_locked()
             normalized_action = action.strip().lower()
+            attachment = self._attachments.get(session_key)
+            if (
+                not _state_lock_held
+                and normalized_action != "get"
+                and attachment is not None
+                and self._uses_shared_state_backend()
+            ):
+                with self._shared_session_locks_locked([attachment[0]]):
+                    return self.manage_plan(
+                        session_key,
+                        action=action,
+                        session_run_id=session_run_id,
+                        require_run_token=require_run_token,
+                        objective=objective,
+                        steps=steps,
+                        step_id=step_id,
+                        status=status,
+                        text=text,
+                        note=note,
+                        actor=actor,
+                        _state_lock_held=True,
+                    )
             logical = self._assert_attachment_locked(
                 session_key,
                 expected_run_id=session_run_id,
@@ -1023,8 +1143,23 @@ class SessionRuntimeManager:
         note: str | None = None,
         actor: str = "human",
         subject: str | None = None,
+        _state_lock_held: bool = False,
     ) -> dict[str, Any]:
         with self._lock:
+            if (
+                not _state_lock_held
+                and action.strip().lower() != "get"
+                and self._uses_shared_state_backend()
+            ):
+                with self._shared_session_locks_locked([session_id]):
+                    return self.manage_plan_for_session(
+                        session_id,
+                        action=action,
+                        note=note,
+                        actor=actor,
+                        subject=subject,
+                        _state_lock_held=True,
+                    )
             logical = self._require_session_locked(session_id, subject)
             return self._manage_plan_locked(logical, action=action, note=note, actor=actor)
 
@@ -1154,7 +1289,8 @@ class SessionRuntimeManager:
                 plan.note = None
                 plan.revision += 1
                 plan.updated_at = now
-                plan.last_agent_activity = now
+                if actor == "agent":
+                    plan.last_agent_activity = now
                 plan.continuation_retry_after = None
                 event_type = "plan.resumed"
                 event_data = {"plan_id": plan.plan_id}
@@ -1206,8 +1342,21 @@ class SessionRuntimeManager:
             ),
         }
 
-    def claim_plan_continuation(self, session_id: str, *, subject: str | None = None) -> dict[str, Any] | None:
+    def claim_plan_continuation(
+        self,
+        session_id: str,
+        *,
+        subject: str | None = None,
+        _state_lock_held: bool = False,
+    ) -> dict[str, Any] | None:
         with self._lock:
+            if not _state_lock_held and self._uses_shared_state_backend():
+                with self._shared_session_locks_locked([session_id]):
+                    return self.claim_plan_continuation(
+                        session_id,
+                        subject=subject,
+                        _state_lock_held=True,
+                    )
             logical = self._require_session_locked(session_id, subject)
             plan = logical.plan
             if plan is None or plan.status != "active" or not plan.has_unfinished_steps():
@@ -1252,8 +1401,18 @@ class SessionRuntimeManager:
         accepted: bool,
         error: str | None = None,
         subject: str | None = None,
+        _state_lock_held: bool = False,
     ) -> dict[str, Any]:
         with self._lock:
+            if not _state_lock_held and self._uses_shared_state_backend():
+                with self._shared_session_locks_locked([session_id]):
+                    return self.report_plan_continuation(
+                        session_id,
+                        accepted=accepted,
+                        error=error,
+                        subject=subject,
+                        _state_lock_held=True,
+                    )
             logical = self._require_session_locked(session_id, subject)
             plan = logical.plan
             if plan is None:
