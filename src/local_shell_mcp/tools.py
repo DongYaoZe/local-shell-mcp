@@ -727,6 +727,7 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
                 arguments=arguments,
                 **audit_context,
             )
+            logical_activity_finished = False
             try:
                 with audit_call_context(call_id) as call_state:
                     if local_access_error is not None:
@@ -775,6 +776,7 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
                     call_id=call_id,
                     stage="completed",
                 )
+                logical_activity_finished = True
                 return result
             except TimeoutError:
                 exc = PublicToolTimeoutError(
@@ -820,6 +822,7 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
                     call_id=call_id,
                     stage="timeout",
                 )
+                logical_activity_finished = True
                 return result
             except Exception as exc:
                 audit(
@@ -854,7 +857,26 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
                     call_id=call_id,
                     stage="failed",
                 )
+                logical_activity_finished = True
                 raise
+            finally:
+                if not logical_activity_finished and logical_lease is not None:
+                    cancellation_data = {
+                        "call_id": call_id,
+                        "ok": False,
+                        "duration_ms": round((time.monotonic() - started_at) * 1000),
+                        "cancelled": True,
+                        **live_arguments,
+                    }
+                    _finish_session_tool_activity(
+                        logical_manager,
+                        logical_lease,
+                        "tool.cancelled",
+                        cancellation_data,
+                        tool_name=__tool_name,
+                        call_id=call_id,
+                        stage="cancelled",
+                    )
 
         tool.fn = wrapped
 

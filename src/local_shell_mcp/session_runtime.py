@@ -27,6 +27,7 @@ PLAN_NOTE_LIMIT = 2_000
 PLAN_STEP_STATUSES = frozenset({"pending", "active", "completed", "skipped"})
 SESSION_ACTIVITY_LIMIT = 200
 SESSION_IN_FLIGHT_LEASE_S = 2 * 60 * 60
+SESSION_RUN_HISTORY_LIMIT = 100
 SESSION_REPORT_LIST_LIMIT = 50
 SESSION_TEXT_LIMIT = 20_000
 SESSION_LIST_LIMIT = 100
@@ -232,10 +233,8 @@ class SessionRuntimeManager:
         signature = self._storage_signature()
         if self._loaded_storage == signature:
             return
-        self._sessions.clear()
-        self._attachments.clear()
-        self._loaded_storage = signature
         store = self._state_store()
+        loaded_sessions: dict[str, LogicalSession] = {}
         for key in store.list_keys("sessions/"):
             if not key.endswith(".json"):
                 continue
@@ -253,7 +252,10 @@ class SessionRuntimeManager:
                 json.JSONDecodeError,
             ):
                 continue
-            self._sessions[session.session_id] = session
+            loaded_sessions[session.session_id] = session
+        self._sessions = loaded_sessions
+        self._attachments.clear()
+        self._loaded_storage = signature
 
     def _uses_shared_state_backend(self) -> bool:
         return self._state_dir_override is None and get_settings().state_backend == "redis"
@@ -281,6 +283,7 @@ class SessionRuntimeManager:
         if refreshed is None:
             self._sessions.pop(session_id, None)
         else:
+            self._restore_local_run_owners_locked(refreshed)
             self._sessions[session_id] = refreshed
 
     def _refresh_all_sessions_locked(self) -> None:
@@ -294,6 +297,7 @@ class SessionRuntimeManager:
             session_id = key.removeprefix("sessions/").removesuffix(".json")
             session = self._load_session_from_store_locked(session_id)
             if session is not None:
+                self._restore_local_run_owners_locked(session)
                 refreshed[session.session_id] = session
         self._sessions = refreshed
 
@@ -308,6 +312,14 @@ class SessionRuntimeManager:
             for session_id in normalized:
                 stack.enter_context(store.lock(f"sessions/{session_id}"))
             yield
+
+    def _restore_local_run_owners_locked(self, session: LogicalSession) -> None:
+        for session_key, (session_id, run_id) in self._attachments.items():
+            if session_id != session.session_id:
+                continue
+            run = next((item for item in session.runs if item.run_id == run_id), None)
+            if run is not None:
+                run.session_key = session_key
 
     @staticmethod
     def _bounded_text(value: str | None) -> str | None:
@@ -409,6 +421,19 @@ class SessionRuntimeManager:
             last_agent_activity=float(payload.get("last_agent_activity") or 0.0),
         )
 
+    @staticmethod
+    def _bounded_run_history(
+        runs: list[AgentRun], active_run_id: str | None
+    ) -> list[AgentRun]:
+        if len(runs) <= SESSION_RUN_HISTORY_LIMIT:
+            return runs
+        recent = runs[-SESSION_RUN_HISTORY_LIMIT:]
+        if active_run_id and all(run.run_id != active_run_id for run in recent):
+            active = next((run for run in reversed(runs) if run.run_id == active_run_id), None)
+            if active is not None:
+                recent = [active, *recent[-(SESSION_RUN_HISTORY_LIMIT - 1) :]]
+        return recent
+
     @classmethod
     def _session_from_payload(cls, payload: Any) -> LogicalSession:
         if not isinstance(payload, dict):
@@ -425,18 +450,11 @@ class SessionRuntimeManager:
         in_flight_payload = payload.get("in_flight_calls") or {}
         if not isinstance(in_flight_payload, dict):
             raise ValueError("invalid in-flight tool state")
-        return LogicalSession(
-            session_id=str(payload["session_id"]),
-            subject=str(payload["subject"]),
-            created_at=float(payload["created_at"]),
-            updated_at=float(payload["updated_at"]),
-            status=str(payload.get("status") or "active"),
-            label=cls._bounded_text(payload.get("label")),
-            objective=cls._bounded_text(payload.get("objective")),
-            active_run_id=(
-                None if payload.get("active_run_id") is None else str(payload["active_run_id"])
-            ),
-            runs=[
+        active_run_id = (
+            None if payload.get("active_run_id") is None else str(payload["active_run_id"])
+        )
+        runs = cls._bounded_run_history(
+            [
                 AgentRun(
                     run_id=str(run["run_id"]),
                     session_key=str(run.get("session_key") or "persisted"),
@@ -447,6 +465,18 @@ class SessionRuntimeManager:
                 for run in runs_payload
                 if isinstance(run, dict)
             ],
+            active_run_id,
+        )
+        return LogicalSession(
+            session_id=str(payload["session_id"]),
+            subject=str(payload["subject"]),
+            created_at=float(payload["created_at"]),
+            updated_at=float(payload["updated_at"]),
+            status=str(payload.get("status") or "active"),
+            label=cls._bounded_text(payload.get("label")),
+            objective=cls._bounded_text(payload.get("objective")),
+            active_run_id=active_run_id,
+            runs=runs,
             progress=ProgressState(
                 summary=cls._bounded_text(progress_payload.get("summary")),
                 findings=cls._bounded_list(progress_payload.get("findings")) or [],
@@ -606,6 +636,7 @@ class SessionRuntimeManager:
         )
         session.runs.append(run)
         session.active_run_id = run.run_id
+        session.runs = self._bounded_run_history(session.runs, session.active_run_id)
         session.updated_at = now
         self._attachments[session_key] = (session.session_id, run.run_id)
         return run

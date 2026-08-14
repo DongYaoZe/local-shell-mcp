@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from mcp.server.fastmcp import FastMCP
 from mcp.types import CallToolResult
 from starlette.requests import Request
 
@@ -27,7 +28,11 @@ from local_shell_mcp.main import _build_mcp_http_app
 from local_shell_mcp.oauth import ALL_OAUTH_SCOPES
 from local_shell_mcp.session_runtime import SessionRuntimeManager
 from local_shell_mcp.settings import get_settings
-from local_shell_mcp.tools import build_mcp
+from local_shell_mcp.tools import (
+    _install_mcp_tool_watchdogs,
+    _install_session_run_arguments,
+    build_mcp,
+)
 
 
 def _configure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, auth: str = "oauth") -> None:
@@ -561,6 +566,38 @@ async def test_live_workspace_reconnect_drops_attachment_after_principal_change(
         session_runtime_module.get_session_runtime_manager().get(
             session_id, subject="bob"
         )
+
+
+@pytest.mark.asyncio
+async def test_cancelled_tool_call_releases_logical_inflight_lease(tmp_path, monkeypatch):
+    _configure(tmp_path, monkeypatch, auth="none")
+    manager = session_runtime_module.get_session_runtime_manager()
+    started = manager.manage("direct", "user", action="start", objective="Cancelable task")
+    session_id = started["session_id"]
+    run_id = started["active_run"]["run_id"]
+    entered = asyncio.Event()
+    never = asyncio.Event()
+    mcp = FastMCP("cancel-test")
+
+    @mcp.tool()
+    async def wait_forever() -> dict[str, bool]:
+        entered.set()
+        await never.wait()
+        return {"ok": True}
+
+    _install_session_run_arguments(mcp)
+    _install_mcp_tool_watchdogs(mcp)
+    task = asyncio.create_task(
+        mcp.call_tool("wait_forever", {"session_run_id": run_id})
+    )
+    await asyncio.wait_for(entered.wait(), timeout=1)
+    assert manager._sessions[session_id].in_flight_calls
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert manager._sessions[session_id].in_flight_calls == {}
 
 
 @pytest.mark.asyncio

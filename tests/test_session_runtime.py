@@ -15,6 +15,7 @@ from local_shell_mcp.session_runtime import (
     PLAN_OBJECTIVE_LIMIT,
     PLAN_STEP_ID_LIMIT,
     PLAN_STEP_TEXT_LIMIT,
+    SESSION_RUN_HISTORY_LIMIT,
     SessionRuntimeManager,
 )
 from local_shell_mcp.settings import get_settings
@@ -377,6 +378,42 @@ def test_shared_backend_refreshes_sessions_across_controller_instances(tmp_path,
         clear_memory_state()
 
 
+def test_shared_backend_refresh_preserves_local_run_owner(tmp_path, monkeypatch):
+    clear_memory_state()
+    monkeypatch.setenv("LOCAL_SHELL_MCP_WORKSPACE_ROOT", str(tmp_path))
+    monkeypatch.setenv("LOCAL_SHELL_MCP_STATE_DIR", str(tmp_path / ".state"))
+    monkeypatch.setenv("LOCAL_SHELL_MCP_STATE_BACKEND", "redis")
+    monkeypatch.setenv("LOCAL_SHELL_MCP_STATE_BACKEND_URL", "redis://state.test/0")
+    monkeypatch.setenv("LOCAL_SHELL_MCP_STATE_BACKEND_PREFIX", "session-owner-refresh-test")
+    get_settings.cache_clear()
+    shared_store = MemoryStateStore("session-owner-refresh-test")
+    monkeypatch.setattr(
+        "local_shell_mcp.session_runtime.get_state_store", lambda: shared_store
+    )
+    try:
+        manager = SessionRuntimeManager()
+        started = manager.manage("mcp:a", "user", action="start", objective="Task")
+        session_id = started["session_id"]
+        run_id = started["active_run"]["run_id"]
+        assert manager.manage("mcp:list", "user", action="list")["sessions"][0][
+            "session_id"
+        ] == session_id
+
+        resumed = manager.manage(
+            "mcp:a",
+            "user",
+            action="resume",
+            session_id=session_id,
+            takeover=False,
+        )
+
+        assert resumed["active_run"]["run_id"] == run_id
+        assert manager._sessions[session_id].active_run().session_key == "mcp:a"
+    finally:
+        get_settings.cache_clear()
+        clear_memory_state()
+
+
 def test_shared_backend_serializes_session_mutations_across_controllers(tmp_path, monkeypatch):
     clear_memory_state()
     monkeypatch.setenv("LOCAL_SHELL_MCP_WORKSPACE_ROOT", str(tmp_path))
@@ -526,6 +563,77 @@ def test_current_attachment_is_discarded_when_principal_changes(tmp_path):
     assert manager.current_session_id("mcp:a", subject="alice") == started["session_id"]
     assert manager.current_session_id("mcp:a", subject="bob") is None
     assert "mcp:a" not in manager._attachments
+
+
+def test_session_initial_load_retries_after_transient_scan_failure(tmp_path, monkeypatch):
+    state_dir = tmp_path / ".state"
+    seeded = SessionRuntimeManager(state_dir).manage(
+        "mcp:seed", "user", action="start", objective="Persisted"
+    )
+    manager = SessionRuntimeManager(state_dir)
+    store = manager._state_store()
+
+    class FlakyStore:
+        def __init__(self, delegate):
+            self.delegate = delegate
+            self.failed = False
+
+        def list_keys(self, prefix=""):
+            if not self.failed:
+                self.failed = True
+                raise OSError("mount unavailable")
+            return self.delegate.list_keys(prefix)
+
+        def read_bytes(self, key):
+            return self.delegate.read_bytes(key)
+
+        def write_bytes(self, key, value):
+            return self.delegate.write_bytes(key, value)
+
+        def delete(self, key):
+            return self.delegate.delete(key)
+
+        def lock(self, key):
+            return self.delegate.lock(key)
+
+    flaky = FlakyStore(store)
+    monkeypatch.setattr(manager, "_state_store", lambda: flaky)
+
+    with pytest.raises(OSError, match="mount unavailable"):
+        manager.get(seeded["session_id"], subject="user")
+    assert manager._loaded_storage is None
+    restored = manager.get(seeded["session_id"], subject="user")
+    assert restored["objective"] == "Persisted"
+
+
+def test_agent_run_history_is_bounded_and_keeps_active_run(tmp_path):
+    state_dir = tmp_path / ".state"
+    manager = SessionRuntimeManager(state_dir)
+    started = manager.manage("mcp:a", "user", action="start", objective="Task")
+    session_id = started["session_id"]
+    active_run_id = started["active_run"]["run_id"]
+
+    for _ in range(SESSION_RUN_HISTORY_LIMIT + 20):
+        resumed = manager.manage(
+            "mcp:a",
+            "user",
+            action="resume",
+            session_id=session_id,
+            takeover=True,
+        )
+        active_run_id = resumed["active_run"]["run_id"]
+
+    logical = manager._sessions[session_id]
+    assert len(logical.runs) == SESSION_RUN_HISTORY_LIMIT
+    assert logical.active_run_id == active_run_id
+    assert logical.active_run() is logical.runs[-1]
+
+    restored_manager = SessionRuntimeManager(state_dir)
+    restored_manager.get(session_id, subject="user")
+    restored = restored_manager._sessions[session_id]
+    assert len(restored.runs) == SESSION_RUN_HISTORY_LIMIT
+    assert restored.active_run_id == active_run_id
+    assert restored.active_run() is not None
 
 
 def test_live_workspace_reuses_channel_for_resumed_logical_session(tmp_path):
