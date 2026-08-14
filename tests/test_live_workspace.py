@@ -590,7 +590,7 @@ async def test_live_workspace_reconnect_drops_attachment_after_principal_change(
 async def test_cancelled_tool_call_releases_logical_inflight_lease(tmp_path, monkeypatch):
     _configure(tmp_path, monkeypatch, auth="none")
     manager = session_runtime_module.get_session_runtime_manager()
-    started = manager.manage("direct", "user", action="start", objective="Cancelable task")
+    started = manager.manage("direct", "local-mcp-client", action="start", objective="Cancelable task")
     session_id = started["session_id"]
     run_id = started["active_run"]["run_id"]
     entered = asyncio.Event()
@@ -677,7 +677,7 @@ async def test_mcp_run_lease_blocks_stale_same_transport_agent(tmp_path, monkeyp
 
 
 @pytest.mark.asyncio
-async def test_completed_tool_result_survives_session_activity_write_failure(
+async def test_tool_does_not_execute_when_start_lease_persistence_fails(
     tmp_path, monkeypatch
 ):
     _configure(tmp_path, monkeypatch, auth="none")
@@ -692,16 +692,16 @@ async def test_completed_tool_result_survives_session_activity_write_failure(
         raise OSError("state volume full")
 
     monkeypatch.setattr(manager, "_save_locked", fail_save)
-    _, result = await mcp.call_tool(
-        "write_file",
-        {
-            "path": "completed.txt",
-            "content": "completed once",
-            "session_run_id": run_id,
-        },
-    )
-    assert result["ok"] is True
-    assert (tmp_path / "completed.txt").read_text(encoding="utf-8") == "completed once"
+    with pytest.raises(Exception, match="refusing to execute"):
+        await mcp.call_tool(
+            "write_file",
+            {
+                "path": "completed.txt",
+                "content": "must not be written",
+                "session_run_id": run_id,
+            },
+        )
+    assert not (tmp_path / "completed.txt").exists()
 
 
 @pytest.mark.asyncio

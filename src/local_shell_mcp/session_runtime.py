@@ -13,6 +13,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .auth import current_principal
 from .settings import get_settings
 from .state_store import FileStateStore, get_state_store
 
@@ -557,6 +558,13 @@ class SessionRuntimeManager:
     def _new_run_id() -> str:
         return f"r_{secrets.token_hex(5)}"
 
+    @staticmethod
+    def _authenticated_subject() -> str | None:
+        principal = current_principal()
+        if principal is None:
+            return None
+        return principal.subject or principal.email or "mcp-client"
+
     def _require_session_locked(self, session_id: str, subject: str | None = None) -> LogicalSession:
         self._ensure_loaded_locked()
         normalized_id = str(session_id)
@@ -874,13 +882,44 @@ class SessionRuntimeManager:
             if normalized_action == "resume":
                 if logical.status != "active":
                     raise ValueError(f"Cannot resume a {logical.status} session")
-                run = self._attach_new_run_locked(logical, session_key, takeover=takeover)
-                self._append_activity_locked(
-                    logical,
-                    "session.resumed",
-                    actor="agent",
-                    data={"run_id": run.run_id, "takeover": takeover},
-                )
+                previous_attachment = self._attachments.get(session_key)
+                snapshots: dict[str, LogicalSession] = {
+                    logical.session_id: copy.deepcopy(logical)
+                }
+                if previous_attachment is not None:
+                    previous_session = self._sessions.get(previous_attachment[0])
+                    if (
+                        previous_session is not None
+                        and previous_session.session_id not in snapshots
+                    ):
+                        snapshots[previous_session.session_id] = copy.deepcopy(previous_session)
+                try:
+                    run = self._attach_new_run_locked(logical, session_key, takeover=takeover)
+                    self._append_activity_locked(
+                        logical,
+                        "session.resumed",
+                        actor="agent",
+                        data={"run_id": run.run_id, "takeover": takeover},
+                        touch_plan=True,
+                    )
+                except Exception as exc:
+                    rollback_errors: list[str] = []
+                    for snapshot in snapshots.values():
+                        self._sessions[snapshot.session_id] = snapshot
+                    if previous_attachment is None:
+                        self._attachments.pop(session_key, None)
+                    else:
+                        self._attachments[session_key] = previous_attachment
+                    for snapshot in snapshots.values():
+                        try:
+                            self._save_locked(snapshot)
+                        except Exception as rollback_exc:  # noqa: BLE001 - preserve original error.
+                            rollback_errors.append(
+                                f"restore {snapshot.session_id}: {type(rollback_exc).__name__}: {rollback_exc}"
+                            )
+                    if rollback_errors:
+                        exc.add_note("Session resume rollback warnings: " + "; ".join(rollback_errors))
+                    raise
                 return self._public_state_locked(logical)
 
             self._assert_attachment_locked(
@@ -888,6 +927,7 @@ class SessionRuntimeManager:
                 logical.session_id,
                 expected_run_id=session_run_id,
                 require_run_token=require_run_token,
+                subject=subject,
             )
             run = logical.active_run()
             if run is None:
@@ -990,6 +1030,7 @@ class SessionRuntimeManager:
         *,
         expected_run_id: str | None = None,
         require_run_token: bool = False,
+        subject: str | None = None,
     ) -> LogicalSession:
         attachment = self._attachments.get(session_key)
         if attachment is None:
@@ -998,6 +1039,10 @@ class SessionRuntimeManager:
             )
         if session_id is not None and attachment[0] != session_id:
             raise RuntimeError("Current agent run is attached to a different logical session")
+        logical = self._require_session_locked(attachment[0])
+        if subject is not None and logical.subject != subject:
+            self._attachments.pop(session_key, None)
+            raise PermissionError("Logical session belongs to a different principal")
         if require_run_token and not expected_run_id:
             raise RuntimeError(
                 "session_run_id is required while a logical session is attached; use the active_run.run_id returned by session_manage"
@@ -1006,7 +1051,6 @@ class SessionRuntimeManager:
             raise RuntimeError(
                 "This agent run has been superseded; resume the logical session and use its new active_run.run_id"
             )
-        logical = self._require_session_locked(attachment[0])
         if logical.status != "active":
             raise RuntimeError(f"Logical session is {logical.status}; start or resume another session")
         if logical.active_run_id != attachment[1]:
@@ -1027,11 +1071,8 @@ class SessionRuntimeManager:
             if attachment is None:
                 return None
             try:
-                logical = self._assert_attachment_locked(session_key)
-            except RuntimeError:
-                return None
-            if subject is not None and logical.subject != subject:
-                self._attachments.pop(session_key, None)
+                self._assert_attachment_locked(session_key, subject=subject)
+            except (RuntimeError, PermissionError):
                 return None
             return attachment[0]
 
@@ -1064,10 +1105,10 @@ class SessionRuntimeManager:
         data: dict[str, Any] | None = None,
         _state_lock_held: bool = False,
     ) -> dict[str, Any] | None:
-        """Acquire a per-run lease for one tool call and record its start.
+        """Acquire and durably persist a per-run lease before a tool may execute.
 
-        Persistence failures are returned as warnings because they must not turn a
-        successfully executed external mutation into a retryable tool failure.
+        A start-persistence failure is fail-closed because running an external mutation
+        without a durable in-flight lease would permit unsafe takeover after recovery.
         """
         with self._lock:
             self._ensure_loaded_locked()
@@ -1116,14 +1157,15 @@ class SessionRuntimeManager:
                 session_key,
                 expected_run_id=expected_run_id,
                 require_run_token=require_run_token,
+                subject=subject,
             )
             run = logical.active_run()
             if run is None:
                 raise RuntimeError("Logical session has no active agent run")
+            before_start = copy.deepcopy(logical)
             now = time.time()
             logical.in_flight_calls[call_id] = {"run_id": run.run_id, "started_at": now}
             run.updated_at = now
-            persistence_error = None
             try:
                 self._append_activity_locked(
                     logical,
@@ -1132,13 +1174,16 @@ class SessionRuntimeManager:
                     data={"call_id": call_id, **(data or {})},
                     touch_plan=True,
                 )
-            except Exception as exc:  # noqa: BLE001 - warning is surfaced by caller.
-                persistence_error = f"{type(exc).__name__}: {exc}"
+            except Exception as exc:
+                self._sessions[logical.session_id] = before_start
+                raise RuntimeError(
+                    "Failed to persist the tool-call lease; refusing to execute the tool unprotected"
+                ) from exc
             return {
                 "session_id": logical.session_id,
                 "run_id": run.run_id,
                 "call_id": call_id,
-                "persistence_error": persistence_error,
+                "persistence_error": None,
             }
 
     def finish_tool_call(
@@ -1281,6 +1326,7 @@ class SessionRuntimeManager:
                 session_key,
                 expected_run_id=session_run_id,
                 require_run_token=require_run_token and normalized_action != "get",
+                subject=self._authenticated_subject(),
             )
             return self._manage_plan_locked(
                 logical,

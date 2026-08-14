@@ -362,22 +362,24 @@ def test_plan_continuation_waits_for_inflight_and_backs_off(tmp_path):
     assert manager.claim_plan_continuation(session_id, subject="user") is not None
 
 
-def test_session_activity_persistence_failure_keeps_tool_lease_recoverable(
-    tmp_path, monkeypatch
-):
+def test_tool_start_persistence_failure_fails_closed(tmp_path, monkeypatch):
     manager = SessionRuntimeManager(tmp_path / ".state")
     started = manager.manage("mcp:a", "user", action="start", objective="Task")
+    session_id = started["session_id"]
     run_id = started["active_run"]["run_id"]
 
     def fail_save(_session):
         raise OSError("disk full")
 
     monkeypatch.setattr(manager, "_save_locked", fail_save)
-    lease = manager.begin_tool_call("mcp:a", "call-1", expected_run_id=run_id)
-    assert lease is not None
-    assert "disk full" in lease["persistence_error"]
-    error = manager.finish_tool_call(lease, "tool.completed", data={"ok": True})
-    assert error is not None and "disk full" in error
+    with pytest.raises(RuntimeError, match="refusing to execute"):
+        manager.begin_tool_call(
+            "mcp:a",
+            "call-1",
+            expected_run_id=run_id,
+            subject="user",
+        )
+    assert manager._sessions[session_id].in_flight_calls == {}
 
 
 def test_tool_completion_persists_lease_removal_before_optional_activity(

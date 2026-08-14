@@ -34,7 +34,7 @@ open_live_workspace()
 
 `takeover=true` supersedes a still-active older agent run. Any later tool call from the superseded run is rejected until that agent explicitly resumes the Session again. Sessions do not bind a machine or working directory; normal tool parameters continue to choose local/remote targets and paths.
 
-An optional `plan_manage` Plan enables Goal mode for the Session. If the Plan is active and no agent activity occurs for 15 minutes, an attached Live Workspace can ask ChatGPT to continue. The continuation first resumes the same `session_id` and is limited to 10 accepted continuation messages. Human pause/resume/cancel controls update the Session-owned Plan rather than ephemeral Live Workspace state.
+An optional `plan_manage` Plan enables Goal mode for the Session. If the Plan is active and no agent activity occurs for 15 minutes, an attached Live Workspace can ask ChatGPT to continue. The continuation first resumes the same `session_id` and is limited to 10 continuation attempts (accepted or rejected). Blocked, completed, and cancelled Plan statuses are not auto-continued; an active Plan whose steps are all completed or skipped remains eligible for cleanup continuation so the resumed agent can finish the Plan. Human pause/resume/cancel controls update the Session-owned Plan rather than ephemeral Live Workspace state.
 
 ## Browser interface
 
