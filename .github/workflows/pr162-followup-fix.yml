@@ -2,8 +2,7 @@ name: PR 162 follow-up fix
 
 on:
   push:
-    branches:
-      - feat/logical-session-runtime-v4
+    branches: [feat/logical-session-runtime-v4]
 
 permissions:
   contents: write
@@ -15,128 +14,29 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: feat/logical-session-runtime-v4
-          fetch-depth: 0
+          fetch-depth: 2
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Apply review fixes
-        shell: bash
+      - name: Apply fixes
         run: |
-          python - <<'PY'
-          from pathlib import Path
-
-          def replace_once(text: str, old: str, new: str, label: str) -> str:
-              count = text.count(old)
-              if count != 1:
-                  raise SystemExit(f"{label}: expected exactly one match, found {count}")
-              return text.replace(old, new, 1)
-
-          path = Path("src/local_shell_mcp/session_runtime.py")
-          text = path.read_text()
-
-          text = replace_once(
-              text,
-              "from .settings import get_settings\n",
-              "from .auth import current_principal\nfrom .settings import get_settings\n",
-              "auth import",
-          )
-
-          text = replace_once(
-              text,
-              '''    @staticmethod\n    def _new_run_id() -> str:\n        return f"r_{secrets.token_hex(5)}"\n\n    def _require_session_locked''',
-              '''    @staticmethod\n    def _new_run_id() -> str:\n        return f"r_{secrets.token_hex(5)}"\n\n    @staticmethod\n    def _authenticated_subject() -> str | None:\n        principal = current_principal()\n        if principal is None:\n            return None\n        return principal.subject or principal.email or "mcp-client"\n\n    def _require_session_locked''',
-              "authenticated subject helper",
-          )
-
-          old_resume = '''            if normalized_action == "resume":\n                if logical.status != "active":\n                    raise ValueError(f"Cannot resume a {logical.status} session")\n                run = self._attach_new_run_locked(logical, session_key, takeover=takeover)\n                self._append_activity_locked(\n                    logical,\n                    "session.resumed",\n                    actor="agent",\n                    data={"run_id": run.run_id, "takeover": takeover},\n                )\n                return self._public_state_locked(logical)\n'''
-          new_resume = '''            if normalized_action == "resume":\n                if logical.status != "active":\n                    raise ValueError(f"Cannot resume a {logical.status} session")\n                previous_attachment = self._attachments.get(session_key)\n                snapshots: dict[str, LogicalSession] = {\n                    logical.session_id: copy.deepcopy(logical)\n                }\n                if previous_attachment is not None:\n                    previous_session = self._sessions.get(previous_attachment[0])\n                    if (\n                        previous_session is not None\n                        and previous_session.session_id not in snapshots\n                    ):\n                        snapshots[previous_session.session_id] = copy.deepcopy(previous_session)\n                try:\n                    run = self._attach_new_run_locked(logical, session_key, takeover=takeover)\n                    self._append_activity_locked(\n                        logical,\n                        "session.resumed",\n                        actor="agent",\n                        data={"run_id": run.run_id, "takeover": takeover},\n                        touch_plan=True,\n                    )\n                except Exception as exc:\n                    rollback_errors: list[str] = []\n                    for snapshot in snapshots.values():\n                        self._sessions[snapshot.session_id] = snapshot\n                    if previous_attachment is None:\n                        self._attachments.pop(session_key, None)\n                    else:\n                        self._attachments[session_key] = previous_attachment\n                    for snapshot in snapshots.values():\n                        try:\n                            self._save_locked(snapshot)\n                        except Exception as rollback_exc:  # noqa: BLE001 - preserve original error.\n                            rollback_errors.append(\n                                f"restore {snapshot.session_id}: {type(rollback_exc).__name__}: {rollback_exc}"\n                            )\n                    if rollback_errors:\n                        exc.add_note("Session resume rollback warnings: " + "; ".join(rollback_errors))\n                    raise\n                return self._public_state_locked(logical)\n'''
-          text = replace_once(text, old_resume, new_resume, "resume transaction")
-
-          old_assert = '''    def _assert_attachment_locked(\n        self,\n        session_key: str,\n        session_id: str | None = None,\n        *,\n        expected_run_id: str | None = None,\n        require_run_token: bool = False,\n    ) -> LogicalSession:\n        attachment = self._attachments.get(session_key)\n        if attachment is None:\n            raise RuntimeError(\n                "No active logical session run is attached. Resume the session before continuing."\n            )\n        if session_id is not None and attachment[0] != session_id:\n            raise RuntimeError("Current agent run is attached to a different logical session")\n        if require_run_token and not expected_run_id:\n            raise RuntimeError(\n                "session_run_id is required while a logical session is attached; use the active_run.run_id returned by session_manage"\n            )\n        if expected_run_id is not None and attachment[1] != expected_run_id:\n            raise RuntimeError(\n                "This agent run has been superseded; resume the logical session and use its new active_run.run_id"\n            )\n        logical = self._require_session_locked(attachment[0])\n        if logical.status != "active":\n            raise RuntimeError(f"Logical session is {logical.status}; start or resume another session")\n        if logical.active_run_id != attachment[1]:\n            raise RuntimeError(\n                "This agent run has been superseded by another agent. Resume with takeover=true before continuing."\n            )\n        run = logical.active_run()\n        if run is None or run.status != "active":\n            raise RuntimeError(\n                "This agent run is no longer active. Resume the logical session before continuing."\n            )\n        return logical\n'''
-          new_assert = '''    def _assert_attachment_locked(\n        self,\n        session_key: str,\n        session_id: str | None = None,\n        *,\n        expected_run_id: str | None = None,\n        require_run_token: bool = False,\n        subject: str | None = None,\n    ) -> LogicalSession:\n        attachment = self._attachments.get(session_key)\n        if attachment is None:\n            raise RuntimeError(\n                "No active logical session run is attached. Resume the session before continuing."\n            )\n        if session_id is not None and attachment[0] != session_id:\n            raise RuntimeError("Current agent run is attached to a different logical session")\n        logical = self._require_session_locked(attachment[0])\n        if subject is not None and logical.subject != subject:\n            self._attachments.pop(session_key, None)\n            raise PermissionError("Logical session belongs to a different principal")\n        if require_run_token and not expected_run_id:\n            raise RuntimeError(\n                "session_run_id is required while a logical session is attached; use the active_run.run_id returned by session_manage"\n            )\n        if expected_run_id is not None and attachment[1] != expected_run_id:\n            raise RuntimeError(\n                "This agent run has been superseded; resume the logical session and use its new active_run.run_id"\n            )\n        if logical.status != "active":\n            raise RuntimeError(f"Logical session is {logical.status}; start or resume another session")\n        if logical.active_run_id != attachment[1]:\n            raise RuntimeError(\n                "This agent run has been superseded by another agent. Resume with takeover=true before continuing."\n            )\n        run = logical.active_run()\n        if run is None or run.status != "active":\n            raise RuntimeError(\n                "This agent run is no longer active. Resume the logical session before continuing."\n            )\n        return logical\n'''
-          text = replace_once(text, old_assert, new_assert, "attachment ownership")
-
-          text = replace_once(
-              text,
-              '''            self._assert_attachment_locked(\n                session_key,\n                logical.session_id,\n                expected_run_id=session_run_id,\n                require_run_token=require_run_token,\n            )\n''',
-              '''            self._assert_attachment_locked(\n                session_key,\n                logical.session_id,\n                expected_run_id=session_run_id,\n                require_run_token=require_run_token,\n                subject=subject,\n            )\n''',
-              "session manage attachment subject",
-          )
-
-          text = replace_once(
-              text,
-              '''            try:\n                logical = self._assert_attachment_locked(session_key)\n            except RuntimeError:\n                return None\n            if subject is not None and logical.subject != subject:\n                self._attachments.pop(session_key, None)\n                return None\n            return attachment[0]\n''',
-              '''            try:\n                self._assert_attachment_locked(session_key, subject=subject)\n            except (RuntimeError, PermissionError):\n                return None\n            return attachment[0]\n''',
-              "current session ownership",
-          )
-
-          old_begin = '''        """Acquire a per-run lease for one tool call and record its start.\n\n        Persistence failures are returned as warnings because they must not turn a\n        successfully executed external mutation into a retryable tool failure.\n        """'''
-          new_begin = '''        """Acquire and durably persist a per-run lease before a tool may execute.\n\n        A start-persistence failure is fail-closed because running an external mutation\n        without a durable in-flight lease would permit unsafe takeover after recovery.\n        """'''
-          text = replace_once(text, old_begin, new_begin, "tool start docstring")
-
-          text = replace_once(
-              text,
-              '''            logical = self._assert_attachment_locked(\n                session_key,\n                expected_run_id=expected_run_id,\n                require_run_token=require_run_token,\n            )\n            run = logical.active_run()\n            if run is None:\n                raise RuntimeError("Logical session has no active agent run")\n            now = time.time()\n            logical.in_flight_calls[call_id] = {"run_id": run.run_id, "started_at": now}\n            run.updated_at = now\n            persistence_error = None\n            try:\n                self._append_activity_locked(\n                    logical,\n                    "tool.started",\n                    actor="agent",\n                    data={"call_id": call_id, **(data or {})},\n                    touch_plan=True,\n                )\n            except Exception as exc:  # noqa: BLE001 - warning is surfaced by caller.\n                persistence_error = f"{type(exc).__name__}: {exc}"\n            return {\n                "session_id": logical.session_id,\n                "run_id": run.run_id,\n                "call_id": call_id,\n                "persistence_error": persistence_error,\n            }\n''',
-              '''            logical = self._assert_attachment_locked(\n                session_key,\n                expected_run_id=expected_run_id,\n                require_run_token=require_run_token,\n                subject=subject,\n            )\n            run = logical.active_run()\n            if run is None:\n                raise RuntimeError("Logical session has no active agent run")\n            before_start = copy.deepcopy(logical)\n            now = time.time()\n            logical.in_flight_calls[call_id] = {"run_id": run.run_id, "started_at": now}\n            run.updated_at = now\n            try:\n                self._append_activity_locked(\n                    logical,\n                    "tool.started",\n                    actor="agent",\n                    data={"call_id": call_id, **(data or {})},\n                    touch_plan=True,\n                )\n            except Exception as exc:\n                self._sessions[logical.session_id] = before_start\n                raise RuntimeError(\n                    "Failed to persist the tool-call lease; refusing to execute the tool unprotected"\n                ) from exc\n            return {\n                "session_id": logical.session_id,\n                "run_id": run.run_id,\n                "call_id": call_id,\n                "persistence_error": None,\n            }\n''',
-              "fail-closed tool start",
-          )
-
-          text = replace_once(
-              text,
-              '''            logical = self._assert_attachment_locked(\n                session_key,\n                expected_run_id=session_run_id,\n                require_run_token=require_run_token and normalized_action != "get",\n            )\n''',
-              '''            logical = self._assert_attachment_locked(\n                session_key,\n                expected_run_id=session_run_id,\n                require_run_token=require_run_token and normalized_action != "get",\n                subject=self._authenticated_subject(),\n            )\n''',
-              "plan ownership",
-          )
-
-          path.write_text(text)
-
-          tests = Path("tests/test_session_runtime.py")
-          test_text = tests.read_text()
-          old_test = '''def test_session_activity_persistence_failure_keeps_tool_lease_recoverable(\n    tmp_path, monkeypatch\n):\n    manager = SessionRuntimeManager(tmp_path / ".state")\n    started = manager.manage("mcp:a", "user", action="start", objective="Task")\n    run_id = started["active_run"]["run_id"]\n\n    def fail_save(_session):\n        raise OSError("disk full")\n\n    monkeypatch.setattr(manager, "_save_locked", fail_save)\n    lease = manager.begin_tool_call("mcp:a", "call-1", expected_run_id=run_id)\n    assert lease is not None\n    assert "disk full" in lease["persistence_error"]\n    error = manager.finish_tool_call(lease, "tool.completed", data={"ok": True})\n    assert error is not None and "disk full" in error\n\n\n'''
-          new_test = '''def test_tool_start_persistence_failure_fails_closed(tmp_path, monkeypatch):\n    manager = SessionRuntimeManager(tmp_path / ".state")\n    started = manager.manage("mcp:a", "user", action="start", objective="Task")\n    session_id = started["session_id"]\n    run_id = started["active_run"]["run_id"]\n\n    def fail_save(_session):\n        raise OSError("disk full")\n\n    monkeypatch.setattr(manager, "_save_locked", fail_save)\n    with pytest.raises(RuntimeError, match="refusing to execute"):\n        manager.begin_tool_call(\n            "mcp:a",\n            "call-1",\n            expected_run_id=run_id,\n            subject="user",\n        )\n    assert manager._sessions[session_id].in_flight_calls == {}\n\n\n'''
-          test_text = replace_once(test_text, old_test, new_test, "existing persistence regression")
-          tests.write_text(test_text)
-
-          followup = Path("tests/test_session_runtime_review_followup.py")
-          followup.write_text('''from __future__ import annotations\n\nimport time\n\nimport pytest\n\nfrom local_shell_mcp.auth import Principal\nfrom local_shell_mcp.session_runtime import PLAN_EXECUTION_LEASE_S, SessionRuntimeManager\n\n\ndef test_resume_persistence_failure_restores_both_sessions(tmp_path, monkeypatch):\n    state_dir = tmp_path / ".state"\n    manager = SessionRuntimeManager(state_dir)\n    first = manager.manage("mcp:a", "user", action="start", objective="First")\n    target = manager.manage("mcp:b", "user", action="start", objective="Target")\n    first_id = first["session_id"]\n    first_run = first["active_run"]["run_id"]\n    target_id = target["session_id"]\n    target_run = target["active_run"]["run_id"]\n    original_save = manager._save_locked\n    failed = False\n\n    def fail_resume_activity(session):\n        nonlocal failed\n        if (\n            not failed\n            and session.session_id == target_id\n            and session.activity\n            and session.activity[-1]["type"] == "session.resumed"\n        ):\n            failed = True\n            raise OSError("forced resume persistence failure")\n        return original_save(session)\n\n    monkeypatch.setattr(manager, "_save_locked", fail_resume_activity)\n    with pytest.raises(OSError, match="forced resume persistence failure"):\n        manager.manage(\n            "mcp:a",\n            "user",\n            action="resume",\n            session_id=target_id,\n            takeover=True,\n        )\n\n    assert manager.current_session_id("mcp:a", subject="user") == first_id\n    assert manager.get(first_id, subject="user")["active_run"]["run_id"] == first_run\n    assert manager.get(target_id, subject="user")["active_run"]["run_id"] == target_run\n\n    restored = SessionRuntimeManager(state_dir)\n    assert restored.get(first_id, subject="user")["active_run"]["run_id"] == first_run\n    assert restored.get(target_id, subject="user")["active_run"]["run_id"] == target_run\n\n\ndef test_agent_session_resume_refreshes_goal_lease(tmp_path):\n    manager = SessionRuntimeManager(tmp_path / ".state")\n    started = manager.manage("mcp:a", "user", action="start", objective="Task")\n    session_id = started["session_id"]\n    run_id = started["active_run"]["run_id"]\n    manager.manage_plan(\n        "mcp:a",\n        action="start",\n        session_run_id=run_id,\n        objective="Task",\n        steps=[{"id": "work", "text": "Work"}],\n    )\n    logical = manager._sessions[session_id]\n    assert logical.plan is not None\n    logical.plan.last_agent_activity = time.time() - PLAN_EXECUTION_LEASE_S - 1\n\n    before_resume = time.time()\n    resumed = manager.manage(\n        "mcp:a",\n        "user",\n        action="resume",\n        session_id=session_id,\n        takeover=True,\n    )\n\n    assert resumed["plan"]["last_agent_activity"] >= before_resume\n    assert manager.claim_plan_continuation(session_id, subject="user") is None\n\n\ndef test_existing_attachment_is_rejected_after_principal_change(tmp_path, monkeypatch):\n    manager = SessionRuntimeManager(tmp_path / ".state")\n    started = manager.manage("mcp:a", "user-a", action="start", objective="Task")\n    run_id = started["active_run"]["run_id"]\n\n    with pytest.raises(PermissionError, match="different principal"):\n        manager.begin_tool_call(\n            "mcp:a",\n            "call-1",\n            expected_run_id=run_id,\n            subject="user-b",\n        )\n    assert manager.current_session_id("mcp:a") is None\n\n    manager.manage(\n        "mcp:a",\n        "user-a",\n        action="resume",\n        session_id=started["session_id"],\n        takeover=True,\n    )\n    monkeypatch.setattr(\n        "local_shell_mcp.session_runtime.current_principal",\n        lambda: Principal(email=None, subject="user-b", claims={}),\n    )\n    with pytest.raises(PermissionError, match="different principal"):\n        manager.manage_plan("mcp:a", action="get")\n    assert manager.current_session_id("mcp:a") is None\n''')
-
-          readme = Path("README.md")
-          readme_text = readme.read_text()
-          readme_text = replace_once(
-              readme_text,
-              '''Automatic continuation is capped at 10 continuation attempts (accepted or rejected) and resumes the same Session before continuing; blocked, completed, cancelled, or fully terminal Plans are never nudged.''',
-              '''Automatic continuation is capped at 10 continuation attempts (accepted or rejected) and resumes the same Session before continuing. Blocked, completed, and cancelled Plan statuses are never nudged; an active Plan whose steps are all completed or skipped remains eligible for cleanup continuation so a resumed agent can call `plan_manage(action="finish")`.''',
-              "README continuation semantics",
-          )
-          readme.write_text(readme_text)
-
-          guide = Path("docs/guides/human-interface.md")
-          guide_text = guide.read_text()
-          guide_text = replace_once(
-              guide_text,
-              '''An optional `plan_manage` Plan enables Goal mode for the Session. If the Plan is active and no agent activity occurs for 15 minutes, an attached Live Workspace can ask ChatGPT to continue. The continuation first resumes the same `session_id` and is limited to 10 accepted continuation messages. Human pause/resume/cancel controls update the Session-owned Plan rather than ephemeral Live Workspace state.''',
-              '''An optional `plan_manage` Plan enables Goal mode for the Session. If the Plan is active and no agent activity occurs for 15 minutes, an attached Live Workspace can ask ChatGPT to continue. The continuation first resumes the same `session_id` and is limited to 10 continuation attempts (accepted or rejected). Blocked, completed, and cancelled Plan statuses are not auto-continued; an active Plan whose steps are all completed or skipped remains eligible for cleanup continuation so the resumed agent can finish the Plan. Human pause/resume/cancel controls update the Session-owned Plan rather than ephemeral Live Workspace state.''',
-              "human interface continuation semantics",
-          )
-          guide.write_text(guide_text)
-          PY
-      - name: Install test dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e '.[dev,docs]'
-      - name: Run focused regression tests
-        run: PYTHONPATH=src python -m pytest -q tests/test_session_runtime.py tests/test_session_runtime_review_followup.py
-      - name: Run Python suite
+          git show HEAD^:.github/workflows/pr162-followup-fix.yml | sed -n "/^[[:space:]]*python - <<'PY'$/,/^[[:space:]]*PY$/p" | sed '1d;$d;s/^          //' > /tmp/pr162-fix.py
+          python /tmp/pr162-fix.py
+          python .github/pr162-fix-tests.py
+      - name: Install dependencies
+        run: python -m pip install -e '.[dev,docs]'
+      - name: Focused tests
+        run: PYTHONPATH=src python -m pytest -q tests/test_session_runtime.py tests/test_session_runtime_review_followup.py tests/test_live_workspace.py
+      - name: Full Python suite
         run: PYTHONPATH=src python -m pytest -q
-      - name: Run lint and diff checks
+      - name: Lint
         run: |
-          python -m ruff check src/local_shell_mcp/session_runtime.py tests/test_session_runtime.py tests/test_session_runtime_review_followup.py
+          python -m ruff check src/local_shell_mcp/session_runtime.py tests/test_session_runtime.py tests/test_session_runtime_review_followup.py tests/test_live_workspace.py
           git diff --check
-      - name: Commit fixes
-        shell: bash
+      - name: Commit and push
         run: |
-          git config user.name 'Castronaut'
-          git config user.email 'caoyuhang@fwerkor.com'
-          git add src/local_shell_mcp/session_runtime.py tests/test_session_runtime.py tests/test_session_runtime_review_followup.py README.md docs/guides/human-interface.md
+          git config user.name Castronaut
+          git config user.email caoyuhang@fwerkor.com
+          git add src/local_shell_mcp/session_runtime.py tests/test_session_runtime.py tests/test_session_runtime_review_followup.py tests/test_live_workspace.py README.md docs/guides/human-interface.md
           git commit -m 'fix: harden session recovery and lease safety'
           git push origin HEAD:feat/logical-session-runtime-v4
