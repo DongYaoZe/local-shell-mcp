@@ -1276,7 +1276,7 @@ async function loadSnapshot(generation: number): Promise<boolean> {
   const payload = await api<{ channel: JsonRecord & { plan?: PlanState | null; session_id?: string | null }; events: LiveEvent[] }>("/api/live/snapshot")
   if (generation !== pollGeneration) return false
   plan = payload.channel.plan || null
-  if (config) config.sessionId = String(payload.channel.session_id || config.sessionId || "")
+  if (config) config.sessionId = String(payload.channel.session_id ?? "")
   activityAuditDetails.clear()
   activityDetailRevision += 1
   events = payload.events || []
@@ -1293,7 +1293,7 @@ async function pollEvents(generation: number): Promise<void> {
     const payload = await api<{ events: LiveEvent[]; cursor: number; plan?: PlanState | null; session_id?: string | null }>(`/api/live/events?after=${cursor}&timeout=25`)
     if (generation !== pollGeneration) return
     plan = payload.plan || null
-    if (config) config.sessionId = String(payload.session_id || config.sessionId || "")
+    if (config) config.sessionId = String(payload.session_id ?? "")
     mergeEvents(payload.events || [])
     cursor = Math.max(cursor, Number(payload.cursor || 0))
     connected = true

@@ -984,42 +984,54 @@ class SessionRuntimeManager:
                     f"Cannot {normalized_action} a logical session while tool calls are in flight"
                 )
 
-            if normalized_action == "finish":
-                if logical.plan is not None and logical.plan.status in {"active", "blocked"}:
+            if normalized_action in {"finish", "cancel"}:
+                if (
+                    normalized_action == "finish"
+                    and logical.plan is not None
+                    and logical.plan.status in {"active", "blocked"}
+                ):
                     raise ValueError(
                         "Cannot finish a session while its plan is active or blocked; finish or cancel the plan first"
                     )
-                logical.status = "completed"
-                run.status = "completed"
-                run.updated_at = time.time()
-                logical.active_run_id = None
-                self._attachments.pop(session_key, None)
-                self._append_activity_locked(
-                    logical,
-                    "session.completed",
-                    actor="agent",
-                    data={"run_id": run.run_id},
-                )
-                return self._public_state_locked(logical)
-
-            if normalized_action == "cancel":
-                logical.status = "cancelled"
-                run.status = "cancelled"
-                run.updated_at = time.time()
-                logical.active_run_id = None
-                if logical.plan is not None and logical.plan.status not in {"completed", "cancelled"}:
-                    logical.plan.status = "cancelled"
-                    logical.plan.updated_at = run.updated_at
-                    logical.plan.continuation_pending = False
-                    logical.plan.continuation_pending_since = None
-                    logical.plan.continuation_claim_id = None
-                self._attachments.pop(session_key, None)
-                self._append_activity_locked(
-                    logical,
-                    "session.cancelled",
-                    actor="agent",
-                    data={"run_id": run.run_id},
-                )
+                snapshot = copy.deepcopy(logical)
+                previous_attachment = self._attachments.get(session_key)
+                try:
+                    now = time.time()
+                    logical.status = "completed" if normalized_action == "finish" else "cancelled"
+                    run.status = logical.status
+                    run.updated_at = now
+                    logical.active_run_id = None
+                    if (
+                        normalized_action == "cancel"
+                        and logical.plan is not None
+                        and logical.plan.status not in {"completed", "cancelled"}
+                    ):
+                        logical.plan.status = "cancelled"
+                        logical.plan.updated_at = now
+                        logical.plan.continuation_pending = False
+                        logical.plan.continuation_pending_since = None
+                        logical.plan.continuation_claim_id = None
+                    self._attachments.pop(session_key, None)
+                    self._append_activity_locked(
+                        logical,
+                        "session.completed" if normalized_action == "finish" else "session.cancelled",
+                        actor="agent",
+                        data={"run_id": run.run_id},
+                    )
+                except Exception as exc:
+                    self._sessions[snapshot.session_id] = snapshot
+                    if previous_attachment is None:
+                        self._attachments.pop(session_key, None)
+                    else:
+                        self._attachments[session_key] = previous_attachment
+                    try:
+                        self._save_locked(snapshot)
+                    except Exception as rollback_exc:  # noqa: BLE001 - preserve original error.
+                        exc.add_note(
+                            "Session terminal rollback warning: "
+                            f"{type(rollback_exc).__name__}: {rollback_exc}"
+                        )
+                    raise
                 return self._public_state_locked(logical)
 
             raise ValueError(

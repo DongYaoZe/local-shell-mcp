@@ -1250,3 +1250,42 @@ def test_continuation_validation_rechecks_agent_activity_and_inflight(tmp_path):
     assert validation["valid"] is False
     assert validation["plan"]["continuation_pending"] is False
     assert manager.finish_tool_call(lease, "tool.completed") is None
+
+
+@pytest.mark.parametrize("action", ["finish", "cancel"])
+def test_terminal_transition_rolls_back_when_activity_persistence_fails(
+    tmp_path, monkeypatch, action
+):
+    state_dir = tmp_path / ".state"
+    manager = SessionRuntimeManager(state_dir)
+    started = manager.manage("mcp:agent", "user", action="start", objective="Task")
+    session_id = started["session_id"]
+    run_id = started["active_run"]["run_id"]
+    original_append = manager._append_activity_locked
+
+    def fail_terminal_activity(session, event_type, **kwargs):
+        if event_type in {"session.completed", "session.cancelled"}:
+            raise OSError("simulated terminal activity persistence failure")
+        return original_append(session, event_type, **kwargs)
+
+    monkeypatch.setattr(manager, "_append_activity_locked", fail_terminal_activity)
+    with pytest.raises(OSError, match="terminal activity persistence failure"):
+        manager.manage(
+            "mcp:agent",
+            "user",
+            action=action,
+            session_id=session_id,
+            session_run_id=run_id,
+        )
+
+    current = manager.manage("mcp:reader", "user", action="get", session_id=session_id)
+    assert current["status"] == "active"
+    assert current["active_run"]["run_id"] == run_id
+    assert current["active_run"]["status"] == "active"
+    assert manager.current_session_id("mcp:agent", subject="user") == session_id
+
+    restored = SessionRuntimeManager(state_dir)
+    durable = restored.manage("mcp:reader", "user", action="get", session_id=session_id)
+    assert durable["status"] == "active"
+    assert durable["active_run"]["run_id"] == run_id
+    assert durable["active_run"]["status"] == "active"
