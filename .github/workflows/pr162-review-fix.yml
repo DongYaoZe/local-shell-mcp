@@ -1,0 +1,268 @@
+name: PR162 review fix
+
+on:
+  push:
+    branches:
+      - feat/logical-session-runtime-v4
+
+permissions:
+  contents: write
+
+jobs:
+  apply-fixes:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/logical-session-runtime-v4
+          fetch-depth: 0
+      - name: Apply review fixes
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              target = Path(path)
+              text = target.read_text(encoding="utf-8")
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one replacement, found {count}: {old[:120]!r}")
+              target.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          def append_once(path: str, marker: str, block: str) -> None:
+              target = Path(path)
+              text = target.read_text(encoding="utf-8")
+              if marker in text:
+                  return
+              target.write_text(text.rstrip() + "\n\n\n" + block.strip() + "\n", encoding="utf-8")
+
+          replace_once(
+              "src/local_shell_mcp/session_runtime.py",
+              '''            if normalized_action == "finish":\n                if logical.plan is not None and logical.plan.status in {"active", "blocked"}:\n''',
+              '''            if normalized_action in {"finish", "cancel"} and self._in_flight_count_locked(\n                logical.session_id\n            ):\n                raise ValueError(\n                    f"Cannot {normalized_action} a logical session while tool calls are in flight"\n                )\n\n            if normalized_action == "finish":\n                if logical.plan is not None and logical.plan.status in {"active", "blocked"}:\n''',
+          )
+
+          replace_once(
+              "src/local_shell_mcp/session_runtime.py",
+              '''                plan.continuation_pending = False\n                plan.continuation_pending_since = None\n                plan.continuation_claim_id = None\n                plan.continuation_claim_id = None\n''',
+              '''                plan.continuation_pending = False\n                plan.continuation_pending_since = None\n                plan.continuation_claim_id = None\n''',
+          )
+
+          replace_once(
+              "src/local_shell_mcp/session_runtime.py",
+              '''            logical = self._require_session_locked(session_id, subject)\n            plan = logical.plan\n            valid = bool(\n                plan is not None\n                and plan.status == "active"\n                and plan.continuation_pending\n                and plan.continuation_claim_id == claim_id\n            )\n            return {\n                "valid": valid,\n                "session_id": logical.session_id,\n                "plan": (\n                    plan.public_state(\n                        in_flight_calls=self._in_flight_count_locked(logical.session_id)\n                    )\n                    if plan is not None\n                    else None\n                ),\n            }\n''',
+              '''            logical = self._require_session_locked(session_id, subject)\n            plan = logical.plan\n            now = time.time()\n            in_flight_calls = self._in_flight_count_locked(logical.session_id)\n            valid = bool(\n                plan is not None\n                and plan.status == "active"\n                and plan.continuation_pending\n                and plan.continuation_claim_id == claim_id\n                and in_flight_calls == 0\n                and now >= plan.last_agent_activity + PLAN_EXECUTION_LEASE_S\n            )\n            if (\n                plan is not None\n                and plan.continuation_pending\n                and plan.continuation_claim_id == claim_id\n                and not valid\n            ):\n                plan.continuation_pending = False\n                plan.continuation_pending_since = None\n                plan.continuation_claim_id = None\n                plan.updated_at = now\n                self._save_locked(logical)\n            return {\n                "valid": valid,\n                "session_id": logical.session_id,\n                "plan": (\n                    plan.public_state(now, in_flight_calls=in_flight_calls)\n                    if plan is not None\n                    else None\n                ),\n            }\n''',
+          )
+
+          replace_once(
+              "src/local_shell_mcp/live_channel.py",
+              '''            channel = self._channels.get(\n                resolved_live_id or logical_live_id or session_live_id or ""\n            )\n''',
+              '''            channel = self._channels.get(resolved_live_id or "")\n            if channel is None:\n                channel = self._channels.get(logical_live_id or "")\n            if channel is None:\n                channel = self._channels.get(session_live_id or "")\n''',
+          )
+
+          replace_once(
+              "src/local_shell_mcp/live_channel.py",
+              '''    def claim_recovery_session(self, session_key: str, subject: str) -> LiveChannel | None:\n''',
+              '''    def detach_logical_session(self, logical_session_id: str) -> list[LiveChannel]:\n        with self._lock:\n            self._prune_locked()\n            self._logical_session_channels.pop(logical_session_id, None)\n            detached: list[LiveChannel] = []\n            for channel in self._channels.values():\n                if channel.logical_session_id != logical_session_id:\n                    continue\n                channel.logical_session_id = None\n                detached.append(channel)\n                self._publish_locked(\n                    channel,\n                    "session.detached",\n                    actor="system",\n                    data={"session_id": logical_session_id},\n                )\n            return detached\n\n    def claim_recovery_session(self, session_key: str, subject: str) -> LiveChannel | None:\n''',
+          )
+
+          replace_once(
+              "src/local_shell_mcp/live_channel_routes.py",
+              '''        manager = get_live_channel_manager()\n        after = max(0, channel.seq - 300)\n        return _ok(\n            {\n                "channel": channel.public_state(),\n''',
+              '''        manager = get_live_channel_manager()\n        after = max(0, channel.seq - 300)\n        channel_state = await asyncio.to_thread(channel.public_state)\n        return _ok(\n            {\n                "channel": channel_state,\n''',
+          )
+
+          replace_once(
+              "src/local_shell_mcp/live_channel_routes.py",
+              '''        events = await get_live_channel_manager().wait_events(channel, after, timeout_s)\n        return _ok(\n            {\n                "events": events,\n                "cursor": events[-1]["seq"] if events else after,\n                "plan": get_session_runtime_manager().plan_state(\n                    channel.logical_session_id\n                ),\n                "session_id": channel.logical_session_id,\n            }\n        )\n''',
+              '''        events = await get_live_channel_manager().wait_events(channel, after, timeout_s)\n        logical_session_id = channel.logical_session_id\n        plan = await asyncio.to_thread(\n            get_session_runtime_manager().plan_state, logical_session_id\n        )\n        return _ok(\n            {\n                "events": events,\n                "cursor": events[-1]["seq"] if events else after,\n                "plan": plan,\n                "session_id": logical_session_id,\n            }\n        )\n''',
+          )
+
+          for action in ("block", "resume", "cancel"):
+              replace_once(
+                  "src/local_shell_mcp/live_channel_routes.py",
+                  f'''            result = session_manager.manage_plan_for_session(\n                channel.logical_session_id,\n                action="{action}",\n''',
+                  f'''            result = await asyncio.to_thread(\n                session_manager.manage_plan_for_session,\n                channel.logical_session_id,\n                action="{action}",\n''',
+              )
+
+          replace_once(
+              "src/local_shell_mcp/live_channel_routes.py",
+              '''            claimed = session_manager.claim_plan_continuation(\n                channel.logical_session_id, subject=channel.subject\n            )\n''',
+              '''            claimed = await asyncio.to_thread(\n                session_manager.claim_plan_continuation,\n                channel.logical_session_id,\n                subject=channel.subject,\n            )\n''',
+          )
+
+          replace_once(
+              "src/local_shell_mcp/live_channel_routes.py",
+              '''                        "plan": session_manager.plan_state(channel.logical_session_id),\n''',
+              '''                        "plan": await asyncio.to_thread(\n                            session_manager.plan_state, channel.logical_session_id\n                        ),\n''',
+          )
+
+          replace_once(
+              "src/local_shell_mcp/live_channel_routes.py",
+              '''                session_manager.validate_plan_continuation(\n                    channel.logical_session_id,\n                    claim_id,\n                    subject=channel.subject,\n                )\n''',
+              '''                await asyncio.to_thread(\n                    session_manager.validate_plan_continuation,\n                    channel.logical_session_id,\n                    claim_id,\n                    subject=channel.subject,\n                )\n''',
+          )
+
+          replace_once(
+              "src/local_shell_mcp/live_channel_routes.py",
+              '''                    "plan": session_manager.report_plan_continuation(\n                        channel.logical_session_id,\n                        accepted=accepted,\n                        error=error,\n                        claim_id=claim_id,\n                        subject=channel.subject,\n                    ),\n''',
+              '''                    "plan": await asyncio.to_thread(\n                        session_manager.report_plan_continuation,\n                        channel.logical_session_id,\n                        accepted=accepted,\n                        error=error,\n                        claim_id=claim_id,\n                        subject=channel.subject,\n                    ),\n''',
+          )
+
+          replace_once(
+              "src/local_shell_mcp/tools.py",
+              '''        result = await _tool_call(\n            get_session_runtime_manager().manage,\n''',
+              '''        result = await _tool_call(\n            asyncio.to_thread,\n            get_session_runtime_manager().manage,\n''',
+          )
+
+          replace_once(
+              "src/local_shell_mcp/tools.py",
+              '''                get_live_channel_manager().bind_logical_session(\n                    session_key, str(data["session_id"]), subject\n                )\n        return result\n''',
+              '''                get_live_channel_manager().bind_logical_session(\n                    session_key, str(data["session_id"]), subject\n                )\n            if isinstance(data, dict) and action.strip().lower() == "delete":\n                deleted_session_id = str(data.get("session_id") or session_id or "")\n                if deleted_session_id:\n                    get_live_channel_manager().detach_logical_session(deleted_session_id)\n        return result\n''',
+          )
+
+          replace_once(
+              "src/local_shell_mcp/tools.py",
+              '''        return await _tool_call(\n            get_session_runtime_manager().manage_plan,\n''',
+              '''        return await _tool_call(\n            asyncio.to_thread,\n            get_session_runtime_manager().manage_plan,\n''',
+          )
+
+          replace_once(
+              "README.md",
+              "Automatic continuation is capped at 10 accepted continuation messages and resumes the same Session before continuing;",
+              "Automatic continuation is capped at 10 continuation attempts (accepted or rejected) and resumes the same Session before continuing;",
+          )
+
+          replace_once(
+              "docs/reference/tools.md",
+              "Actions: start, resume, get, report, list, finish, cancel. start may include label/objective; report accepts summary/findings/next/blockers/objective/label.",
+              "Actions: start, resume, get, report, list, finish, cancel, delete. start may include label/objective; report accepts summary/findings/next/blockers/objective/label. delete permanently removes a detached or terminal Session and frees retained history capacity.",
+          )
+
+          append_once(
+              "tests/test_session_runtime.py",
+              "def test_session_termination_waits_for_inflight_tool",
+              '''
+          @pytest.mark.parametrize("action", ["finish", "cancel"])
+          def test_session_termination_waits_for_inflight_tool(tmp_path, action):
+              manager = SessionRuntimeManager(tmp_path / f".{action}-state")
+              started = manager.manage("mcp:a", "user", action="start", objective="Task")
+              session_id = started["session_id"]
+              run_id = started["active_run"]["run_id"]
+              lease = manager.begin_tool_call(
+                  "mcp:a", "call-1", expected_run_id=run_id, data={"tool": "remote_transfer"}
+              )
+
+              with pytest.raises(ValueError, match="tool calls are in flight"):
+                  manager.manage(
+                      "mcp:a",
+                      "user",
+                      action=action,
+                      session_run_id=run_id,
+                  )
+
+              assert manager.current_session_id("mcp:a", subject="user") == session_id
+              assert manager.finish_tool_call(lease, "tool.completed") is None
+          ''',
+          )
+
+          append_once(
+              "tests/test_session_runtime.py",
+              "def test_continuation_validation_rechecks_agent_activity_and_inflight",
+              '''
+          def test_continuation_validation_rechecks_agent_activity_and_inflight(tmp_path):
+              manager = SessionRuntimeManager(tmp_path / ".continuation-state")
+              started = manager.manage("mcp:a", "user", action="start", objective="Task")
+              session_id = started["session_id"]
+              run_id = started["active_run"]["run_id"]
+              manager.manage_plan(
+                  "mcp:a",
+                  action="start",
+                  session_run_id=run_id,
+                  objective="Task",
+                  steps=[{"id": "work", "text": "Work"}],
+              )
+              logical = manager._sessions[session_id]
+              assert logical.plan is not None
+              logical.plan.last_agent_activity = time.time() - PLAN_EXECUTION_LEASE_S - 1
+              claimed = manager.claim_plan_continuation(session_id, subject="user")
+              assert claimed is not None
+              claim_id = claimed["claim_id"]
+
+              lease = manager.begin_tool_call(
+                  "mcp:a", "call-1", expected_run_id=run_id, data={"tool": "remote_transfer"}
+              )
+              validation = manager.validate_plan_continuation(
+                  session_id, claim_id, subject="user"
+              )
+
+              assert validation["valid"] is False
+              assert validation["plan"]["continuation_pending"] is False
+              assert manager.finish_tool_call(lease, "tool.completed") is None
+          ''',
+          )
+
+          append_once(
+              "tests/test_live_workspace.py",
+              "def test_live_workspace_stale_live_id_falls_back_to_logical_channel",
+              '''
+          def test_live_workspace_stale_live_id_falls_back_to_logical_channel():
+              manager = LiveChannelManager()
+              channel, _ = manager.open(
+                  session_key="mcp:first",
+                  subject="user",
+                  scopes=tuple(ALL_OAUTH_SCOPES),
+                  logical_session_id="s_task",
+              )
+
+              reattached, _ = manager.open(
+                  session_key="mcp:second",
+                  subject="user",
+                  scopes=tuple(ALL_OAUTH_SCOPES),
+                  live_id="expired-live-id",
+                  logical_session_id="s_task",
+              )
+
+              assert reattached is channel
+              assert manager.active_for_session("mcp:second") is channel
+              assert len(manager._channels) == 1
+          ''',
+          )
+
+          append_once(
+              "tests/test_live_workspace.py",
+              "def test_live_workspace_detaches_deleted_logical_session",
+              '''
+          def test_live_workspace_detaches_deleted_logical_session():
+              manager = LiveChannelManager()
+              channel, _ = manager.open(
+                  session_key="mcp:model",
+                  subject="user",
+                  scopes=tuple(ALL_OAUTH_SCOPES),
+                  logical_session_id="s_deleted",
+              )
+
+              detached = manager.detach_logical_session("s_deleted")
+
+              assert detached == [channel]
+              assert channel.logical_session_id is None
+              assert "s_deleted" not in manager._logical_session_channels
+              assert channel.events[-1]["type"] == "session.detached"
+          ''',
+          )
+          PY
+      - name: Validate patch syntax
+        run: |
+          python -m compileall -q src/local_shell_mcp tests
+          git diff --check
+      - name: Commit fixes
+        shell: bash
+        run: |
+          git rm .github/workflows/pr162-review-fix.yml
+          git config user.name "Cao Yuhang"
+          git config user.email "caoyuhang@fwerkor.com"
+          git add README.md docs/reference/tools.md src/local_shell_mcp/session_runtime.py src/local_shell_mcp/live_channel.py src/local_shell_mcp/live_channel_routes.py src/local_shell_mcp/tools.py tests/test_session_runtime.py tests/test_live_workspace.py
+          git commit -m "fix: address session runtime review races"
+          git push origin HEAD:feat/logical-session-runtime-v4
