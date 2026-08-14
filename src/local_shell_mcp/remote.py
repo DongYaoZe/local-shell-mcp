@@ -1183,6 +1183,12 @@ def _worker_curl_timeout(timeout_s: int | None) -> int:
     return max(30, min(requested, maximum))
 
 
+def _worker_subprocess_creationflags() -> int:
+    if os.name != "nt":
+        return 0
+    return int(getattr(subprocess, "CREATE_NO_WINDOW", 0))
+
+
 def _worker_upload_url(
     path: str,
     url: str,
@@ -1253,6 +1259,7 @@ def _worker_upload_url(
         input=data,
         capture_output=True,
         check=False,
+        creationflags=_worker_subprocess_creationflags(),
     )
     raw_stdout = completed.stdout or b""
     raw_stderr = completed.stderr or b""
@@ -1329,6 +1336,7 @@ def _worker_put_url(
         ],
         capture_output=True,
         check=False,
+        creationflags=_worker_subprocess_creationflags(),
     )
     raw_stdout = completed.stdout or b""
     raw_stderr = completed.stderr or b""
@@ -1391,6 +1399,7 @@ def _worker_download_url(
             capture_output=True,
             text=True,
             check=False,
+            creationflags=_worker_subprocess_creationflags(),
         )
         if completed.returncode != 0:
             detail = completed.stderr.strip() or completed.stdout.strip()
@@ -1881,6 +1890,7 @@ def _worker_post_json_with_curl(
         input=body,
         capture_output=True,
         check=False,
+        creationflags=_worker_subprocess_creationflags(),
     )
     stdout = completed.stdout.decode("utf-8", errors="replace")
     stderr = completed.stderr.decode("utf-8", errors="replace").strip()

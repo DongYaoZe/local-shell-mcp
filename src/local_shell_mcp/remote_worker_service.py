@@ -18,6 +18,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from .process_utils import managed_process_kwargs
 from .remote_worker_state import (
     ensure_user_bin_on_path,
     install_launcher,
@@ -219,11 +220,13 @@ def _launchd_plist_path() -> Path:
 
 
 def _windows_task_launcher_path() -> Path:
-    return worker_state_dir() / "worker-service.cmd"
+    return worker_state_dir() / "worker-service.pyw"
 
 
 def _run(command: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(command, check=check, capture_output=True, text=True)  # noqa: S603
+    return subprocess.run(
+        command, check=check, capture_output=True, text=True, **managed_process_kwargs()
+    )  # noqa: S603
 
 
 def _powershell_executable() -> str | None:
@@ -347,46 +350,70 @@ def _write_launchd_plist(launcher: Path | None = None) -> Path:
     return path
 
 
-def _batch_path(path: Path) -> str:
-    return str(path).replace("%", "%%")
-
-
-def _write_windows_task_launcher(launcher: Path | None = None) -> Path:
-    launcher = launcher or worker_launcher_path()
+def _write_windows_task_launcher() -> Path:
     path = _windows_task_launcher_path()
-    content = f'''@echo off
-setlocal
-set "PYTHONUNBUFFERED=1"
-set "{_WORKER_MANAGED_ENV}=1"
-set "LOCAL_SHELL_MCP_WORKER_STATE_DIR={_batch_path(worker_state_dir().resolve())}"
-call "{_batch_path(launcher.resolve())}" worker run >> "{_batch_path(worker_log_path().resolve())}" 2>&1
-exit /b %ERRORLEVEL%
+    state_dir = str(worker_state_dir().resolve())
+    runtime_dir = str(worker_runtime_dir().resolve())
+    vendor_dir = str((worker_runtime_dir() / "vendor").resolve())
+    log_path = str(worker_log_path().resolve())
+    content = f'''from __future__ import annotations
+
+import os
+import sys
+import traceback
+
+STATE_DIR = {state_dir!r}
+RUNTIME_DIR = {runtime_dir!r}
+VENDOR_DIR = {vendor_dir!r}
+LOG_PATH = {log_path!r}
+
+os.environ["PYTHONUNBUFFERED"] = "1"
+os.environ[{_WORKER_MANAGED_ENV!r}] = "1"
+os.environ["LOCAL_SHELL_MCP_WORKER_STATE_DIR"] = STATE_DIR
+existing_pythonpath = os.environ.get("PYTHONPATH")
+runtime_pythonpath = os.pathsep.join((RUNTIME_DIR, VENDOR_DIR))
+os.environ["PYTHONPATH"] = (
+    runtime_pythonpath
+    if not existing_pythonpath
+    else runtime_pythonpath + os.pathsep + existing_pythonpath
+)
+sys.path[:0] = [RUNTIME_DIR, VENDOR_DIR]
+
+with open(LOG_PATH, "a", encoding="utf-8", buffering=1) as worker_log:
+    sys.stdout = worker_log
+    sys.stderr = worker_log
+    try:
+        from local_shell_mcp.main import main
+
+        main(["worker", "run"])
+    except BaseException:
+        traceback.print_exc()
+        raise
 '''
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
     return path
 
 
-def _installed_windows_launcher_path() -> Path | None:
-    try:
-        content = _windows_task_launcher_path().read_text(encoding="utf-8")
-    except OSError:
-        return None
-    match = re.search(r'^call "([^"\r\n]+)" worker run >> ', content, re.MULTILINE)
-    if not match:
-        return None
-    path = Path(match.group(1).replace("%%", "%"))
-    return path if path.is_absolute() else None
+def _windows_pythonw_executable() -> Path:
+    executable = Path(sys.executable).resolve()
+    pythonw = executable.with_name("pythonw.exe")
+    if pythonw.is_file():
+        return pythonw
+    raise RuntimeError(
+        f"pythonw.exe is required for the Windows remote worker service: {pythonw}"
+    )
 
 
 def _register_windows_task(service_file: Path) -> None:
-    action_arguments = f'/d /c ""{service_file.resolve()}""'
+    action_arguments = f'"{service_file.resolve()}"'
     script = "\n".join(
         [
             "$ErrorActionPreference = 'Stop'",
             "$user = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name",
             (
-                "$action = New-ScheduledTaskAction -Execute $env:ComSpec "
+                "$action = New-ScheduledTaskAction "
+                f"-Execute {_powershell_literal(str(_windows_pythonw_executable()))} "
                 f"-Argument {_powershell_literal(action_arguments)} "
                 f"-WorkingDirectory {_powershell_literal(str(worker_state_dir().resolve()))}"
             ),
@@ -473,8 +500,7 @@ def refresh_installed_service_definition() -> Path | None:
         launcher = _installed_launchd_launcher_path() or worker_launcher_path()
         return _write_launchd_plist(launcher)
     if kind == "scheduled-task" and _windows_task_status() is not None:
-        launcher = _installed_windows_launcher_path() or worker_launcher_path()
-        return _write_windows_task_launcher(launcher)
+        return _write_windows_task_launcher()
     return None
 
 
@@ -699,7 +725,7 @@ def install_service(*, start: bool = True) -> dict[str, Any]:
         _stop_process()
         if _windows_task_status() is not None:
             _stop_windows_task()
-        service_file = _write_windows_task_launcher(launcher)
+        service_file = _write_windows_task_launcher()
         _register_windows_task(service_file)
         if start:
             _start_windows_task()

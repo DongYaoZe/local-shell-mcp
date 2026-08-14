@@ -105,6 +105,9 @@ def test_install_and_manage_windows_scheduled_task(tmp_path, monkeypatch):
     monkeypatch.setattr(service.platform, "system", lambda: "Windows")
     monkeypatch.setattr(service, "service_kind", lambda: "scheduled-task")
     monkeypatch.setattr(service, "_powershell_executable", lambda: "powershell.exe")
+    pythonw = tmp_path / "pythonw.exe"
+    pythonw.write_bytes(b"")
+    monkeypatch.setattr(service, "_windows_pythonw_executable", lambda: pythonw)
     state = {"installed": False, "value": 3}
     scripts = []
 
@@ -136,12 +139,16 @@ def test_install_and_manage_windows_scheduled_task(tmp_path, monkeypatch):
     assert result["service_file"] == str(service_file)
     assert service_file.exists()
     launcher_text = service_file.read_text(encoding="utf-8")
-    assert "LOCAL_SHELL_MCP_WORKER_MANAGED=1" in launcher_text
-    assert "LOCAL_SHELL_MCP_WORKER_STATE_DIR=" in launcher_text
+    assert "os.environ['LOCAL_SHELL_MCP_WORKER_MANAGED'] = \"1\"" in launcher_text
+    assert 'os.environ["LOCAL_SHELL_MCP_WORKER_STATE_DIR"] = STATE_DIR' in launcher_text
+    assert 'main(["worker", "run"])' in launcher_text
+    assert 'open(LOG_PATH, "a", encoding="utf-8", buffering=1)' in launcher_text
     registration = next(script for script, _ in scripts if "Register-ScheduledTask" in script)
     assert "New-ScheduledTaskTrigger -AtLogOn -User $user" in registration
     assert "-LogonType Interactive -RunLevel Limited" in registration
     assert "-RestartCount 999" in registration
+    assert str(pythonw) in registration
+    assert "New-ScheduledTaskAction -Execute $env:ComSpec" not in registration
     assert service.service_status()["running"] is True
 
     assert service.stop_service()["running"] is False
@@ -193,8 +200,7 @@ def test_windows_task_status_parses_state_and_handles_missing_task(monkeypatch):
 
 def test_windows_service_refresh_and_process_fallback(tmp_path, monkeypatch):
     _configure(tmp_path, monkeypatch)
-    custom_launcher = tmp_path / "custom-bin" / "local-shell-mcp.cmd"
-    service._write_windows_task_launcher(custom_launcher)  # noqa: SLF001
+    service._write_windows_task_launcher()  # noqa: SLF001
     monkeypatch.setattr(service, "service_kind", lambda: "scheduled-task")
     monkeypatch.setattr(
         service,
@@ -204,8 +210,7 @@ def test_windows_service_refresh_and_process_fallback(tmp_path, monkeypatch):
     refreshed = service.refresh_installed_service_definition()
     assert refreshed == service._windows_task_launcher_path()  # noqa: SLF001
     assert refreshed.exists()
-    assert f'call "{custom_launcher.resolve()}" worker run' in refreshed.read_text(encoding="utf-8")
-    assert service._installed_windows_launcher_path() == custom_launcher.resolve()  # noqa: SLF001
+    assert 'main(["worker", "run"])' in refreshed.read_text(encoding="utf-8")
 
     monkeypatch.setattr(service, "_windows_task_status", lambda: None)
     monkeypatch.setattr(service, "_read_pid", lambda: 42)

@@ -5,6 +5,7 @@ import subprocess
 import sys
 import urllib.error
 from io import BytesIO
+from types import SimpleNamespace
 
 import pytest
 
@@ -186,8 +187,8 @@ async def test_join_script_reports_download_progress_and_uses_worker_entrypoint(
 def test_worker_post_json_uses_curl_and_parses_success(monkeypatch):
     calls = []
 
-    def fake_run(command, *, input, capture_output, check):  # noqa: A002
-        calls.append((command, input, check))
+    def fake_run(command, *, input, capture_output, check, creationflags):  # noqa: A002
+        calls.append((command, input, check, creationflags))
         assert capture_output is True
         return subprocess.CompletedProcess(
             command,
@@ -207,7 +208,7 @@ def test_worker_post_json_uses_curl_and_parses_success(monkeypatch):
     )
 
     assert result == {"ok": True, "data": {"registered": True}}
-    command, body, check = calls[0]
+    command, body, check, creationflags = calls[0]
     assert command[:7] == [
         "/usr/bin/curl",
         "--connect-timeout",
@@ -221,10 +222,14 @@ def test_worker_post_json_uses_curl_and_parses_success(monkeypatch):
     assert command[-1] == "https://example.test/remote/register"
     assert body == b'{"invite": "abc"}'
     assert check is False
+    assert creationflags == 0
 
 
 def test_worker_post_json_curl_reports_non_2xx_body(monkeypatch):
-    def fake_run(command, *, input, capture_output, check):  # noqa: A002, ARG001
+    def fake_run(  # noqa: A002, ARG001
+        command, *, input, capture_output, check, creationflags
+    ):
+        assert creationflags == 0
         return subprocess.CompletedProcess(
             command,
             0,
@@ -237,6 +242,12 @@ def test_worker_post_json_curl_reports_non_2xx_body(monkeypatch):
 
     with pytest.raises(RuntimeError, match="failed with 403: <html>Cloudflare 1010</html>"):
         remote._worker_post_json("https://example.test/remote/register", {"invite": "abc"})  # noqa: SLF001
+
+
+def test_worker_curl_subprocess_hides_windows_console(monkeypatch):
+    monkeypatch.setattr(remote, "os", SimpleNamespace(name="nt"))
+    monkeypatch.setattr(remote.subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
+    assert remote._worker_subprocess_creationflags() == 0x08000000  # noqa: SLF001
 
 
 def test_worker_post_json_falls_back_to_urllib_when_curl_unavailable(monkeypatch):

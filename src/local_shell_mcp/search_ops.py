@@ -5,6 +5,7 @@ import json
 from contextlib import suppress
 
 from .fs_ops import missing_path_context, resolve_path
+from .process_utils import managed_process_kwargs
 from .settings import get_settings
 from .shell_ops import _close_process_transport
 
@@ -27,6 +28,7 @@ async def grep(query: str, cwd: str = ".", glob: str | None = None, regex: bool 
         cwd=str(base),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        **managed_process_kwargs(),
     )
     matches = []
     stderr_parts: list[bytes] = []
