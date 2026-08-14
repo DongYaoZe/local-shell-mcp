@@ -149,9 +149,11 @@ class LiveChannelManager:
             )
             requested_live_id = live_id
             resolved_live_id = self._recovered_live_ids.get(live_id or "", live_id or "")
-            channel = self._channels.get(
-                resolved_live_id or logical_live_id or session_live_id or ""
-            )
+            channel = self._channels.get(resolved_live_id or "")
+            if channel is None:
+                channel = self._channels.get(logical_live_id or "")
+            if channel is None:
+                channel = self._channels.get(session_live_id or "")
             if (
                 channel is not None
                 and logical_session_id
@@ -262,6 +264,24 @@ class LiveChannelManager:
                 data={"session_id": logical_session_id},
             )
             return channel
+
+    def detach_logical_session(self, logical_session_id: str) -> list[LiveChannel]:
+        with self._lock:
+            self._prune_locked()
+            self._logical_session_channels.pop(logical_session_id, None)
+            detached: list[LiveChannel] = []
+            for channel in self._channels.values():
+                if channel.logical_session_id != logical_session_id:
+                    continue
+                channel.logical_session_id = None
+                detached.append(channel)
+                self._publish_locked(
+                    channel,
+                    "session.detached",
+                    actor="system",
+                    data={"session_id": logical_session_id},
+                )
+            return detached
 
     def claim_recovery_session(self, session_key: str, subject: str) -> LiveChannel | None:
         """Attach one fresh model MCP session after a backend restart recovery."""

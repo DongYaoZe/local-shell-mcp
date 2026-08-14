@@ -2785,6 +2785,7 @@ def _register_maintenance_tools(mcp: FastMCP, read_only_tool: ToolAnnotations) -
         session_key = mcp_session_key(mcp)
         subject = _current_principal_subject()
         result = await _tool_call(
+            asyncio.to_thread,
             get_session_runtime_manager().manage,
             session_key,
             subject,
@@ -2808,6 +2809,10 @@ def _register_maintenance_tools(mcp: FastMCP, read_only_tool: ToolAnnotations) -
                 get_live_channel_manager().bind_logical_session(
                     session_key, str(data["session_id"]), subject
                 )
+            if isinstance(data, dict) and action.strip().lower() == "delete":
+                deleted_session_id = str(data.get("session_id") or session_id or "")
+                if deleted_session_id:
+                    get_live_channel_manager().detach_logical_session(deleted_session_id)
         return result
 
     @mcp.tool(structured_output=True, annotations=read_only_tool, meta=shell_read_meta)
@@ -2832,6 +2837,7 @@ def _register_maintenance_tools(mcp: FastMCP, read_only_tool: ToolAnnotations) -
     ) -> ToolResult:
         """Manage the optional Goal plan owned by the current logical session. An active plan enables automatic continuation after 15 minutes without agent activity, capped at 10 continuation attempts. Start or resume a logical session with session_manage first. Mutating actions require that session's active_run.run_id as session_run_id. Actions: start, get, update, block, resume, finish, cancel. start requires objective and steps; finish requires every step to be completed or skipped."""
         return await _tool_call(
+            asyncio.to_thread,
             get_session_runtime_manager().manage_plan,
             mcp_session_key(mcp),
             action=action,

@@ -99,9 +99,10 @@ async def live_snapshot(request: Request) -> Response:
         require_scopes(principal, ("shell:read",))
         manager = get_live_channel_manager()
         after = max(0, channel.seq - 300)
+        channel_state = await asyncio.to_thread(channel.public_state)
         return _ok(
             {
-                "channel": channel.public_state(),
+                "channel": channel_state,
                 "events": manager.events_since(channel, after, 300),
             }
         )
@@ -119,14 +120,16 @@ async def live_events(request: Request) -> Response:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail="Invalid event cursor") from exc
         events = await get_live_channel_manager().wait_events(channel, after, timeout_s)
+        logical_session_id = channel.logical_session_id
+        plan = await asyncio.to_thread(
+            get_session_runtime_manager().plan_state, logical_session_id
+        )
         return _ok(
             {
                 "events": events,
                 "cursor": events[-1]["seq"] if events else after,
-                "plan": get_session_runtime_manager().plan_state(
-                    channel.logical_session_id
-                ),
-                "session_id": channel.logical_session_id,
+                "plan": plan,
+                "session_id": logical_session_id,
             }
         )
     except Exception as exc:
@@ -144,7 +147,8 @@ async def live_plan_control(request: Request) -> Response:
         session_manager = get_session_runtime_manager()
         live_manager = get_live_channel_manager()
         if action == "pause":
-            result = session_manager.manage_plan_for_session(
+            result = await asyncio.to_thread(
+                session_manager.manage_plan_for_session,
                 channel.logical_session_id,
                 action="block",
                 note="Paused by user",
@@ -159,7 +163,8 @@ async def live_plan_control(request: Request) -> Response:
             )
             return _ok(result)
         if action == "resume":
-            result = session_manager.manage_plan_for_session(
+            result = await asyncio.to_thread(
+                session_manager.manage_plan_for_session,
                 channel.logical_session_id,
                 action="resume",
                 actor="human",
@@ -174,7 +179,8 @@ async def live_plan_control(request: Request) -> Response:
             return _ok(result)
         if action == "cancel":
             note = str(body.get("note") or "Cancelled by user").strip() or "Cancelled by user"
-            result = session_manager.manage_plan_for_session(
+            result = await asyncio.to_thread(
+                session_manager.manage_plan_for_session,
                 channel.logical_session_id,
                 action="cancel",
                 note=note,
@@ -203,14 +209,18 @@ async def live_plan_continuation(request: Request) -> Response:
         if not channel.logical_session_id:
             return _ok({"claimed": False, "plan": None, "session_id": None})
         if action == "claim":
-            claimed = session_manager.claim_plan_continuation(
-                channel.logical_session_id, subject=channel.subject
+            claimed = await asyncio.to_thread(
+                session_manager.claim_plan_continuation,
+                channel.logical_session_id,
+                subject=channel.subject,
             )
             if claimed is None:
                 return _ok(
                     {
                         "claimed": False,
-                        "plan": session_manager.plan_state(channel.logical_session_id),
+                        "plan": await asyncio.to_thread(
+                            session_manager.plan_state, channel.logical_session_id
+                        ),
                         "session_id": channel.logical_session_id,
                     }
                 )
@@ -220,7 +230,8 @@ async def live_plan_continuation(request: Request) -> Response:
             if not claim_id:
                 raise HTTPException(status_code=400, detail="claim_id is required")
             return _ok(
-                session_manager.validate_plan_continuation(
+                await asyncio.to_thread(
+                    session_manager.validate_plan_continuation,
                     channel.logical_session_id,
                     claim_id,
                     subject=channel.subject,
@@ -233,7 +244,8 @@ async def live_plan_continuation(request: Request) -> Response:
             return _ok(
                 {
                     "session_id": channel.logical_session_id,
-                    "plan": session_manager.report_plan_continuation(
+                    "plan": await asyncio.to_thread(
+                        session_manager.report_plan_continuation,
                         channel.logical_session_id,
                         accepted=accepted,
                         error=error,

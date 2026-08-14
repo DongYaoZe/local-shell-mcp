@@ -1195,3 +1195,56 @@ def test_completed_plan_steps_remain_eligible_for_cleanup_continuation(tmp_path)
     claimed = manager.claim_plan_continuation(session_id, subject="user")
     assert claimed is not None
     assert claimed["plan"]["status"] == "active"
+
+
+@pytest.mark.parametrize("action", ["finish", "cancel"])
+def test_session_termination_waits_for_inflight_tool(tmp_path, action):
+    manager = SessionRuntimeManager(tmp_path / f".{action}-state")
+    started = manager.manage("mcp:a", "user", action="start", objective="Task")
+    session_id = started["session_id"]
+    run_id = started["active_run"]["run_id"]
+    lease = manager.begin_tool_call(
+        "mcp:a", "call-1", expected_run_id=run_id, data={"tool": "remote_transfer"}
+    )
+
+    with pytest.raises(ValueError, match="tool calls are in flight"):
+        manager.manage(
+            "mcp:a",
+            "user",
+            action=action,
+            session_run_id=run_id,
+        )
+
+    assert manager.current_session_id("mcp:a", subject="user") == session_id
+    assert manager.finish_tool_call(lease, "tool.completed") is None
+
+
+def test_continuation_validation_rechecks_agent_activity_and_inflight(tmp_path):
+    manager = SessionRuntimeManager(tmp_path / ".continuation-state")
+    started = manager.manage("mcp:a", "user", action="start", objective="Task")
+    session_id = started["session_id"]
+    run_id = started["active_run"]["run_id"]
+    manager.manage_plan(
+        "mcp:a",
+        action="start",
+        session_run_id=run_id,
+        objective="Task",
+        steps=[{"id": "work", "text": "Work"}],
+    )
+    logical = manager._sessions[session_id]
+    assert logical.plan is not None
+    logical.plan.last_agent_activity = time.time() - PLAN_EXECUTION_LEASE_S - 1
+    claimed = manager.claim_plan_continuation(session_id, subject="user")
+    assert claimed is not None
+    claim_id = claimed["claim_id"]
+
+    lease = manager.begin_tool_call(
+        "mcp:a", "call-1", expected_run_id=run_id, data={"tool": "remote_transfer"}
+    )
+    validation = manager.validate_plan_continuation(
+        session_id, claim_id, subject="user"
+    )
+
+    assert validation["valid"] is False
+    assert validation["plan"]["continuation_pending"] is False
+    assert manager.finish_tool_call(lease, "tool.completed") is None

@@ -934,6 +934,13 @@ class SessionRuntimeManager:
                 )
                 return self._public_state_locked(logical)
 
+            if normalized_action in {"finish", "cancel"} and self._in_flight_count_locked(
+                logical.session_id
+            ):
+                raise ValueError(
+                    f"Cannot {normalized_action} a logical session while tool calls are in flight"
+                )
+
             if normalized_action == "finish":
                 if logical.plan is not None and logical.plan.status in {"active", "blocked"}:
                     raise ValueError(
@@ -1529,7 +1536,6 @@ class SessionRuntimeManager:
                 plan.continuation_pending = False
                 plan.continuation_pending_since = None
                 plan.continuation_claim_id = None
-                plan.continuation_claim_id = None
             if plan.continuation_count >= PLAN_MAX_CONTINUATIONS:
                 return None
             if plan.continuation_retry_after is not None and now < plan.continuation_retry_after:
@@ -1575,19 +1581,32 @@ class SessionRuntimeManager:
                     )
             logical = self._require_session_locked(session_id, subject)
             plan = logical.plan
+            now = time.time()
+            in_flight_calls = self._in_flight_count_locked(logical.session_id)
             valid = bool(
                 plan is not None
                 and plan.status == "active"
                 and plan.continuation_pending
                 and plan.continuation_claim_id == claim_id
+                and in_flight_calls == 0
+                and now >= plan.last_agent_activity + PLAN_EXECUTION_LEASE_S
             )
+            if (
+                plan is not None
+                and plan.continuation_pending
+                and plan.continuation_claim_id == claim_id
+                and not valid
+            ):
+                plan.continuation_pending = False
+                plan.continuation_pending_since = None
+                plan.continuation_claim_id = None
+                plan.updated_at = now
+                self._save_locked(logical)
             return {
                 "valid": valid,
                 "session_id": logical.session_id,
                 "plan": (
-                    plan.public_state(
-                        in_flight_calls=self._in_flight_count_locked(logical.session_id)
-                    )
+                    plan.public_state(now, in_flight_calls=in_flight_calls)
                     if plan is not None
                     else None
                 ),

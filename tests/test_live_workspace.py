@@ -1157,3 +1157,42 @@ async def test_live_snapshot_returns_missing_token_error():
     response = await live_routes.live_snapshot(request)
     assert response.status_code == 403
     assert b"live-workspace token" in response.body
+
+
+def test_live_workspace_stale_live_id_falls_back_to_logical_channel():
+    manager = LiveChannelManager()
+    channel, _ = manager.open(
+        session_key="mcp:first",
+        subject="user",
+        scopes=tuple(ALL_OAUTH_SCOPES),
+        logical_session_id="s_task",
+    )
+
+    reattached, _ = manager.open(
+        session_key="mcp:second",
+        subject="user",
+        scopes=tuple(ALL_OAUTH_SCOPES),
+        live_id="expired-live-id",
+        logical_session_id="s_task",
+    )
+
+    assert reattached is channel
+    assert manager.active_for_session("mcp:second") is channel
+    assert len(manager._channels) == 1
+
+
+def test_live_workspace_detaches_deleted_logical_session():
+    manager = LiveChannelManager()
+    channel, _ = manager.open(
+        session_key="mcp:model",
+        subject="user",
+        scopes=tuple(ALL_OAUTH_SCOPES),
+        logical_session_id="s_deleted",
+    )
+
+    detached = manager.detach_logical_session("s_deleted")
+
+    assert detached == [channel]
+    assert channel.logical_session_id is None
+    assert "s_deleted" not in manager._logical_session_channels
+    assert channel.events[-1]["type"] == "session.detached"
