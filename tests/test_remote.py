@@ -5,6 +5,7 @@ import subprocess
 import sys
 import urllib.error
 from io import BytesIO
+from types import SimpleNamespace
 
 import pytest
 
@@ -186,8 +187,8 @@ async def test_join_script_reports_download_progress_and_uses_worker_entrypoint(
 def test_worker_post_json_uses_curl_and_parses_success(monkeypatch):
     calls = []
 
-    def fake_run(command, *, input, capture_output, check):  # noqa: A002
-        calls.append((command, input, check))
+    def fake_run(command, *, input, capture_output, check, creationflags):  # noqa: A002
+        calls.append((command, input, check, creationflags))
         assert capture_output is True
         return subprocess.CompletedProcess(
             command,
@@ -207,7 +208,7 @@ def test_worker_post_json_uses_curl_and_parses_success(monkeypatch):
     )
 
     assert result == {"ok": True, "data": {"registered": True}}
-    command, body, check = calls[0]
+    command, body, check, creationflags = calls[0]
     assert command[:7] == [
         "/usr/bin/curl",
         "--connect-timeout",
@@ -221,10 +222,14 @@ def test_worker_post_json_uses_curl_and_parses_success(monkeypatch):
     assert command[-1] == "https://example.test/remote/register"
     assert body == b'{"invite": "abc"}'
     assert check is False
+    assert creationflags == remote._worker_subprocess_creationflags()  # noqa: SLF001
 
 
 def test_worker_post_json_curl_reports_non_2xx_body(monkeypatch):
-    def fake_run(command, *, input, capture_output, check):  # noqa: A002, ARG001
+    def fake_run(  # noqa: A002, ARG001
+        command, *, input, capture_output, check, creationflags
+    ):
+        assert creationflags == remote._worker_subprocess_creationflags()  # noqa: SLF001
         return subprocess.CompletedProcess(
             command,
             0,
@@ -237,6 +242,12 @@ def test_worker_post_json_curl_reports_non_2xx_body(monkeypatch):
 
     with pytest.raises(RuntimeError, match="failed with 403: <html>Cloudflare 1010</html>"):
         remote._worker_post_json("https://example.test/remote/register", {"invite": "abc"})  # noqa: SLF001
+
+
+def test_worker_curl_subprocess_hides_windows_console(monkeypatch):
+    monkeypatch.setattr(remote, "os", SimpleNamespace(name="nt"))
+    monkeypatch.setattr(remote.subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
+    assert remote._worker_subprocess_creationflags() == 0x08000000  # noqa: SLF001
 
 
 def test_worker_post_json_falls_back_to_urllib_when_curl_unavailable(monkeypatch):
@@ -325,7 +336,7 @@ def test_worker_retry_delay_is_capped():
 
 
 def test_reexec_updated_worker_runtime_prefers_installed_bundle(tmp_path, monkeypatch):
-    from local_shell_mcp import remote_worker_cli
+    from local_shell_mcp import remote_worker_cli, remote_worker_service
 
     state_dir = tmp_path / "state"
     runtime = state_dir / "runtime"
@@ -336,6 +347,7 @@ def test_reexec_updated_worker_runtime_prefers_installed_bundle(tmp_path, monkey
         "_worker_run_exec_argv",
         lambda: [sys.executable, "-m", "local_shell_mcp.main", "worker", "run"],
     )
+    monkeypatch.setattr(remote_worker_service, "_current_worker_is_managed", lambda: False)
     calls = []
     monkeypatch.setattr(remote.os, "execv", lambda executable, argv: calls.append((executable, argv)))
 
@@ -352,9 +364,35 @@ def test_reexec_updated_worker_runtime_prefers_installed_bundle(tmp_path, monkey
     ]
 
 
+def test_reexec_updated_managed_windows_worker_uses_service_launcher(tmp_path, monkeypatch):
+    from local_shell_mcp import remote_worker_cli, remote_worker_service
+
+    state_dir = tmp_path / "state"
+    launcher = state_dir / "worker-service.pyw"
+    launcher.parent.mkdir(parents=True)
+    launcher.write_text("# launcher\n", encoding="utf-8")
+    pythonw = tmp_path / "pythonw.exe"
+    pythonw.write_bytes(b"")
+    monkeypatch.setenv("LOCAL_SHELL_MCP_WORKER_STATE_DIR", str(state_dir))
+    monkeypatch.setattr(remote.sys, "platform", "win32")
+    monkeypatch.setattr(
+        remote_worker_cli,
+        "_worker_run_exec_argv",
+        lambda: [sys.executable, "-m", "local_shell_mcp.main", "worker", "run"],
+    )
+    monkeypatch.setattr(remote_worker_service, "_current_worker_is_managed", lambda: True)
+    monkeypatch.setattr(remote_worker_service, "_windows_pythonw_executable", lambda: pythonw)
+    calls = []
+    monkeypatch.setattr(remote.os, "execv", lambda executable, argv: calls.append((executable, argv)))
+
+    remote._reexec_updated_worker_runtime()  # noqa: SLF001
+
+    assert calls == [(str(pythonw), [str(pythonw), str(launcher.resolve())])]
+
+
 @pytest.mark.asyncio
 async def test_upgrade_worker_runtime_validates_manifest_version(monkeypatch):
-    from local_shell_mcp import remote_worker_installer
+    from local_shell_mcp import remote_worker_installer, remote_worker_service
 
     monkeypatch.setattr(
         remote_worker_installer,
@@ -366,6 +404,11 @@ async def test_upgrade_worker_runtime_validates_manifest_version(monkeypatch):
         "_reexec_updated_worker_runtime",
         lambda: pytest.fail("re-executed mismatched runtime"),
     )
+    monkeypatch.setattr(
+        remote_worker_service,
+        "refresh_installed_service_definition",
+        lambda: pytest.fail("refreshed service for mismatched runtime"),
+    )
     with pytest.raises(RuntimeError, match="manifest provides 3.1.0"):
         await remote._upgrade_worker_runtime("https://example.test", "3.2.0")  # noqa: SLF001
 
@@ -375,9 +418,14 @@ async def test_upgrade_worker_runtime_validates_manifest_version(monkeypatch):
         "install_or_update_runtime",
         lambda server: {"version": "3.2.0"},
     )
+    monkeypatch.setattr(
+        remote_worker_service,
+        "refresh_installed_service_definition",
+        lambda: calls.append("refresh"),
+    )
     monkeypatch.setattr(remote, "_reexec_updated_worker_runtime", lambda: calls.append("reexec"))
     await remote._upgrade_worker_runtime("https://example.test", "3.2.0")  # noqa: SLF001
-    assert calls == ["reexec"]
+    assert calls == ["refresh", "reexec"]
 
 
 def test_worker_cli_keyboard_interrupt_exits_cleanly():

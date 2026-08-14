@@ -68,6 +68,7 @@ from .models import ok_result as _ok
 from .oauth import ALL_OAUTH_SCOPES
 from .patch_ops import git_apply_command, git_apply_prefix, normalize_patch_text
 from .playwright_ops import playwright_run_script
+from .process_utils import managed_process_kwargs
 from .remote import remote_manager
 from .remote_transfer import (
     create_download_ticket,
@@ -903,7 +904,8 @@ def _secret_scan_candidates(base: Any, glob: str | None = None) -> list[Any]:
         args.extend(["--glob", glob])
     try:
         result = subprocess.run(
-            args, cwd=str(base), text=True, capture_output=True, timeout=30, check=False
+            args, cwd=str(base), text=True, capture_output=True, timeout=30, check=False,
+            **managed_process_kwargs(),
         )
     except Exception:
         result = None
