@@ -1800,7 +1800,13 @@ def _worker_poll_payload(poll_request_timeout_s: float | None = None) -> dict[st
 
 def _reexec_updated_worker_runtime() -> None:
     from .remote_worker_cli import _worker_run_exec_argv
-    from .remote_worker_service import cancel_worker_lock_reexec, prepare_worker_lock_reexec
+    from .remote_worker_service import (
+        _current_worker_is_managed,
+        _windows_pythonw_executable,
+        _windows_task_launcher_path,
+        cancel_worker_lock_reexec,
+        prepare_worker_lock_reexec,
+    )
     from .remote_worker_state import worker_runtime_dir
 
     runtime = worker_runtime_dir()
@@ -1810,6 +1816,11 @@ def _reexec_updated_worker_runtime() -> None:
         preferred + [entry for entry in current if entry not in preferred]
     )
     argv = _worker_run_exec_argv()
+    if sys.platform == "win32" and _current_worker_is_managed():
+        service_launcher = _windows_task_launcher_path()
+        if service_launcher.is_file():
+            pythonw = str(_windows_pythonw_executable())
+            argv = [pythonw, str(service_launcher.resolve())]
     lock_fd = prepare_worker_lock_reexec()
     try:
         os.execv(argv[0], argv)
@@ -1819,6 +1830,7 @@ def _reexec_updated_worker_runtime() -> None:
 
 async def _upgrade_worker_runtime(server: str, target_version: str) -> None:
     from .remote_worker_installer import install_or_update_runtime
+    from .remote_worker_service import refresh_installed_service_definition
 
     result = await asyncio.to_thread(install_or_update_runtime, server)
     installed_version = str(result.get("version") or "")
@@ -1827,6 +1839,7 @@ async def _upgrade_worker_runtime(server: str, target_version: str) -> None:
             f"controller requested worker {target_version}, but manifest provides "
             f"{installed_version or 'no version'}"
         )
+    await asyncio.to_thread(refresh_installed_service_definition)
     print(
         f"Status: worker runtime updated to {installed_version or 'unknown'}; restarting...",
         file=sys.stderr,
