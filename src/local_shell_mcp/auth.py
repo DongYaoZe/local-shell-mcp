@@ -16,7 +16,20 @@ from .audit import audit
 from .settings import Settings, get_settings
 from .ui_security import has_valid_ui_local_token, is_loopback_connection
 
-PUBLIC_PATHS = {"/healthz", "/readyz", "/docs", "/openapi.json", "/join", "/remote/worker-bundle.tgz", "/remote/register", "/remote/resume", "/remote/poll", "/remote/heartbeat", "/remote/result"}
+PUBLIC_PATHS = {
+    "/healthz",
+    "/readyz",
+    "/docs",
+    "/openapi.json",
+    "/join",
+    "/join.ps1",
+    "/remote/worker-bundle.tgz",
+    "/remote/register",
+    "/remote/resume",
+    "/remote/poll",
+    "/remote/heartbeat",
+    "/remote/result",
+}
 HUMAN_UI_API_PREFIX = "/api/ui/"
 LIVE_UI_API_PREFIX = "/api/live/"
 _REQUEST_BODY_SCOPE_KEY = "local_shell_mcp.request_body"
