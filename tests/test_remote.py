@@ -222,14 +222,14 @@ def test_worker_post_json_uses_curl_and_parses_success(monkeypatch):
     assert command[-1] == "https://example.test/remote/register"
     assert body == b'{"invite": "abc"}'
     assert check is False
-    assert creationflags == 0
+    assert creationflags == remote._worker_subprocess_creationflags()  # noqa: SLF001
 
 
 def test_worker_post_json_curl_reports_non_2xx_body(monkeypatch):
     def fake_run(  # noqa: A002, ARG001
         command, *, input, capture_output, check, creationflags
     ):
-        assert creationflags == 0
+        assert creationflags == remote._worker_subprocess_creationflags()  # noqa: SLF001
         return subprocess.CompletedProcess(
             command,
             0,

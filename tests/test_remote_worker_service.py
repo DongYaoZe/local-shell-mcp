@@ -202,6 +202,12 @@ def test_windows_service_refresh_and_process_fallback(tmp_path, monkeypatch):
     _configure(tmp_path, monkeypatch)
     service._write_windows_task_launcher()  # noqa: SLF001
     monkeypatch.setattr(service, "service_kind", lambda: "scheduled-task")
+    registrations = []
+    monkeypatch.setattr(
+        service,
+        "_register_windows_task",
+        lambda service_file: registrations.append(service_file),
+    )
     monkeypatch.setattr(
         service,
         "_windows_task_status",
@@ -211,6 +217,7 @@ def test_windows_service_refresh_and_process_fallback(tmp_path, monkeypatch):
     assert refreshed == service._windows_task_launcher_path()  # noqa: SLF001
     assert refreshed.exists()
     assert 'main(["worker", "run"])' in refreshed.read_text(encoding="utf-8")
+    assert registrations == [refreshed]
 
     monkeypatch.setattr(service, "_windows_task_status", lambda: None)
     monkeypatch.setattr(service, "_read_pid", lambda: 42)

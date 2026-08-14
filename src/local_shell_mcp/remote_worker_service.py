@@ -500,7 +500,9 @@ def refresh_installed_service_definition() -> Path | None:
         launcher = _installed_launchd_launcher_path() or worker_launcher_path()
         return _write_launchd_plist(launcher)
     if kind == "scheduled-task" and _windows_task_status() is not None:
-        return _write_windows_task_launcher()
+        service_file = _write_windows_task_launcher()
+        _register_windows_task(service_file)
+        return service_file
     return None
 
 
