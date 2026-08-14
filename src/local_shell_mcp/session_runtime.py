@@ -28,6 +28,7 @@ PLAN_STEP_STATUSES = frozenset({"pending", "active", "completed", "skipped"})
 SESSION_ACTIVITY_LIMIT = 200
 SESSION_IN_FLIGHT_LEASE_S = 2 * 60 * 60
 SESSION_RUN_HISTORY_LIMIT = 100
+SESSION_HISTORY_LIMIT_PER_PRINCIPAL = 100
 SESSION_REPORT_LIST_LIMIT = 50
 SESSION_TEXT_LIMIT = 20_000
 SESSION_LIST_LIMIT = 100
@@ -712,8 +713,13 @@ class SessionRuntimeManager:
                         lock_ids.append(target_id)
                     if attachment is not None and attachment[0] != target_id:
                         lock_ids.append(attachment[0])
-                if lock_ids and self._uses_shared_state_backend():
-                    with self._shared_session_locks_locked(lock_ids):
+                if self._uses_shared_state_backend() and (
+                    lock_ids or normalized_action in {"start", "delete"}
+                ):
+                    with contextlib.ExitStack() as stack:
+                        if normalized_action in {"start", "delete"}:
+                            stack.enter_context(self._state_store().lock("sessions/history"))
+                        stack.enter_context(self._shared_session_locks_locked(lock_ids))
                         return self.manage(
                             session_key,
                             subject,
@@ -731,6 +737,15 @@ class SessionRuntimeManager:
                             _state_locks_held=True,
                         )
             if normalized_action == "start":
+                if self._uses_shared_state_backend():
+                    self._refresh_all_sessions_locked()
+                retained = sum(
+                    1 for item in self._sessions.values() if item.subject == subject
+                )
+                if retained >= SESSION_HISTORY_LIMIT_PER_PRINCIPAL:
+                    raise ValueError(
+                        "Logical session history limit reached; delete an old detached or terminal session before starting another"
+                    )
                 now = time.time()
                 logical = LogicalSession(
                     session_id=self._new_session_id(),
@@ -803,6 +818,21 @@ class SessionRuntimeManager:
 
             if normalized_action == "get":
                 return self._public_state_locked(logical)
+
+            if normalized_action == "delete":
+                if self._in_flight_count_locked(logical.session_id):
+                    raise ValueError("Cannot delete a logical session while tool calls are in flight")
+                active = logical.active_run()
+                if active is not None and active.status == "active":
+                    raise ValueError(
+                        "Cannot delete a logical session with an active agent run; finish, cancel, or switch away first"
+                    )
+                self._state_store().delete(f"sessions/{logical.session_id}.json")
+                self._sessions.pop(logical.session_id, None)
+                for key, attached in list(self._attachments.items()):
+                    if attached[0] == logical.session_id:
+                        self._attachments.pop(key, None)
+                return {"session_id": logical.session_id, "deleted": True}
 
             if normalized_action == "resume":
                 if logical.status != "active":
@@ -905,7 +935,7 @@ class SessionRuntimeManager:
                 return self._public_state_locked(logical)
 
             raise ValueError(
-                "action must be one of: start, resume, get, report, list, finish, cancel"
+                "action must be one of: start, resume, get, report, list, finish, cancel, delete"
             )
 
     def _assert_attachment_locked(
@@ -984,6 +1014,7 @@ class SessionRuntimeManager:
         call_id: str,
         *,
         expected_run_id: str | None,
+        subject: str | None = None,
         require_run_token: bool = True,
         data: dict[str, Any] | None = None,
         _state_lock_held: bool = False,
@@ -996,7 +1027,34 @@ class SessionRuntimeManager:
         with self._lock:
             self._ensure_loaded_locked()
             if session_key not in self._attachments:
-                return None
+                if expected_run_id is None:
+                    return None
+                if self._uses_shared_state_backend():
+                    self._refresh_all_sessions_locked()
+                matches: list[LogicalSession] = []
+                for candidate in self._sessions.values():
+                    if subject is not None and candidate.subject != subject:
+                        continue
+                    run = candidate.active_run()
+                    if (
+                        candidate.status == "active"
+                        and candidate.active_run_id == expected_run_id
+                        and run is not None
+                        and run.status == "active"
+                    ):
+                        matches.append(candidate)
+                if len(matches) != 1:
+                    raise RuntimeError(
+                        "This agent run is stale or unknown; resume the logical session and use its current active_run.run_id"
+                    )
+                recovered = matches[0]
+                recovered_run = recovered.active_run()
+                assert recovered_run is not None
+                recovered_run.session_key = session_key
+                self._attachments[session_key] = (
+                    recovered.session_id,
+                    recovered_run.run_id,
+                )
             attachment = self._attachments[session_key]
             if not _state_lock_held and self._uses_shared_state_backend():
                 with self._shared_session_locks_locked([attachment[0]]):
@@ -1004,6 +1062,7 @@ class SessionRuntimeManager:
                         session_key,
                         call_id,
                         expected_run_id=expected_run_id,
+                        subject=subject,
                         require_run_token=require_run_token,
                         data=data,
                         _state_lock_held=True,
@@ -1069,6 +1128,11 @@ class SessionRuntimeManager:
             if run is not None:
                 run.updated_at = time.time()
             stale_run = logical.active_run_id != run_id
+            lease_persistence_error = None
+            try:
+                self._save_locked(logical)
+            except Exception as exc:  # noqa: BLE001 - completion must not mask tool results.
+                lease_persistence_error = f"{type(exc).__name__}: {exc}"
             try:
                 self._append_activity_locked(
                     logical,
@@ -1078,8 +1142,11 @@ class SessionRuntimeManager:
                     touch_plan=not stale_run,
                 )
             except Exception as exc:  # noqa: BLE001 - never mask the tool result.
-                return f"{type(exc).__name__}: {exc}"
-            return None
+                activity_error = f"{type(exc).__name__}: {exc}"
+                return "; ".join(
+                    item for item in (lease_persistence_error, activity_error) if item
+                )
+            return lease_persistence_error
 
     @classmethod
     def _normalize_plan_steps(cls, steps: list[dict[str, Any]]) -> list[PlanStep]:

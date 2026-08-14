@@ -15,6 +15,7 @@ from local_shell_mcp.session_runtime import (
     PLAN_OBJECTIVE_LIMIT,
     PLAN_STEP_ID_LIMIT,
     PLAN_STEP_TEXT_LIMIT,
+    SESSION_HISTORY_LIMIT_PER_PRINCIPAL,
     SESSION_RUN_HISTORY_LIMIT,
     SessionRuntimeManager,
 )
@@ -338,6 +339,36 @@ def test_session_activity_persistence_failure_keeps_tool_lease_recoverable(
     assert error is not None and "disk full" in error
 
 
+def test_tool_completion_persists_lease_removal_before_optional_activity(
+    tmp_path, monkeypatch
+):
+    state_dir = tmp_path / ".state"
+    manager = SessionRuntimeManager(state_dir)
+    started = manager.manage("mcp:a", "user", action="start", objective="Task")
+    session_id = started["session_id"]
+    run_id = started["active_run"]["run_id"]
+    lease = manager.begin_tool_call("mcp:a", "call-1", expected_run_id=run_id)
+    assert lease is not None
+
+    original_save = manager._save_locked
+    save_count = 0
+
+    def fail_completion_activity(session):
+        nonlocal save_count
+        save_count += 1
+        if save_count == 2:
+            raise OSError("transient completion activity failure")
+        return original_save(session)
+
+    monkeypatch.setattr(manager, "_save_locked", fail_completion_activity)
+    error = manager.finish_tool_call(lease, "tool.completed", data={"ok": True})
+
+    assert error is not None and "transient completion activity failure" in error
+    restored_manager = SessionRuntimeManager(state_dir)
+    restored_manager.get(session_id, subject="user")
+    assert restored_manager._sessions[session_id].in_flight_calls == {}
+
+
 def test_sessions_use_configured_stateless_state_backend(tmp_path, monkeypatch):
     clear_memory_state()
     monkeypatch.setenv("LOCAL_SHELL_MCP_WORKSPACE_ROOT", str(tmp_path))
@@ -605,6 +636,80 @@ def test_current_attachment_is_discarded_when_principal_changes(tmp_path):
     assert manager.current_session_id("mcp:a", subject="alice") == started["session_id"]
     assert manager.current_session_id("mcp:a", subject="bob") is None
     assert "mcp:a" not in manager._attachments
+
+
+def test_run_token_recovers_attachment_after_restart_and_rejects_stale_token(tmp_path):
+    state_dir = tmp_path / ".state"
+    first = SessionRuntimeManager(state_dir)
+    started = first.manage("mcp:a", "user", action="start", objective="Task")
+    session_id = started["session_id"]
+    first_run_id = started["active_run"]["run_id"]
+
+    restarted = SessionRuntimeManager(state_dir)
+    lease = restarted.begin_tool_call(
+        "mcp:recovered",
+        "call-1",
+        expected_run_id=first_run_id,
+        subject="user",
+    )
+    assert lease is not None
+    assert restarted.current_session_id("mcp:recovered", subject="user") == session_id
+    assert restarted.finish_tool_call(lease, "tool.completed") is None
+
+    takeover = first.manage(
+        "mcp:a",
+        "user",
+        action="resume",
+        session_id=session_id,
+        takeover=True,
+    )
+    second_run_id = takeover["active_run"]["run_id"]
+    assert second_run_id != first_run_id
+
+    another = SessionRuntimeManager(state_dir)
+    with pytest.raises(RuntimeError, match="stale or unknown"):
+        another.begin_tool_call(
+            "mcp:stale",
+            "call-2",
+            expected_run_id=first_run_id,
+            subject="user",
+        )
+    with pytest.raises(RuntimeError, match="stale or unknown"):
+        another.begin_tool_call(
+            "mcp:wrong-principal",
+            "call-3",
+            expected_run_id=second_run_id,
+            subject="other-user",
+        )
+
+
+def test_session_history_is_bounded_and_delete_frees_capacity(tmp_path):
+    manager = SessionRuntimeManager(tmp_path / ".state")
+    session_ids: list[str] = []
+    for index in range(SESSION_HISTORY_LIMIT_PER_PRINCIPAL):
+        started = manager.manage(
+            "mcp:a", "user", action="start", objective=f"Task {index}"
+        )
+        session_ids.append(started["session_id"])
+
+    with pytest.raises(ValueError, match="history limit"):
+        manager.manage("mcp:a", "user", action="start", objective="Too many")
+
+    with pytest.raises(ValueError, match="active agent run"):
+        manager.manage(
+            "mcp:cleanup", "user", action="delete", session_id=session_ids[-1]
+        )
+    deleted = manager.manage(
+        "mcp:cleanup", "user", action="delete", session_id=session_ids[0]
+    )
+    assert deleted == {"session_id": session_ids[0], "deleted": True}
+
+    replacement = manager.manage("mcp:a", "user", action="start", objective="Replacement")
+    assert replacement["session_id"] not in session_ids
+    listed = manager.manage("mcp:reader", "user", action="list")["sessions"]
+    assert len(listed) == SESSION_HISTORY_LIMIT_PER_PRINCIPAL
+    with pytest.raises(ValueError, match="Unknown logical session"):
+        manager.get(session_ids[0], subject="user")
 
 
 def test_session_initial_load_retries_after_transient_scan_failure(tmp_path, monkeypatch):

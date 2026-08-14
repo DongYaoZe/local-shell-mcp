@@ -704,6 +704,7 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
                     expected_run_id=(
                         str(session_run_id) if session_run_id is not None else None
                     ),
+                    subject=_current_principal_subject(),
                     require_run_token=require_run_token,
                     data=live_arguments,
                 )
@@ -2780,7 +2781,7 @@ def _register_maintenance_tools(mcp: FastMCP, read_only_tool: ToolAnnotations) -
         blockers: list[str] | None = None,
         takeover: bool = False,
     ) -> ToolResult:
-        """Manage a durable logical task session independent of machine and cwd. Start one before substantive tool-driven work; report semantic progress at meaningful checkpoints; resume by session_id to hand work to a new GPT/MCP run. resume with takeover=true always creates a new agent run and supersedes the old one. Use the returned active_run.run_id as session_run_id for report/finish/cancel and subsequent tools. Actions: start, resume, get, report, list, finish, cancel. start may include label/objective; report accepts summary/findings/next/blockers/objective/label."""
+        """Manage a durable logical task session independent of machine and cwd. Start one before substantive tool-driven work; report semantic progress at meaningful checkpoints; resume by session_id to hand work to a new GPT/MCP run. resume with takeover=true always creates a new agent run and supersedes the old one. Use the returned active_run.run_id as session_run_id for report/finish/cancel and subsequent tools. Actions: start, resume, get, report, list, finish, cancel, delete. start may include label/objective; report accepts summary/findings/next/blockers/objective/label. delete permanently removes a detached or terminal Session and frees retained history capacity."""
         session_key = mcp_session_key(mcp)
         result = await _tool_call(
             get_session_runtime_manager().manage,
