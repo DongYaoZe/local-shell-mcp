@@ -36,6 +36,14 @@ from local_shell_mcp.tools import (
 )
 
 
+def _reserve_claim(sessions: SessionRuntimeManager, session_id: str) -> dict:
+    claim = sessions.claim_plan_continuation(session_id)
+    assert claim is not None
+    validation = sessions.validate_plan_continuation(session_id, claim["claim_id"])
+    assert validation["valid"] is True
+    return claim
+
+
 def _configure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, auth: str = "oauth") -> None:
     monkeypatch.setenv("LOCAL_SHELL_MCP_WORKSPACE_ROOT", str(tmp_path))
     monkeypatch.setenv("LOCAL_SHELL_MCP_STATE_DIR", str(tmp_path / ".state"))
@@ -166,6 +174,31 @@ def test_live_workspace_logical_session_binding_replaces_old_mapping():
     assert channel.logical_session_id == "s_second"
     assert "s_first" not in manager._logical_session_channels
     assert manager._logical_session_channels["s_second"] == channel.live_id
+
+
+def test_live_workspace_switch_does_not_rebind_channel_shared_by_another_transport():
+    manager = LiveChannelManager()
+    channel, _ = manager.open(
+        session_key="mcp:a",
+        subject="user",
+        scopes=tuple(ALL_OAUTH_SCOPES),
+        logical_session_id="s_first",
+    )
+    attached, _ = manager.open(
+        session_key="mcp:b",
+        subject="user",
+        scopes=tuple(ALL_OAUTH_SCOPES),
+        live_id=channel.live_id,
+        logical_session_id="s_first",
+    )
+    assert attached is channel
+
+    assert manager.bind_logical_session("mcp:a", "s_second", "user") is None
+    assert manager.active_for_session("mcp:a") is None
+    assert manager.active_for_session("mcp:b") is channel
+    assert channel.logical_session_id == "s_first"
+    assert manager._logical_session_channels["s_first"] == channel.live_id
+    assert "s_second" not in manager._logical_session_channels
 
 
 def test_live_workspace_logical_session_binding_rejects_principal_reuse():
@@ -340,8 +373,10 @@ def test_plan_requires_logical_session_and_block_stops_continuation(tmp_path, mo
         steps=[{"text": "Do work"}],
     )
     now[0] += session_runtime_module.PLAN_EXECUTION_LEASE_S + 1
-    assert sessions.claim_plan_continuation(session_id) is not None
-    sessions.report_plan_continuation(session_id, accepted=True)
+    claim = _reserve_claim(sessions, session_id)
+    sessions.report_plan_continuation(
+        session_id, accepted=True, claim_id=claim["claim_id"]
+    )
 
     sessions.manage_plan("mcp:block", action="block", note="Need user input")
     now[0] += session_runtime_module.PLAN_EXECUTION_LEASE_S + 1
@@ -371,10 +406,14 @@ def test_plan_continuation_lease_rejection_and_hard_cap(tmp_path, monkeypatch):
     assert sessions.claim_plan_continuation(session_id) is None
 
     now[0] += 2
-    rejected = sessions.claim_plan_continuation(session_id)
-    assert rejected is not None
+    rejected = _reserve_claim(sessions, session_id)
     assert rejected["continuation_count"] == 1
-    sessions.report_plan_continuation(session_id, accepted=False, error="host busy")
+    sessions.report_plan_continuation(
+        session_id,
+        accepted=False,
+        error="host busy",
+        claim_id=rejected["claim_id"],
+    )
     assert sessions.plan_state(session_id)["continuation_count"] == 1
     assert sessions.claim_plan_continuation(session_id) is None
 
@@ -383,11 +422,12 @@ def test_plan_continuation_lease_rejection_and_hard_cap(tmp_path, monkeypatch):
             session_runtime_module.PLAN_EXECUTION_LEASE_S,
             session_runtime_module.PLAN_CONTINUATION_FAILURE_BACKOFF_S,
         ) + 1
-        claim = sessions.claim_plan_continuation(session_id)
-        assert claim is not None
+        claim = _reserve_claim(sessions, session_id)
         assert claim["continuation_count"] == expected
         assert sessions.claim_plan_continuation(session_id) is None
-        sessions.report_plan_continuation(session_id, accepted=True)
+        sessions.report_plan_continuation(
+            session_id, accepted=True, claim_id=claim["claim_id"]
+        )
 
     now[0] += session_runtime_module.PLAN_EXECUTION_LEASE_S + 1
     assert sessions.claim_plan_continuation(session_id) is None
@@ -674,6 +714,56 @@ async def test_mcp_run_lease_blocks_stale_same_transport_agent(tmp_path, monkeyp
     )
     assert written["ok"] is True
     assert (tmp_path / "current.txt").read_text(encoding="utf-8") == "current run"
+
+
+@pytest.mark.asyncio
+async def test_tool_recovery_binds_live_channel_by_resolved_logical_session(
+    tmp_path, monkeypatch
+):
+    _configure(tmp_path, monkeypatch, auth="none")
+    session_manager = session_runtime_module.get_session_runtime_manager()
+    first = session_manager.manage(
+        "old-a", "local-mcp-client", action="start", objective="First"
+    )
+    second = session_manager.manage(
+        "old-b", "local-mcp-client", action="start", objective="Second"
+    )
+    live_manager = live_channel_module.get_live_channel_manager()
+    first_channel, _ = live_manager.open(
+        session_key="app-a",
+        subject="local-mcp-client",
+        scopes=tuple(ALL_OAUTH_SCOPES),
+        live_id="stale-a",
+        logical_session_id=first["session_id"],
+    )
+    second_channel, _ = live_manager.open(
+        session_key="app-b",
+        subject="local-mcp-client",
+        scopes=tuple(ALL_OAUTH_SCOPES),
+        live_id="stale-b",
+        logical_session_id=second["session_id"],
+    )
+    assert live_manager.claim_recovery_session("direct", "local-mcp-client") is None
+
+    mcp = build_mcp()
+    await mcp.call_tool(
+        "write_file",
+        {
+            "path": "recovered.txt",
+            "content": "ok",
+            "session_run_id": first["active_run"]["run_id"],
+        },
+    )
+
+    assert live_manager.active_for_session("direct") is first_channel
+    assert any(
+        event["type"] == "tool.completed" and event["data"].get("tool") == "write_file"
+        for event in first_channel.events
+    )
+    assert not any(
+        event["type"] == "tool.completed" and event["data"].get("tool") == "write_file"
+        for event in second_channel.events
+    )
 
 
 @pytest.mark.asyncio
@@ -1165,6 +1255,46 @@ async def test_live_snapshot_returns_missing_token_error():
     response = await live_routes.live_snapshot(request)
     assert response.status_code == 403
     assert b"live-workspace token" in response.body
+
+
+@pytest.mark.asyncio
+async def test_live_events_detaches_channel_when_durable_session_disappears(monkeypatch):
+    manager = LiveChannelManager()
+    channel, token = manager.open(
+        session_key="mcp:model",
+        subject="user",
+        scopes=tuple(ALL_OAUTH_SCOPES),
+        logical_session_id="s_deleted_elsewhere",
+    )
+
+    class MissingSessionManager:
+        def get(self, session_id, *, subject=None):  # noqa: ANN001, ANN201
+            raise ValueError(f"Unknown logical session: {session_id}")
+
+    monkeypatch.setattr(live_routes, "get_live_channel_manager", lambda: manager)
+    monkeypatch.setattr(
+        live_routes, "get_session_runtime_manager", lambda: MissingSessionManager()
+    )
+    request = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/api/live/events",
+            "query_string": b"after=0&timeout=1",
+            "headers": [(b"authorization", f"Bearer {token}".encode())],
+        }
+    )
+    request.state.principal = Principal(
+        email=None,
+        subject="user",
+        claims={"scope": " ".join(ALL_OAUTH_SCOPES), "live_id": channel.live_id},
+    )
+
+    response = await live_routes.live_events(request)
+
+    assert response.status_code == 200
+    assert channel.logical_session_id is None
+    assert "s_deleted_elsewhere" not in manager._logical_session_channels
 
 
 def test_live_workspace_stale_live_id_falls_back_to_logical_channel():

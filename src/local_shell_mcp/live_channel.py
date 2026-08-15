@@ -257,6 +257,22 @@ class LiveChannelManager:
                 if self._session_channels.get(session_key) == channel.live_id:
                     self._session_channels.pop(session_key, None)
                 return None
+            previous_session_id = channel.logical_session_id
+            if (
+                previous_session_id
+                and previous_session_id != logical_session_id
+                and any(
+                    key != session_key and mapped_live_id == channel.live_id
+                    for key, mapped_live_id in self._session_channels.items()
+                )
+            ):
+                # This transport is switching tasks, but another transport still
+                # owns the existing task view. Do not move their shared channel.
+                self._session_channels.pop(session_key, None)
+                target_live_id = self._logical_session_channels.get(logical_session_id)
+                channel = self._channels.get(target_live_id or "")
+                if channel is None or channel.subject != subject:
+                    return None
             self._session_channels[session_key] = channel.live_id
             previous_session_id = channel.logical_session_id
             if (

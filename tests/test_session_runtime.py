@@ -17,11 +17,24 @@ from local_shell_mcp.session_runtime import (
     PLAN_STEP_TEXT_LIMIT,
     SESSION_ACTIVITY_LIMIT,
     SESSION_HISTORY_LIMIT_PER_PRINCIPAL,
+    SESSION_IN_FLIGHT_LEASE_S,
     SESSION_RUN_HISTORY_LIMIT,
     SessionRuntimeManager,
 )
 from local_shell_mcp.settings import get_settings
 from local_shell_mcp.state_store import MemoryStateStore, clear_memory_state
+
+
+def _reserve_claim(
+    manager: SessionRuntimeManager, session_id: str, *, subject: str | None = None
+) -> dict:
+    claimed = manager.claim_plan_continuation(session_id, subject=subject)
+    assert claimed is not None
+    validation = manager.validate_plan_continuation(
+        session_id, claimed["claim_id"], subject=subject
+    )
+    assert validation["valid"] is True
+    return claimed
 
 
 def test_session_progress_and_plan_survive_manager_reload(tmp_path):
@@ -96,6 +109,40 @@ def test_session_public_state_exposes_full_rolling_activity_window(tmp_path):
 
     restored = SessionRuntimeManager(state_dir).get(session_id)
     assert len(restored["recent_activity"]) == SESSION_ACTIVITY_LIMIT
+
+
+def test_session_report_rolls_back_when_persistence_fails(tmp_path, monkeypatch):
+    state_dir = tmp_path / ".state"
+    manager = SessionRuntimeManager(state_dir)
+    started = manager.manage("mcp:a", "user", action="start", objective="Task")
+    session_id = started["session_id"]
+    run_id = started["active_run"]["run_id"]
+    manager.manage(
+        "mcp:a", "user", action="report", session_run_id=run_id, summary="before"
+    )
+    original_save = manager._save_locked
+    failed = False
+
+    def fail_report_once(session):
+        nonlocal failed
+        if (
+            not failed
+            and session.activity
+            and session.activity[-1]["type"] == "session.reported"
+            and session.progress.summary == "after"
+        ):
+            failed = True
+            raise OSError("report persistence failed")
+        return original_save(session)
+
+    monkeypatch.setattr(manager, "_save_locked", fail_report_once)
+    with pytest.raises(OSError, match="report persistence failed"):
+        manager.manage(
+            "mcp:a", "user", action="report", session_run_id=run_id, summary="after"
+        )
+
+    assert manager.get(session_id)["progress"]["summary"] == "before"
+    assert SessionRuntimeManager(state_dir).get(session_id)["progress"]["summary"] == "before"
 
 
 def test_resume_takeover_supersedes_previous_agent_run(tmp_path):
@@ -380,10 +427,13 @@ def test_plan_continuation_waits_for_inflight_and_backs_off(tmp_path):
 
     assert manager.finish_tool_call(lease, "tool.completed", data={"ok": True}) is None
     logical.plan.last_agent_activity = time.time() - PLAN_EXECUTION_LEASE_S - 1
-    claimed = manager.claim_plan_continuation(session_id, subject="user")
-    assert claimed is not None
+    claimed = _reserve_claim(manager, session_id, subject="user")
     failed = manager.report_plan_continuation(
-        session_id, accepted=False, error="host unavailable", subject="user"
+        session_id,
+        accepted=False,
+        error="host unavailable",
+        claim_id=claimed["claim_id"],
+        subject="user",
     )
     assert failed["continuation_count"] == 1
     assert failed["continuation_retry_after"] is not None
@@ -521,6 +571,63 @@ def test_shared_backend_refreshes_sessions_across_controller_instances(tmp_path,
         assert first.manage("mcp:list-a", "user", action="list")["sessions"][0][
             "session_id"
         ] == session_id
+    finally:
+        get_settings.cache_clear()
+        clear_memory_state()
+
+
+def test_shared_resume_rollback_snapshots_refreshed_previous_session(tmp_path, monkeypatch):
+    clear_memory_state()
+    monkeypatch.setenv("LOCAL_SHELL_MCP_WORKSPACE_ROOT", str(tmp_path))
+    monkeypatch.setenv("LOCAL_SHELL_MCP_STATE_DIR", str(tmp_path / ".state"))
+    monkeypatch.setenv("LOCAL_SHELL_MCP_STATE_BACKEND", "redis")
+    monkeypatch.setenv("LOCAL_SHELL_MCP_STATE_BACKEND_URL", "redis://state.test/0")
+    monkeypatch.setenv("LOCAL_SHELL_MCP_STATE_BACKEND_PREFIX", "resume-rollback-refresh-test")
+    get_settings.cache_clear()
+    shared_store = MemoryStateStore("resume-rollback-refresh-test")
+    monkeypatch.setattr(
+        "local_shell_mcp.session_runtime.get_state_store", lambda: shared_store
+    )
+    try:
+        first = SessionRuntimeManager()
+        previous = first.manage("mcp:switch", "user", action="start", objective="Previous")
+        target = first.manage("mcp:target", "user", action="start", objective="Target")
+        previous_id = previous["session_id"]
+        target_id = target["session_id"]
+
+        external = SessionRuntimeManager()
+        external.get(previous_id, subject="user")
+        external._sessions[previous_id].progress.summary = "fresh external progress"
+        external._save_locked(external._sessions[previous_id])
+        assert first._sessions[previous_id].progress.summary is None
+
+        original_save = first._save_locked
+        failed = False
+
+        def fail_target_resume_once(session):
+            nonlocal failed
+            if (
+                not failed
+                and session.session_id == target_id
+                and session.activity
+                and session.activity[-1]["type"] == "session.resumed"
+            ):
+                failed = True
+                raise OSError("target resume persistence failed")
+            return original_save(session)
+
+        monkeypatch.setattr(first, "_save_locked", fail_target_resume_once)
+        with pytest.raises(OSError, match="target resume persistence failed"):
+            first.manage(
+                "mcp:switch",
+                "user",
+                action="resume",
+                session_id=target_id,
+                takeover=True,
+            )
+
+        durable = SessionRuntimeManager().get(previous_id, subject="user")
+        assert durable["progress"]["summary"] == "fresh external progress"
     finally:
         get_settings.cache_clear()
         clear_memory_state()
@@ -1150,7 +1257,10 @@ def test_plan_cancel_and_continuation_pending_expiry(tmp_path, monkeypatch):
     now[0] += 5 * 60 + 1
     reclaimed = manager.claim_plan_continuation(session_id)
     assert reclaimed is not None
-    manager.report_plan_continuation(session_id, accepted=True)
+    assert manager.validate_plan_continuation(session_id, reclaimed["claim_id"])["valid"] is True
+    manager.report_plan_continuation(
+        session_id, accepted=True, claim_id=reclaimed["claim_id"]
+    )
     with pytest.raises(ValueError, match="No plan continuation is pending"):
         manager.report_plan_continuation(session_id, accepted=True)
 
@@ -1229,6 +1339,152 @@ def test_completed_plan_steps_remain_eligible_for_cleanup_continuation(tmp_path)
     claimed = manager.claim_plan_continuation(session_id, subject="user")
     assert claimed is not None
     assert claimed["plan"]["status"] == "active"
+
+
+def test_plan_mutation_rolls_back_when_persistence_fails(tmp_path, monkeypatch):
+    state_dir = tmp_path / ".state"
+    manager = SessionRuntimeManager(state_dir)
+    started = manager.manage("mcp:a", "user", action="start", objective="Task")
+    session_id = started["session_id"]
+    run_id = started["active_run"]["run_id"]
+    manager.manage_plan(
+        "mcp:a",
+        action="start",
+        session_run_id=run_id,
+        objective="before",
+        steps=[{"id": "work", "text": "Work"}],
+    )
+    original_save = manager._save_locked
+    failed = False
+
+    def fail_plan_update_once(session):
+        nonlocal failed
+        if (
+            not failed
+            and session.activity
+            and session.activity[-1]["type"] == "plan.updated"
+        ):
+            failed = True
+            raise OSError("plan persistence failed")
+        return original_save(session)
+
+    monkeypatch.setattr(manager, "_save_locked", fail_plan_update_once)
+    with pytest.raises(OSError, match="plan persistence failed"):
+        manager.manage_plan(
+            "mcp:a",
+            action="update",
+            session_run_id=run_id,
+            objective="after",
+        )
+
+    assert manager.plan_state(session_id)["objective"] == "before"
+    assert SessionRuntimeManager(state_dir).plan_state(session_id)["objective"] == "before"
+
+
+def test_continuation_claim_rolls_back_when_persistence_fails(tmp_path, monkeypatch):
+    state_dir = tmp_path / ".state"
+    manager = SessionRuntimeManager(state_dir)
+    started = manager.manage("mcp:a", "user", action="start", objective="Task")
+    session_id = started["session_id"]
+    run_id = started["active_run"]["run_id"]
+    manager.manage_plan(
+        "mcp:a",
+        action="start",
+        session_run_id=run_id,
+        objective="Task",
+        steps=[{"id": "work", "text": "Work"}],
+    )
+    logical = manager._sessions[session_id]
+    assert logical.plan is not None
+    logical.plan.last_agent_activity = time.time() - PLAN_EXECUTION_LEASE_S - 1
+    original_save = manager._save_locked
+    failed = False
+
+    def fail_claim_once(session):
+        nonlocal failed
+        if (
+            not failed
+            and session.activity
+            and session.activity[-1]["type"] == "plan.continuation_requested"
+        ):
+            failed = True
+            raise OSError("claim persistence failed")
+        return original_save(session)
+
+    monkeypatch.setattr(manager, "_save_locked", fail_claim_once)
+    with pytest.raises(OSError, match="claim persistence failed"):
+        manager.claim_plan_continuation(session_id, subject="user")
+
+    current = manager.plan_state(session_id)
+    assert current["continuation_pending"] is False
+    assert current["continuation_count"] == 0
+    durable = SessionRuntimeManager(state_dir).plan_state(session_id)
+    assert durable["continuation_pending"] is False
+    assert durable["continuation_count"] == 0
+
+
+def test_continuation_validation_expires_claim_and_reserves_attempt(tmp_path, monkeypatch):
+    state_dir = tmp_path / ".state"
+    manager = SessionRuntimeManager(state_dir)
+    now = [10_000.0]
+    monkeypatch.setattr("local_shell_mcp.session_runtime.time.time", lambda: now[0])
+    started = manager.manage("mcp:a", "user", action="start", objective="Task")
+    session_id = started["session_id"]
+    run_id = started["active_run"]["run_id"]
+    manager.manage_plan(
+        "mcp:a",
+        action="start",
+        session_run_id=run_id,
+        objective="Task",
+        steps=[{"id": "work", "text": "Work"}],
+    )
+    now[0] += PLAN_EXECUTION_LEASE_S + 1
+    first = manager.claim_plan_continuation(session_id, subject="user")
+    assert first is not None
+    now[0] += 5 * 60 + 1
+    expired = manager.validate_plan_continuation(
+        session_id, first["claim_id"], subject="user"
+    )
+    assert expired["valid"] is False
+    assert expired["plan"]["continuation_pending"] is False
+    assert expired["plan"]["continuation_count"] == 0
+
+    second = manager.claim_plan_continuation(session_id, subject="user")
+    assert second is not None
+    reserved = manager.validate_plan_continuation(
+        session_id, second["claim_id"], subject="user"
+    )
+    assert reserved["valid"] is True
+    assert reserved["plan"]["continuation_count"] == 1
+    assert reserved["plan"]["continuation_reserved"] is True
+
+    durable = SessionRuntimeManager(state_dir).plan_state(session_id)
+    assert durable["continuation_count"] == 1
+    assert durable["continuation_pending"] is True
+    assert durable["continuation_reserved"] is True
+
+
+def test_inflight_tool_lease_heartbeat_prevents_age_only_expiry(tmp_path, monkeypatch):
+    state_dir = tmp_path / ".state"
+    manager = SessionRuntimeManager(state_dir)
+    now = [1_000.0]
+    monkeypatch.setattr("local_shell_mcp.session_runtime.time.time", lambda: now[0])
+    started = manager.manage("mcp:a", "user", action="start", objective="Task")
+    session_id = started["session_id"]
+    run_id = started["active_run"]["run_id"]
+    lease = manager.begin_tool_call("mcp:a", "call-1", expected_run_id=run_id)
+    assert lease is not None
+
+    now[0] += SESSION_IN_FLIGHT_LEASE_S - 1
+    assert manager.renew_tool_call(lease) is True
+    now[0] += 2
+    assert manager._in_flight_count_locked(session_id) == 1
+    restored = SessionRuntimeManager(state_dir)
+    restored.get(session_id, subject="user")
+    assert restored._in_flight_count_locked(session_id) == 1
+
+    now[0] += SESSION_IN_FLIGHT_LEASE_S + 1
+    assert manager._in_flight_count_locked(session_id) == 0
 
 
 @pytest.mark.parametrize("action", ["finish", "cancel"])

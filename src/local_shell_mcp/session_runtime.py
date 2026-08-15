@@ -65,6 +65,7 @@ class PlanState:
     continuation_pending: bool = False
     continuation_pending_since: float | None = None
     continuation_claim_id: str | None = None
+    continuation_reserved: bool = False
     last_continuation_at: float | None = None
     continuation_retry_after: float | None = None
     last_agent_activity: float = 0.0
@@ -90,6 +91,7 @@ class PlanState:
             "continuation_count": self.continuation_count,
             "continuation_pending": self.continuation_pending,
             "continuation_claim_id": self.continuation_claim_id,
+            "continuation_reserved": self.continuation_reserved,
             "last_continuation_at": self.last_continuation_at,
             "continuation_retry_after": self.continuation_retry_after,
             "last_agent_activity": self.last_agent_activity,
@@ -362,6 +364,7 @@ class SessionRuntimeManager:
             "continuation_pending": plan.continuation_pending,
             "continuation_pending_since": plan.continuation_pending_since,
             "continuation_claim_id": plan.continuation_claim_id,
+            "continuation_reserved": plan.continuation_reserved,
             "last_continuation_at": plan.last_continuation_at,
             "continuation_retry_after": plan.continuation_retry_after,
             "last_agent_activity": plan.last_agent_activity,
@@ -418,6 +421,7 @@ class SessionRuntimeManager:
                 if payload.get("continuation_claim_id") is None
                 else str(payload["continuation_claim_id"])
             ),
+            continuation_reserved=bool(payload.get("continuation_reserved")),
             last_continuation_at=(
                 None
                 if payload.get("last_continuation_at") is None
@@ -503,6 +507,9 @@ class SessionRuntimeManager:
                 str(call_id): {
                     "run_id": str(value.get("run_id") or ""),
                     "started_at": float(value.get("started_at") or 0.0),
+                    "heartbeat_at": float(
+                        value.get("heartbeat_at") or value.get("started_at") or 0.0
+                    ),
                 }
                 for call_id, value in in_flight_payload.items()
                 if isinstance(value, dict) and value.get("run_id")
@@ -549,6 +556,17 @@ class SessionRuntimeManager:
             separators=(",", ":"),
         ).encode("utf-8") + b"\n"
         self._state_store().write_bytes(f"sessions/{session.session_id}.json", data)
+
+    def _restore_snapshot_locked(
+        self, snapshot: LogicalSession, exc: Exception, *, context: str
+    ) -> None:
+        self._sessions[snapshot.session_id] = snapshot
+        try:
+            self._save_locked(snapshot)
+        except Exception as rollback_exc:  # noqa: BLE001 - preserve original error.
+            exc.add_note(
+                f"{context} rollback warning: {type(rollback_exc).__name__}: {rollback_exc}"
+            )
 
     @staticmethod
     def _new_session_id() -> str:
@@ -680,7 +698,9 @@ class SessionRuntimeManager:
         expired = [
             call_id
             for call_id, lease in session.in_flight_calls.items()
-            if current - float(lease.get("started_at") or 0.0) >= SESSION_IN_FLIGHT_LEASE_S
+            if current
+            - float(lease.get("heartbeat_at") or lease.get("started_at") or 0.0)
+            >= SESSION_IN_FLIGHT_LEASE_S
         ]
         for call_id in expired:
             session.in_flight_calls.pop(call_id, None)
@@ -886,6 +906,15 @@ class SessionRuntimeManager:
                 if logical.status != "active":
                     raise ValueError(f"Cannot resume a {logical.status} session")
                 previous_attachment = self._attachments.get(session_key)
+                if (
+                    previous_attachment is not None
+                    and previous_attachment[0] != logical.session_id
+                ):
+                    self._refresh_session_locked(previous_attachment[0])
+                    previous_session = self._sessions.get(previous_attachment[0])
+                    if previous_session is None or previous_session.subject != subject:
+                        self._attachments.pop(session_key, None)
+                        previous_attachment = None
                 snapshots: dict[str, LogicalSession] = {
                     logical.session_id: copy.deepcopy(logical)
                 }
@@ -937,44 +966,52 @@ class SessionRuntimeManager:
                 raise RuntimeError("Logical session has no active agent run")
 
             if normalized_action == "report":
-                changed = False
-                if summary is not None:
-                    logical.progress.summary = self._bounded_text(summary)
-                    changed = True
-                if findings is not None:
-                    logical.progress.findings = self._bounded_list(findings) or []
-                    changed = True
-                if next is not None:
-                    logical.progress.next = self._bounded_text(next)
-                    changed = True
-                if blockers is not None:
-                    logical.progress.blockers = self._bounded_list(blockers) or []
-                    changed = True
-                if objective is not None:
-                    logical.objective = self._bounded_text(objective)
-                    changed = True
-                if label is not None:
-                    logical.label = self._bounded_text(label)
-                    changed = True
-                if not changed:
-                    raise ValueError(
-                        "action=report requires summary, findings, next, blockers, objective, or label"
+                snapshot = copy.deepcopy(logical)
+                try:
+                    changed = False
+                    if summary is not None:
+                        logical.progress.summary = self._bounded_text(summary)
+                        changed = True
+                    if findings is not None:
+                        logical.progress.findings = self._bounded_list(findings) or []
+                        changed = True
+                    if next is not None:
+                        logical.progress.next = self._bounded_text(next)
+                        changed = True
+                    if blockers is not None:
+                        logical.progress.blockers = self._bounded_list(blockers) or []
+                        changed = True
+                    if objective is not None:
+                        logical.objective = self._bounded_text(objective)
+                        changed = True
+                    if label is not None:
+                        logical.label = self._bounded_text(label)
+                        changed = True
+                    if not changed:
+                        raise ValueError(
+                            "action=report requires summary, findings, next, blockers, objective, or label"
+                        )
+                    now = time.time()
+                    logical.progress.updated_at = now
+                    run.updated_at = now
+                    self._append_activity_locked(
+                        logical,
+                        "session.reported",
+                        actor="agent",
+                        data={
+                            "run_id": run.run_id,
+                            "summary": logical.progress.summary,
+                            "next": logical.progress.next,
+                            "blocker_count": len(logical.progress.blockers),
+                        },
+                        touch_plan=True,
                     )
-                now = time.time()
-                logical.progress.updated_at = now
-                run.updated_at = now
-                self._append_activity_locked(
-                    logical,
-                    "session.reported",
-                    actor="agent",
-                    data={
-                        "run_id": run.run_id,
-                        "summary": logical.progress.summary,
-                        "next": logical.progress.next,
-                        "blocker_count": len(logical.progress.blockers),
-                    },
-                    touch_plan=True,
-                )
+                except Exception as exc:
+                    if logical != snapshot:
+                        self._restore_snapshot_locked(
+                            snapshot, exc, context="Session report"
+                        )
+                    raise
                 return self._public_state_locked(logical)
 
             if normalized_action in {"finish", "cancel"} and self._in_flight_count_locked(
@@ -1011,6 +1048,7 @@ class SessionRuntimeManager:
                         logical.plan.continuation_pending = False
                         logical.plan.continuation_pending_since = None
                         logical.plan.continuation_claim_id = None
+                        logical.plan.continuation_reserved = False
                     self._attachments.pop(session_key, None)
                     self._append_activity_locked(
                         logical,
@@ -1180,7 +1218,11 @@ class SessionRuntimeManager:
                 raise RuntimeError("Logical session has no active agent run")
             before_start = copy.deepcopy(logical)
             now = time.time()
-            logical.in_flight_calls[call_id] = {"run_id": run.run_id, "started_at": now}
+            logical.in_flight_calls[call_id] = {
+                "run_id": run.run_id,
+                "started_at": now,
+                "heartbeat_at": now,
+            }
             run.updated_at = now
             try:
                 self._append_activity_locked(
@@ -1253,6 +1295,43 @@ class SessionRuntimeManager:
                     item for item in (lease_persistence_error, activity_error) if item
                 )
             return lease_persistence_error
+
+    def renew_tool_call(
+        self,
+        lease: dict[str, Any] | None,
+        *,
+        _state_lock_held: bool = False,
+    ) -> bool:
+        if lease is None:
+            return False
+        session_id = str(lease.get("session_id") or "")
+        run_id = str(lease.get("run_id") or "")
+        call_id = str(lease.get("call_id") or "")
+        if not session_id or not run_id or not call_id:
+            return False
+        with self._lock:
+            self._ensure_loaded_locked()
+            if not _state_lock_held and self._uses_shared_state_backend():
+                with self._shared_session_locks_locked([session_id]):
+                    return self.renew_tool_call(lease, _state_lock_held=True)
+            self._refresh_session_locked(session_id)
+            logical = self._sessions.get(session_id)
+            if logical is None:
+                return False
+            current = logical.in_flight_calls.get(call_id)
+            if current is None or str(current.get("run_id") or "") != run_id:
+                return False
+            previous = current.get("heartbeat_at")
+            current["heartbeat_at"] = time.time()
+            try:
+                self._save_locked(logical)
+            except Exception:
+                if previous is None:
+                    current.pop("heartbeat_at", None)
+                else:
+                    current["heartbeat_at"] = previous
+                raise
+            return True
 
     @classmethod
     def _normalize_plan_steps(cls, steps: list[dict[str, Any]]) -> list[PlanStep]:
@@ -1344,7 +1423,7 @@ class SessionRuntimeManager:
                 require_run_token=require_run_token and normalized_action != "get",
                 subject=self._authenticated_subject(),
             )
-            return self._manage_plan_locked(
+            return self._manage_plan_transaction_locked(
                 logical,
                 action=action,
                 objective=objective,
@@ -1382,7 +1461,52 @@ class SessionRuntimeManager:
                         _state_lock_held=True,
                     )
             logical = self._require_session_locked(session_id, subject)
-            return self._manage_plan_locked(logical, action=action, note=note, actor=actor)
+            return self._manage_plan_transaction_locked(
+                logical, action=action, note=note, actor=actor
+            )
+
+    def _manage_plan_transaction_locked(
+        self,
+        logical: LogicalSession,
+        *,
+        action: str,
+        objective: str | None = None,
+        steps: list[dict[str, Any]] | None = None,
+        step_id: str | None = None,
+        status: str | None = None,
+        text: str | None = None,
+        note: str | None = None,
+        actor: str,
+    ) -> dict[str, Any]:
+        if action.strip().lower() == "get":
+            return self._manage_plan_locked(
+                logical,
+                action=action,
+                objective=objective,
+                steps=steps,
+                step_id=step_id,
+                status=status,
+                text=text,
+                note=note,
+                actor=actor,
+            )
+        snapshot = copy.deepcopy(logical)
+        try:
+            return self._manage_plan_locked(
+                logical,
+                action=action,
+                objective=objective,
+                steps=steps,
+                step_id=step_id,
+                status=status,
+                text=text,
+                note=note,
+                actor=actor,
+            )
+        except Exception as exc:
+            if logical != snapshot:
+                self._restore_snapshot_locked(snapshot, exc, context="Plan mutation")
+            raise
 
     def _manage_plan_locked(
         self,
@@ -1489,6 +1613,7 @@ class SessionRuntimeManager:
                 plan.continuation_pending = False
                 plan.continuation_pending_since = None
                 plan.continuation_claim_id = None
+                plan.continuation_reserved = False
                 plan.continuation_retry_after = None
                 event_type = "plan.updated"
                 event_data = {"plan_id": plan.plan_id, "revision": plan.revision}
@@ -1505,6 +1630,7 @@ class SessionRuntimeManager:
                 plan.continuation_pending = False
                 plan.continuation_pending_since = None
                 plan.continuation_claim_id = None
+                plan.continuation_reserved = False
                 event_type = "plan.blocked"
                 event_data = {"plan_id": plan.plan_id, "reason": reason}
             elif normalized_action == "resume":
@@ -1534,6 +1660,7 @@ class SessionRuntimeManager:
                 plan.continuation_pending = False
                 plan.continuation_pending_since = None
                 plan.continuation_claim_id = None
+                plan.continuation_reserved = False
                 plan.continuation_retry_after = None
                 event_type = "plan.completed"
                 event_data = {"plan_id": plan.plan_id}
@@ -1547,6 +1674,7 @@ class SessionRuntimeManager:
                 plan.continuation_pending = False
                 plan.continuation_pending_since = None
                 plan.continuation_claim_id = None
+                plan.continuation_reserved = False
                 plan.continuation_retry_after = None
                 event_type = "plan.cancelled"
                 event_data = {"plan_id": plan.plan_id}
@@ -1598,22 +1726,29 @@ class SessionRuntimeManager:
                 plan.continuation_pending = False
                 plan.continuation_pending_since = None
                 plan.continuation_claim_id = None
+                plan.continuation_reserved = False
             if plan.continuation_count >= PLAN_MAX_CONTINUATIONS:
                 return None
             if plan.continuation_retry_after is not None and now < plan.continuation_retry_after:
                 return None
             if now < plan.last_agent_activity + PLAN_EXECUTION_LEASE_S:
                 return None
-            plan.continuation_pending = True
-            plan.continuation_pending_since = now
-            plan.continuation_claim_id = f"c_{secrets.token_hex(8)}"
-            plan.updated_at = now
-            self._append_activity_locked(
-                logical,
-                "plan.continuation_requested",
-                actor="system",
-                data={"plan_id": plan.plan_id, "attempt": plan.continuation_count + 1},
-            )
+            snapshot = copy.deepcopy(logical)
+            try:
+                plan.continuation_pending = True
+                plan.continuation_pending_since = now
+                plan.continuation_claim_id = f"c_{secrets.token_hex(8)}"
+                plan.continuation_reserved = False
+                plan.updated_at = now
+                self._append_activity_locked(
+                    logical,
+                    "plan.continuation_requested",
+                    actor="system",
+                    data={"plan_id": plan.plan_id, "attempt": plan.continuation_count + 1},
+                )
+            except Exception as exc:
+                self._restore_snapshot_locked(snapshot, exc, context="Continuation claim")
+                raise
             return {
                 "session_id": logical.session_id,
                 "plan": plan.public_state(
@@ -1645,14 +1780,33 @@ class SessionRuntimeManager:
             plan = logical.plan
             now = time.time()
             in_flight_calls = self._in_flight_count_locked(logical.session_id)
+            pending_fresh = bool(
+                plan is not None
+                and plan.continuation_pending_since is not None
+                and now - plan.continuation_pending_since < PLAN_CONTINUATION_PENDING_TTL_S
+            )
             valid = bool(
                 plan is not None
                 and plan.status == "active"
                 and plan.continuation_pending
                 and plan.continuation_claim_id == claim_id
+                and pending_fresh
                 and in_flight_calls == 0
                 and now >= plan.last_agent_activity + PLAN_EXECUTION_LEASE_S
             )
+            if valid and plan is not None and not plan.continuation_reserved:
+                snapshot = copy.deepcopy(logical)
+                try:
+                    plan.continuation_count += 1
+                    plan.continuation_reserved = True
+                    plan.last_continuation_at = now
+                    plan.updated_at = now
+                    self._save_locked(logical)
+                except Exception as exc:
+                    self._restore_snapshot_locked(
+                        snapshot, exc, context="Continuation reservation"
+                    )
+                    raise
             if (
                 plan is not None
                 and plan.continuation_pending
@@ -1662,6 +1816,7 @@ class SessionRuntimeManager:
                 plan.continuation_pending = False
                 plan.continuation_pending_since = None
                 plan.continuation_claim_id = None
+                plan.continuation_reserved = False
                 plan.updated_at = now
                 self._save_locked(logical)
             return {
@@ -1703,28 +1858,34 @@ class SessionRuntimeManager:
                 raise ValueError("No plan continuation is pending")
             if claim_id is not None and plan.continuation_claim_id != claim_id:
                 raise ValueError("Plan continuation claim is stale")
+            if not plan.continuation_reserved:
+                raise ValueError("Plan continuation was not reserved for dispatch")
             now = time.time()
-            plan.continuation_pending = False
-            plan.continuation_pending_since = None
-            plan.continuation_claim_id = None
-            plan.continuation_count += 1
-            plan.last_continuation_at = now
-            if accepted:
-                plan.last_agent_activity = now
-                plan.continuation_retry_after = None
-            else:
-                plan.continuation_retry_after = now + PLAN_CONTINUATION_FAILURE_BACKOFF_S
-            plan.updated_at = now
-            self._append_activity_locked(
-                logical,
-                "plan.continuation_sent" if accepted else "plan.continuation_failed",
-                actor="system",
-                data={
-                    "plan_id": plan.plan_id,
-                    "count": plan.continuation_count,
-                    **({"error": error[:500]} if error else {}),
-                },
-            )
+            snapshot = copy.deepcopy(logical)
+            try:
+                plan.continuation_pending = False
+                plan.continuation_pending_since = None
+                plan.continuation_claim_id = None
+                plan.continuation_reserved = False
+                if accepted:
+                    plan.last_agent_activity = now
+                    plan.continuation_retry_after = None
+                else:
+                    plan.continuation_retry_after = now + PLAN_CONTINUATION_FAILURE_BACKOFF_S
+                plan.updated_at = now
+                self._append_activity_locked(
+                    logical,
+                    "plan.continuation_sent" if accepted else "plan.continuation_failed",
+                    actor="system",
+                    data={
+                        "plan_id": plan.plan_id,
+                        "count": plan.continuation_count,
+                        **({"error": error[:500]} if error else {}),
+                    },
+                )
+            except Exception as exc:
+                self._restore_snapshot_locked(snapshot, exc, context="Continuation report")
+                raise
             return plan.public_state(
                 now, in_flight_calls=self._in_flight_count_locked(logical.session_id)
             )

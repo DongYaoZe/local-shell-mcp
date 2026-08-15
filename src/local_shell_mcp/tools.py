@@ -77,7 +77,7 @@ from .remote_transfer import (
     revoke_transfer_ticket,
 )
 from .search_ops import grep, tree
-from .session_runtime import get_session_runtime_manager
+from .session_runtime import SESSION_IN_FLIGHT_LEASE_S, get_session_runtime_manager
 from .settings import get_settings, safe_settings_dump
 from .shell_ops import (
     PUBLIC_RUN_SHELL_DEFAULT_TIMEOUT_S,
@@ -639,6 +639,30 @@ async def _finish_session_tool_activity(
         )
 
 
+async def _renew_session_tool_lease(
+    manager: Any,
+    lease: dict[str, Any],
+    *,
+    tool_name: str,
+    call_id: str,
+) -> None:
+    interval_s = max(60.0, SESSION_IN_FLIGHT_LEASE_S / 3)
+    while True:
+        await asyncio.sleep(interval_s)
+        try:
+            renewed = await asyncio.to_thread(manager.renew_tool_call, lease)
+        except Exception as exc:  # noqa: BLE001 - a later heartbeat may recover.
+            audit(
+                "session_lease_renewal_failed",
+                tool=tool_name,
+                call_id=call_id,
+                error=f"{type(exc).__name__}: {exc}",
+            )
+            continue
+        if not renewed:
+            return
+
+
 def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
     for tool in mcp._tool_manager._tools.values():  # noqa: SLF001
         original = tool.fn
@@ -719,7 +743,15 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
                     )
             if __tool_name not in {"open_live_workspace", "live_workspace_reconnect"}:
                 live_subject = _current_principal_subject()
-                live_manager.claim_recovery_session(live_session_key, live_subject)
+                attached_live = None
+                if logical_lease and logical_lease.get("session_id"):
+                    attached_live = live_manager.bind_logical_session(
+                        live_session_key,
+                        str(logical_lease["session_id"]),
+                        live_subject,
+                    )
+                if attached_live is None:
+                    live_manager.claim_recovery_session(live_session_key, live_subject)
             live_manager.publish_for_session(
                 live_session_key,
                 "tool.started",
@@ -733,6 +765,18 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
                 **audit_context,
             )
             logical_activity_finished = False
+            lease_heartbeat_task = (
+                asyncio.create_task(
+                    _renew_session_tool_lease(
+                        logical_manager,
+                        logical_lease,
+                        tool_name=__tool_name,
+                        call_id=call_id,
+                    )
+                )
+                if logical_lease is not None
+                else None
+            )
             try:
                 with audit_call_context(call_id) as call_state:
                     if local_access_error is not None:
@@ -865,6 +909,10 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
                 logical_activity_finished = True
                 raise
             finally:
+                if lease_heartbeat_task is not None:
+                    lease_heartbeat_task.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await lease_heartbeat_task
                 if not logical_activity_finished and logical_lease is not None:
                     cancellation_data = {
                         "call_id": call_id,

@@ -123,11 +123,15 @@ async def live_events(request: Request) -> Response:
         logical_session_id = channel.logical_session_id
         session_state = None
         if logical_session_id:
-            session_state = await asyncio.to_thread(
-                get_session_runtime_manager().get,
-                logical_session_id,
-                subject=channel.subject,
-            )
+            try:
+                session_state = await asyncio.to_thread(
+                    get_session_runtime_manager().get,
+                    logical_session_id,
+                    subject=channel.subject,
+                )
+            except ValueError:
+                get_live_channel_manager().detach_logical_session(logical_session_id)
+                logical_session_id = None
         return _ok(
             {
                 "events": events,
