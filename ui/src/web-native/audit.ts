@@ -1,4 +1,4 @@
-import { AUDIT_OPERATIONS, auditInput, auditOutput, formatAuditValue } from "../audit-utils"
+import { AUDIT_OPERATIONS, auditInput, auditOutput, formatAuditValue, selectionAfterRefresh } from "../audit-utils"
 import type { AuditEntry, AuditPayload } from "../types"
 import {
   BaseController,
@@ -33,7 +33,7 @@ export class AuditController extends BaseController {
 
   mount(root: HTMLElement): void {
     this.root = root
-    this.root.innerHTML = `<section class="native-page audit-page"><div class="audit-filter-strip"><label><span>Node</span><select data-filter="node"></select></label><label><span>Operation</span><select data-filter="operation"></select></label><label><span>Time</span><select data-filter="time"></select></label><label><span>Sort</span><select data-filter="sort"><option value="desc">DESC</option><option value="asc">ASC</option></select></label><div class="audit-filter-actions">${button("Search", "search")}${button("Advanced", "toggle-advanced")}${button("Refresh", "refresh", { icon: "↻" })}</div></div><div class="audit-advanced" data-role="advanced" hidden><label>Search<input data-filter="search" placeholder="Command, path, tool, error…"/></label><label>Event<input data-filter="event" placeholder="tool_call_completed"/></label><label>Session<input data-filter="session" placeholder="session id"/></label><button class="native-button" type="button" data-action="clear-filters">Clear filters</button></div><div class="audit-layout"><section class="native-panel audit-list-panel"><header><div><h3>Audit records</h3><p data-role="audit-summary">Loading…</p></div><div class="panel-tools"><button class="native-button" type="button" data-action="previous-record" disabled>Previous</button><button class="native-button" type="button" data-action="next-record" disabled>Next</button></div></header><div class="audit-list" data-role="audit-list"><div class="native-loading">Loading audit records…</div></div></section><section class="native-panel audit-detail-panel"><header><div><h3 data-role="audit-title">Call details</h3><p data-role="audit-meta">Select a record</p></div><span class="status-chip neutral" data-role="audit-status">EVENT</span></header><div class="audit-details" data-role="audit-detail"><div class="native-empty">No record selected</div></div></section></div></section>`
+    this.root.innerHTML = `<section class="native-page audit-page"><div class="audit-filter-strip"><label><span>Node</span><select data-filter="node"></select></label><label><span>Operation</span><select data-filter="operation"></select></label><label><span>Time</span><select data-filter="time"></select></label><label><span>Sort</span><select data-filter="sort"><option value="desc">DESC</option><option value="asc">ASC</option></select></label><div class="audit-filter-actions">${button("Advanced", "toggle-advanced")}</div></div><div class="audit-advanced" data-role="advanced" hidden><label>Search<input data-filter="search" placeholder="Command, path, tool, error…"/></label><label>Event<input data-filter="event" placeholder="tool_call_completed"/></label><label>Session<input data-filter="session" placeholder="session id"/></label><button class="native-button" type="button" data-action="clear-filters">Clear filters</button></div><div class="audit-layout"><section class="native-panel audit-list-panel"><header><div><h3>Audit records</h3><p data-role="audit-summary">Loading…</p></div><div class="panel-tools"><button class="native-button" type="button" data-action="previous-record" disabled>Previous</button><button class="native-button" type="button" data-action="next-record" disabled>Next</button></div></header><div class="audit-list" data-role="audit-list"><div class="native-loading">Loading audit records…</div></div></section><section class="native-panel audit-detail-panel"><header><div><h3 data-role="audit-title">Call details</h3><p data-role="audit-meta">Select a record</p></div><span class="status-chip neutral" data-role="audit-status">EVENT</span></header><div class="audit-details" data-role="audit-detail"><div class="native-empty">No record selected</div></div></section></div></section>`
     this.populateFilters()
     this.listen(root, "click", (event) => this.onClick(event))
     this.listen(root, "change", (event) => this.onFilterChange(event))
@@ -65,11 +65,10 @@ export class AuditController extends BaseController {
       const range = AUDIT_TIME_RANGES.find((item) => item.label === requestedFilters.time) || AUDIT_TIME_RANGES[2]!
       const payload = await this.context.api.get<AuditPayload>(`/audit${queryString({ limit: 800, node: requestedFilters.node, operation: requestedFilters.operation, search: requestedFilters.search, event: requestedFilters.event, session: requestedFilters.session, start_ts: range.seconds ? Date.now() / 1000 - range.seconds : undefined, sort: requestedFilters.sort })}`)
       if (this.destroyed || filtersChanged()) return
-      const currentId = this.entries[this.selected]?.id
+      const nextSelected = selectionAfterRefresh(this.entries, this.selected, payload.entries)
       this.entries = payload.entries
       this.totalMatched = payload.total_matched
-      this.selected = currentId ? Math.max(0, this.entries.findIndex((entry) => entry.id === currentId)) : Math.min(this.selected, Math.max(0, this.entries.length - 1))
-      if (this.selected < 0) this.selected = 0
+      this.selected = nextSelected
       this.loading = false
       this.renderList()
       void this.loadDetail()
@@ -109,9 +108,9 @@ export class AuditController extends BaseController {
   private async loadDetail(): Promise<void> {
     const current = this.entries[this.selected]
     const request = ++this.detailRequest
+    this.detail = null
+    this.renderDetail()
     if (!current?.id) {
-      this.detail = current || null
-      this.renderDetail()
       return
     }
     try {
@@ -121,14 +120,15 @@ export class AuditController extends BaseController {
       this.renderDetail()
     } catch (error) {
       if (request !== this.detailRequest || this.destroyed) return
-      this.detail = current
+      this.detail = null
       this.renderDetail()
       this.context.notify(`Audit detail: ${error instanceof Error ? error.message : String(error)}`, "error")
     }
   }
 
   private renderDetail(): void {
-    const entry = this.detail || this.entries[this.selected]
+    const current = this.entries[this.selected]
+    const entry = this.detail?.id === current?.id ? this.detail : current
     const target = this.root.querySelector<HTMLElement>("[data-role=audit-detail]")
     const title = this.root.querySelector<HTMLElement>("[data-role=audit-title]")
     const meta = this.root.querySelector<HTMLElement>("[data-role=audit-meta]")
@@ -197,13 +197,7 @@ export class AuditController extends BaseController {
       return
     }
     const action = target.closest<HTMLElement>("[data-action]")?.dataset.action
-    if (action === "refresh") void this.refresh()
-    else if (action === "search") {
-      const advanced = this.root.querySelector<HTMLElement>("[data-role=advanced]")
-      if (advanced) advanced.hidden = false
-      this.root.querySelector<HTMLInputElement>("[data-filter=search]")?.focus()
-    }
-    else if (action === "previous-record") this.moveSelection(-1)
+    if (action === "previous-record") this.moveSelection(-1)
     else if (action === "next-record") this.moveSelection(1)
     else if (action === "toggle-advanced") {
       const advanced = this.root.querySelector<HTMLElement>("[data-role=advanced]")

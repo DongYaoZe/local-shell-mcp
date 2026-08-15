@@ -693,6 +693,7 @@ function showView(
   { syncHash = true, replaceHash = false }: { syncHash?: boolean; replaceHash?: boolean } = {},
 ): void {
   activeView = view
+  document.body.classList.toggle("native-view-active", view !== "console" && isNativeView(view))
   if (view !== "console") lastWebView = view
   document.querySelectorAll<HTMLButtonElement>(".nav-item[data-view]").forEach((button) => {
     button.classList.toggle("active", button.dataset.view === view)

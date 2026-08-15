@@ -52,11 +52,21 @@ describe("Native WebUI actions", () => {
     expect(files).toContain('data-action="parent"')
     expect(audit).toContain('data-action="previous-record"')
     expect(audit).toContain('data-action="next-record"')
-    expect(audit).toContain('button("Search", "search")')
+    expect(audit).toContain('button("Advanced", "toggle-advanced")')
+    expect(audit).not.toContain('button("Search", "search")')
     expect(terminals).toContain('"previous-session"')
     expect(terminals).toContain('"next-session"')
     for (const label of ["Copy", "Paste", "Find", "Clear", "Fullscreen"]) {
       expect(terminals).toContain(`button("${label}"`)
     }
+  })
+
+  test("uses the shared WebUI refresh control instead of duplicating it inside native pages", async () => {
+    const sources = await Promise.all(
+      nativePages.map((page) => Bun.file(new URL(`./web-native/${page}.ts`, import.meta.url)).text()),
+    )
+
+    for (const source of sources) expect(source).not.toContain('button("Refresh"')
+    expect(sources.join("\n")).not.toContain("refresh-sessions")
   })
 })
