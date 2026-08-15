@@ -496,11 +496,13 @@ async function watchContinuationDispatch(dispatch: ContinuationDispatch): Promis
         return
       }
     } catch (error) {
-      if (isLiveCredentialError(error)) {
-        abortContinuationDispatch("Live Workspace authorization changed during continuation dispatch")
-        return
-      }
+      abortContinuationDispatch(
+        isLiveCredentialError(error)
+          ? "Live Workspace authorization changed during continuation dispatch"
+          : "Continuation could not be revalidated before host dispatch completed",
+      )
       console.warn("Unable to revalidate continuation while dispatching", error)
+      return
     }
   }
 }

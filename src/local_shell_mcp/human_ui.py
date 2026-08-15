@@ -1338,14 +1338,15 @@ def _websocket_principal(websocket: WebSocket) -> Principal | None:
     settings = get_settings()
     token = _websocket_token(websocket)
     if token:
-        channel = get_live_channel_manager().authenticate(token)
-        if channel is not None:
+        auth_context = get_live_channel_manager().authenticate_context(token)
+        if auth_context is not None:
+            channel, subject, scopes = auth_context
             principal = Principal(
                 email=None,
-                subject=channel.subject,
+                subject=subject,
                 claims={
                     "auth": "live-channel",
-                    "scope": " ".join(channel.scopes),
+                    "scope": " ".join(scopes),
                     "live_id": channel.live_id,
                 },
             )

@@ -1468,6 +1468,45 @@ def test_continuation_validation_expires_claim_and_reserves_attempt(tmp_path, mo
     assert durable["continuation_reserved"] is True
 
 
+def test_continuation_invalidation_rolls_back_when_persistence_fails(tmp_path, monkeypatch):
+    state_dir = tmp_path / ".state"
+    manager = SessionRuntimeManager(state_dir)
+    now = [10_000.0]
+    monkeypatch.setattr("local_shell_mcp.session_runtime.time.time", lambda: now[0])
+    started = manager.manage("mcp:a", "user", action="start", objective="Task")
+    session_id = started["session_id"]
+    run_id = started["active_run"]["run_id"]
+    manager.manage_plan(
+        "mcp:a",
+        action="start",
+        session_run_id=run_id,
+        objective="Task",
+        steps=[{"id": "work", "text": "Work"}],
+    )
+    now[0] += PLAN_EXECUTION_LEASE_S + 1
+    claim = manager.claim_plan_continuation(session_id, subject="user")
+    assert claim is not None
+    before = manager.plan_state(session_id)
+    now[0] += 5 * 60 + 1
+    original_save = manager._save_locked
+
+    def fail_invalidation(session):
+        if session.plan is not None and not session.plan.continuation_pending:
+            raise OSError("invalidation persistence failed")
+        return original_save(session)
+
+    monkeypatch.setattr(manager, "_save_locked", fail_invalidation)
+    with pytest.raises(OSError, match="invalidation persistence failed"):
+        manager.validate_plan_continuation(session_id, claim["claim_id"], subject="user")
+
+    current = manager.plan_state(session_id)
+    assert current["continuation_pending"] is True
+    assert current["continuation_claim_id"] == before["continuation_claim_id"]
+    durable = SessionRuntimeManager(state_dir).plan_state(session_id)
+    assert durable["continuation_pending"] is True
+    assert durable["continuation_claim_id"] == before["continuation_claim_id"]
+
+
 def test_expired_continuation_cleanup_persists_when_new_claim_is_ineligible(
     tmp_path, monkeypatch
 ):

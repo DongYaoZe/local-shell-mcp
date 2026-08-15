@@ -132,7 +132,7 @@ def test_app_reattach_does_not_shorten_shared_channel_expiry():
     attached, app_token = manager.open(
         session_key="mcp:app",
         subject="user",
-        scopes=tuple(ALL_OAUTH_SCOPES),
+        scopes=("shell:read",),
         parent_expires_at=now + 60,
         live_id=channel.live_id,
         logical_session_id="s_task",
@@ -140,8 +140,16 @@ def test_app_reattach_does_not_shorten_shared_channel_expiry():
     )
 
     assert attached is channel
-    assert app_token == token
+    assert app_token != token
     assert channel.expires_at == original_expiry
+    assert manager.authenticate(token) is channel
+    assert manager.authenticate(app_token) is channel
+    assert manager.authenticate_context(token)[2] == tuple(ALL_OAUTH_SCOPES)
+    assert manager.authenticate_context(app_token)[2] == ("shell:read",)
+    app_digest = manager._digest(app_token)
+    manager._credentials[app_digest]["expires_at"] = now - 1
+    assert manager.authenticate(app_token) is None
+    assert manager.authenticate(token) is channel
 
 
 def test_live_workspace_can_reattach_a_second_mcp_session_by_live_id():
@@ -364,7 +372,7 @@ def test_live_workspace_open_consolidates_duplicate_logical_target():
         subject="user",
         scopes=tuple(ALL_OAUTH_SCOPES),
     )
-    target, _ = manager.open(
+    target, target_token = manager.open(
         session_key="mcp:model",
         subject="user",
         scopes=tuple(ALL_OAUTH_SCOPES),
@@ -381,7 +389,9 @@ def test_live_workspace_open_consolidates_duplicate_logical_target():
     )
 
     assert reattached is target
-    assert token == target.token_value
+    assert token != target_token
+    assert manager.authenticate(token) is target
+    assert manager.authenticate(target_token) is target
     assert manager.active_for_session("mcp:new-app") is target
     assert unattached.logical_session_id is None
     assert manager._logical_session_channels["s_target"] == target.live_id
@@ -486,6 +496,9 @@ def test_live_workspace_recovery_refuses_ambiguous_same_subject_workspaces():
     assert manager.claim_recovery_session("mcp:model-unknown-chat", "user") is None
     assert manager.active_for_session("mcp:model-unknown-chat") is None
 
+    for credential in manager._credentials.values():
+        if credential["live_id"] == first.live_id:
+            credential["expires_at"] = 0
     first.expires_at = 0
     assert manager.claim_recovery_session("mcp:model-chat-b", "user") is second
     assert manager.active_for_session("mcp:model-chat-b") is second
@@ -523,10 +536,65 @@ async def test_live_workspace_expiry_publish_and_wait_paths():
     await publisher
     assert waited[-1]["type"] == "job.progress"
 
+    for credential in manager._credentials.values():
+        if credential["live_id"] == channel.live_id:
+            credential["expires_at"] = 0
     channel.expires_at = 0
     assert manager.authenticate(token) is None
     assert manager.active_for_session("mcp:events") is None
     assert manager.by_id(channel.live_id) is None
+
+
+@pytest.mark.parametrize("endpoint", ["/api/live/snapshot", "/api/live/events?after=0&timeout=1"])
+def test_live_event_response_keeps_batch_atomic_with_session_binding(
+    tmp_path, monkeypatch, endpoint
+):
+    _configure(tmp_path, monkeypatch, auth="none")
+    sessions = session_runtime_module.get_session_runtime_manager()
+    first = sessions.manage("mcp:first", "user", action="start", objective="First")
+    second = sessions.manage("mcp:second", "user", action="start", objective="Second")
+    manager = live_channel_module.get_live_channel_manager()
+    channel, token = manager.open(
+        session_key="mcp:model",
+        subject="user",
+        scopes=tuple(ALL_OAUTH_SCOPES),
+        logical_session_id=first["session_id"],
+    )
+    manager.publish_channel(
+        channel.live_id,
+        "human.action",
+        actor="human",
+        data={"action": "old-session", "marker": "old"},
+    )
+    original_get = sessions.get
+    switched = False
+
+    def switch_during_state_read(session_id, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003, ANN202
+        nonlocal switched
+        state = original_get(session_id, *args, **kwargs)
+        if session_id == first["session_id"] and not switched:
+            switched = True
+            assert manager.bind_logical_session("mcp:model", second["session_id"], "user") is channel
+            manager.publish_channel(
+                channel.live_id,
+                "human.action",
+                actor="human",
+                data={"action": "new-session", "marker": "new"},
+            )
+        return state
+
+    monkeypatch.setattr(sessions, "get", switch_during_state_read)
+    app = _build_mcp_http_app(build_mcp())
+    with TestClient(app, base_url="http://testserver") as client:
+        response = client.get(endpoint, headers={"Authorization": f"Bearer {token}"})
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    state = data["channel"] if endpoint.endswith("snapshot") else data
+    assert state["session_id"] == second["session_id"]
+    markers = [event["data"].get("marker") for event in data["events"]]
+    assert "old" not in markers
+    assert "new" in markers
 
 
 def test_plan_state_machine_and_auto_promotion(tmp_path):
@@ -734,7 +802,10 @@ async def test_mcp_app_resource_and_render_result_hide_live_token(tmp_path, monk
     assert isinstance(reconnected, CallToolResult)
     assert reconnected.structuredContent["live_id"] == result.structuredContent["live_id"]
     reconnect_token = reconnected.meta["local-shell-mcp/live"]["token"]
-    assert reconnect_token == hidden["token"]
+    assert reconnect_token != hidden["token"]
+    channel = live_channel_module.get_live_channel_manager().authenticate(hidden["token"])
+    assert channel is not None
+    assert live_channel_module.get_live_channel_manager().authenticate(reconnect_token) is channel
     assert reconnect_token not in (tmp_path / "audit.jsonl").read_text(encoding="utf-8")
 
     templates = {
@@ -1469,9 +1540,15 @@ def test_live_events_empty_batch_does_not_advance_cursor(tmp_path, monkeypatch):
             actor="agent",
             data={"tool": "late"},
         )
-        return []
+        return {
+            "events": [],
+            "session_id": channel.logical_session_id,
+            "binding_generation": channel.binding_generation,
+            "seq": channel.seq,
+            "cursor": after,
+        }
 
-    monkeypatch.setattr(manager, "wait_events", empty_wait)
+    monkeypatch.setattr(manager, "wait_event_batch", empty_wait)
     app = _build_mcp_http_app(build_mcp())
     with TestClient(app, base_url="http://testserver") as client:
         response = client.get(

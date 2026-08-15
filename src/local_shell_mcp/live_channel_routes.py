@@ -98,12 +98,41 @@ async def live_snapshot(request: Request) -> Response:
         principal, channel = _live_channel(request)
         require_scopes(principal, ("shell:read",))
         manager = get_live_channel_manager()
-        after = max(0, channel.seq - 300)
-        channel_state = await asyncio.to_thread(channel.public_state)
+        for _ in range(8):
+            batch = manager.snapshot_batch(channel, 300)
+            logical_session_id = batch["session_id"]
+            session_state = None
+            if logical_session_id:
+                try:
+                    session_state = await asyncio.to_thread(
+                        get_session_runtime_manager().get,
+                        logical_session_id,
+                        subject=channel.subject,
+                    )
+                except ValueError:
+                    manager.detach_logical_session(logical_session_id)
+                    continue
+            if manager.binding_matches(
+                channel,
+                logical_session_id,
+                int(batch["binding_generation"]),
+            ):
+                break
+        else:
+            raise HTTPException(status_code=409, detail="Live Session binding changed too frequently")
+        channel_state = {
+            "live_id": channel.live_id,
+            "created_at": channel.created_at,
+            "expires_at": channel.expires_at,
+            "seq": batch["seq"],
+            "session_id": logical_session_id,
+            "session": session_state,
+            "plan": session_state.get("plan") if session_state else None,
+        }
         return _ok(
             {
                 "channel": channel_state,
-                "events": manager.events_since(channel, after, 300),
+                "events": batch["events"],
             }
         )
     except Exception as exc:
@@ -119,23 +148,35 @@ async def live_events(request: Request) -> Response:
             timeout_s = min(30.0, max(1.0, float(request.query_params.get("timeout", "25"))))
         except ValueError as exc:
             raise HTTPException(status_code=400, detail="Invalid event cursor") from exc
-        events = await get_live_channel_manager().wait_events(channel, after, timeout_s)
-        logical_session_id = channel.logical_session_id
-        session_state = None
-        if logical_session_id:
-            try:
-                session_state = await asyncio.to_thread(
-                    get_session_runtime_manager().get,
-                    logical_session_id,
-                    subject=channel.subject,
-                )
-            except ValueError:
-                get_live_channel_manager().detach_logical_session(logical_session_id)
-                logical_session_id = None
+        manager = get_live_channel_manager()
+        batch = await manager.wait_event_batch(channel, after, timeout_s)
+        for _ in range(8):
+            logical_session_id = batch["session_id"]
+            session_state = None
+            if logical_session_id:
+                try:
+                    session_state = await asyncio.to_thread(
+                        get_session_runtime_manager().get,
+                        logical_session_id,
+                        subject=channel.subject,
+                    )
+                except ValueError:
+                    manager.detach_logical_session(logical_session_id)
+                    batch = manager.event_batch(channel, after)
+                    continue
+            if manager.binding_matches(
+                channel,
+                logical_session_id,
+                int(batch["binding_generation"]),
+            ):
+                break
+            batch = manager.event_batch(channel, after)
+        else:
+            raise HTTPException(status_code=409, detail="Live Session binding changed too frequently")
         return _ok(
             {
-                "events": events,
-                "cursor": events[-1]["seq"] if events else after,
+                "events": batch["events"],
+                "cursor": batch["cursor"],
                 "plan": session_state.get("plan") if session_state else None,
                 "session": session_state,
                 "session_id": logical_session_id,

@@ -62,6 +62,7 @@ class LiveChannel:
     )
     signal: asyncio.Event = field(default_factory=asyncio.Event)
     logical_session_id: str | None = None
+    binding_generation: int = 0
 
     def public_state(self) -> dict[str, Any]:
         session_manager = get_session_runtime_manager()
@@ -93,10 +94,52 @@ class LiveChannelManager:
         self._logical_session_channels: dict[str, str] = {}
         self._recovered_live_ids: dict[str, str] = {}
         self._recovery_claims: dict[str, dict[str, float]] = {}
+        self._credentials: dict[str, dict[str, Any]] = {}
 
     @staticmethod
     def _digest(token: str) -> str:
         return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+    def _issue_credential_locked(
+        self,
+        channel: LiveChannel,
+        *,
+        subject: str,
+        scopes: tuple[str, ...],
+        expires_at: float,
+        primary: bool,
+    ) -> str:
+        token = secrets.token_urlsafe(32)
+        digest = self._digest(token)
+        if primary:
+            self._credentials.pop(channel.token_digest, None)
+            channel.token_value = token
+            channel.token_digest = digest
+        self._credentials[digest] = {
+            "live_id": channel.live_id,
+            "subject": subject,
+            "scopes": scopes,
+            "expires_at": expires_at,
+        }
+        channel.expires_at = max(channel.expires_at, expires_at)
+        return token
+
+    def _prune_credentials_locked(self, current: float) -> None:
+        self._credentials = {
+            digest: credential
+            for digest, credential in self._credentials.items()
+            if float(credential["expires_at"]) > current
+            and str(credential["live_id"]) in self._channels
+        }
+        expiries_by_live_id: dict[str, list[float]] = {}
+        for credential in self._credentials.values():
+            expiries_by_live_id.setdefault(str(credential["live_id"]), []).append(
+                float(credential["expires_at"])
+            )
+        for channel in self._channels.values():
+            expiries = expiries_by_live_id.get(channel.live_id)
+            if expiries:
+                channel.expires_at = max(expiries)
 
     def _set_logical_session_locked(
         self, channel: LiveChannel, logical_session_id: str
@@ -114,15 +157,21 @@ class LiveChannelManager:
         # long-poll cursors remain valid, but never carry operational/human
         # events across a Logical Session attachment boundary.
         channel.events.clear()
+        channel.binding_generation += 1
         channel.logical_session_id = logical_session_id
         self._logical_session_channels[logical_session_id] = channel.live_id
 
     def _prune_locked(self, now: float | None = None) -> None:
         current = time.time() if now is None else now
+        self._prune_credentials_locked(current)
         expired = [
             live_id
             for live_id, channel in self._channels.items()
             if channel.expires_at <= current
+            or not any(
+                credential["live_id"] == live_id
+                for credential in self._credentials.values()
+            )
         ]
         for live_id in expired:
             self._channels.pop(live_id, None)
@@ -143,6 +192,11 @@ class LiveChannelManager:
                 stale_id: live_id
                 for stale_id, live_id in self._recovered_live_ids.items()
                 if live_id not in expired_ids
+            }
+            self._credentials = {
+                digest: credential
+                for digest, credential in self._credentials.items()
+                if credential["live_id"] not in expired_ids
             }
         self._recovery_claims = {
             subject: {
@@ -199,6 +253,7 @@ class LiveChannelManager:
                 ):
                     channel.logical_session_id = None
                     channel.events.clear()
+                    channel.binding_generation += 1
                     self._publish_locked(
                         channel,
                         "session.detached",
@@ -232,20 +287,36 @@ class LiveChannelManager:
                     logical_session_id=logical_session_id,
                 )
                 self._channels[channel.live_id] = channel
+                self._credentials[digest] = {
+                    "live_id": channel.live_id,
+                    "subject": subject,
+                    "scopes": scopes,
+                    "expires_at": expires_at,
+                }
                 if requested_live_id:
                     self._recovered_live_ids[requested_live_id] = channel.live_id
                     self._recovery_claims.setdefault(subject, {})[channel.live_id] = (
                         now + LIVE_RECOVERY_CLAIM_TTL_S
                     )
+            elif app_reattach:
+                token = self._issue_credential_locked(
+                    channel,
+                    subject=subject,
+                    scopes=scopes,
+                    expires_at=expires_at,
+                    primary=False,
+                )
             elif live_id is not None:
-                # App-side reattachment must not rotate the credential or several
-                # cached/reconnecting views would continually invalidate each other.
                 token = channel.token_value
             else:
                 # An explicit user/model open is a new authorization boundary.
-                token = secrets.token_urlsafe(32)
-                channel.token_value = token
-                channel.token_digest = self._digest(token)
+                token = self._issue_credential_locked(
+                    channel,
+                    subject=subject,
+                    scopes=scopes,
+                    expires_at=expires_at,
+                    primary=True,
+                )
             self._session_channels[session_key] = channel.live_id
             if app_reattach:
                 self._app_session_keys.add(session_key)
@@ -257,13 +328,7 @@ class LiveChannelManager:
                     self._consume_recovery_claim_locked(subject, channel.live_id)
             channel.subject = subject
             channel.scopes = scopes
-            # App-only reconnects reuse the channel-wide bearer credential. A
-            # second view authenticated by a shorter-lived parent token must
-            # not shorten that shared credential for views which are already
-            # attached. A later valid reconnect may still refresh/extend it.
-            channel.expires_at = (
-                max(channel.expires_at, expires_at) if app_reattach else expires_at
-            )
+            self._prune_credentials_locked(now)
             self._publish_locked(
                 channel,
                 "channel.opened",
@@ -273,15 +338,29 @@ class LiveChannelManager:
             return channel, token
 
     def authenticate(self, token: str | None) -> LiveChannel | None:
+        context = self.authenticate_context(token)
+        return context[0] if context is not None else None
+
+    def authenticate_context(
+        self, token: str | None
+    ) -> tuple[LiveChannel, str, tuple[str, ...]] | None:
         if not token:
             return None
         digest = self._digest(token)
         now = time.time()
         with self._lock:
             self._prune_locked(now)
-            for channel in self._channels.values():
-                if secrets.compare_digest(channel.token_digest, digest):
-                    return channel
+            credential = self._credentials.get(digest)
+            if credential is None or float(credential["expires_at"]) <= now:
+                return None
+            channel = self._channels.get(str(credential["live_id"]))
+            if channel is None:
+                return None
+            return (
+                channel,
+                str(credential["subject"]),
+                tuple(str(scope) for scope in credential["scopes"]),
+            )
         return None
 
     def active_for_session(self, session_key: str) -> LiveChannel | None:
@@ -313,6 +392,7 @@ class LiveChannelManager:
                     if channel.logical_session_id == logical_session_id:
                         channel.logical_session_id = None
                         channel.events.clear()
+                        channel.binding_generation += 1
                         self._publish_locked(
                             channel,
                             "session.detached",
@@ -383,6 +463,7 @@ class LiveChannelManager:
                     continue
                 channel.logical_session_id = None
                 channel.events.clear()
+                channel.binding_generation += 1
                 detached.append(channel)
                 self._publish_locked(
                     channel,
@@ -480,6 +561,41 @@ class LiveChannelManager:
         with self._lock:
             return [event for event in channel.events if int(event["seq"]) > after][:limit]
 
+    def event_batch(
+        self,
+        channel: LiveChannel,
+        after: int,
+        limit: int = LIVE_EVENT_BATCH,
+    ) -> dict[str, Any]:
+        with self._lock:
+            events = [event for event in channel.events if int(event["seq"]) > after][:limit]
+            return {
+                "events": events,
+                "session_id": channel.logical_session_id,
+                "binding_generation": channel.binding_generation,
+                "seq": channel.seq,
+                "cursor": events[-1]["seq"] if events else after,
+            }
+
+    def snapshot_batch(
+        self, channel: LiveChannel, limit: int = LIVE_EVENT_BATCH
+    ) -> dict[str, Any]:
+        with self._lock:
+            after = max(0, channel.seq - limit)
+            return self.event_batch(channel, after, limit)
+
+    def binding_matches(
+        self,
+        channel: LiveChannel,
+        session_id: str | None,
+        binding_generation: int,
+    ) -> bool:
+        with self._lock:
+            return (
+                channel.logical_session_id == session_id
+                and channel.binding_generation == binding_generation
+            )
+
     async def wait_events(
         self,
         channel: LiveChannel,
@@ -498,6 +614,25 @@ class LiveChannelManager:
         except TimeoutError:
             return []
         return self.events_since(channel, after)
+
+    async def wait_event_batch(
+        self,
+        channel: LiveChannel,
+        after: int,
+        timeout_s: float = LIVE_LONG_POLL_S,
+    ) -> dict[str, Any]:
+        batch = self.event_batch(channel, after)
+        if batch["events"]:
+            return batch
+        channel.signal.clear()
+        batch = self.event_batch(channel, after)
+        if batch["events"]:
+            return batch
+        try:
+            await asyncio.wait_for(channel.signal.wait(), timeout=max(0.1, timeout_s))
+        except TimeoutError:
+            return self.event_batch(channel, after)
+        return self.event_batch(channel, after)
 
 
 _MANAGER = LiveChannelManager()

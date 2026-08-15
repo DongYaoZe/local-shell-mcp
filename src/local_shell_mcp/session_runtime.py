@@ -1801,12 +1801,19 @@ class SessionRuntimeManager:
                 and plan.continuation_claim_id == claim_id
                 and not valid
             ):
-                plan.continuation_pending = False
-                plan.continuation_pending_since = None
-                plan.continuation_claim_id = None
-                plan.continuation_reserved = False
-                plan.updated_at = now
-                self._save_locked(logical)
+                snapshot = copy.deepcopy(logical)
+                try:
+                    plan.continuation_pending = False
+                    plan.continuation_pending_since = None
+                    plan.continuation_claim_id = None
+                    plan.continuation_reserved = False
+                    plan.updated_at = now
+                    self._save_locked(logical)
+                except Exception as exc:
+                    self._restore_snapshot_locked(
+                        snapshot, exc, context="Continuation invalidation"
+                    )
+                    raise
             return {
                 "valid": valid,
                 "session_id": logical.session_id,

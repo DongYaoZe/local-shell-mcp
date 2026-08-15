@@ -38,6 +38,12 @@ describe("live workspace utilities", () => {
     expect(source).toContain("const sessionChanged = !config || config.sessionId !== nextConfig.sessionId")
   })
 
+  test("continuation dispatch fails closed when revalidation errors", async () => {
+    const source = await Bun.file(new URL("./live-workspace.ts", import.meta.url)).text()
+    expect(source).toContain("Continuation could not be revalidated before host dispatch completed")
+    expect(source).toContain("abortContinuationDispatch(")
+  })
+
   test("display mode toggles only between floating and fullscreen", () => {
     expect(toggleWorkspaceDisplayMode("pip")).toBe("fullscreen")
     expect(toggleWorkspaceDisplayMode("fullscreen")).toBe("pip")
