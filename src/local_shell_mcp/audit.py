@@ -30,6 +30,7 @@ _AUDIT_INLINE_VALUE_BYTES = 16 * 1024
 _AUDIT_PAYLOAD_PRUNE_GRACE_S = 300
 _AUDIT_MAINTENANCE_INTERVAL_S = _AUDIT_PAYLOAD_PRUNE_GRACE_S
 _AUDIT_LAST_MAINTENANCE: dict[str, float] = {}
+_AUDIT_PRESSURE_BACKOFF_UNTIL: dict[str, float] = {}
 _AUDIT_PAYLOAD_DIRECTORY = "audit-payloads"
 _AUDIT_PAYLOAD_MARKER = "$local_shell_mcp_audit_payload"
 _AUDIT_PAYLOAD_VERSION = 1
@@ -143,6 +144,7 @@ def _write_payload(value: Any) -> dict[str, Any]:
         finally:
             with contextlib.suppress(OSError):
                 temporary.unlink(missing_ok=True)
+    _AUDIT_PRESSURE_BACKOFF_UNTIL.pop(os.fspath(get_settings().audit_log_path), None)
     return {
         _AUDIT_PAYLOAD_MARKER: {
             "version": _AUDIT_PAYLOAD_VERSION,
@@ -256,6 +258,13 @@ def _prune_payload_store(log_path: Path) -> None:
             payload.unlink()
         except OSError:
             continue
+    for temporary in directory.glob(".*.tmp"):
+        try:
+            if temporary.stat().st_mtime > prune_before:
+                continue
+            temporary.unlink()
+        except OSError:
+            continue
 
 
 def _payload_file_size(digest: str, log_path: Path | None = None) -> int:
@@ -265,18 +274,23 @@ def _payload_file_size(digest: str, log_path: Path | None = None) -> int:
         return 0
 
 
-def _audit_storage_bytes(log_path: Path) -> int:
-    """Return the cheap on-disk size used by the audit log and payload store."""
-
+def _audit_log_bytes(log_path: Path) -> int:
     try:
-        total = log_path.stat().st_size
+        return log_path.stat().st_size
     except OSError:
-        total = 0
+        return 0
 
+
+def _audit_storage_bytes(log_path: Path) -> int:
+    """Return the cheap on-disk size used by retained audit data."""
+
+    total = _audit_log_bytes(log_path)
     directory = _payload_directory_path(log_path)
     try:
         with os.scandir(directory) as entries:
             for entry in entries:
+                if not entry.name.endswith(".json.gz"):
+                    continue
                 try:
                     if entry.is_file():
                         total += entry.stat().st_size
@@ -287,22 +301,43 @@ def _audit_storage_bytes(log_path: Path) -> int:
     return total
 
 
+def _audit_pressure_backoff_active(log_path: Path) -> bool:
+    key = os.fspath(log_path)
+    deadline = _AUDIT_PRESSURE_BACKOFF_UNTIL.get(key)
+    if deadline is None:
+        return False
+    if time.monotonic() < deadline:
+        return True
+    _AUDIT_PRESSURE_BACKOFF_UNTIL.pop(key, None)
+    return False
+
+
 def _audit_storage_limit_exceeded(log_path: Path, max_bytes: int) -> bool:
-    return max_bytes > 0 and _audit_storage_bytes(log_path) > max_bytes
+    if max_bytes <= 0:
+        return False
+    if _audit_log_bytes(log_path) > max_bytes:
+        return True
+    if _audit_pressure_backoff_active(log_path):
+        return False
+    return _audit_storage_bytes(log_path) > max_bytes
 
 
 def _audit_maintenance_due(log_path: Path) -> bool:
     now = time.monotonic()
-    key = os.fspath(log_path)
-    previous = _AUDIT_LAST_MAINTENANCE.get(key)
-    if previous is None:
-        _AUDIT_LAST_MAINTENANCE[key] = now
-        return False
-    return now - previous >= _AUDIT_MAINTENANCE_INTERVAL_S
+    previous = _AUDIT_LAST_MAINTENANCE.get(os.fspath(log_path))
+    return previous is None or now - previous >= _AUDIT_MAINTENANCE_INTERVAL_S
 
 
 def _mark_audit_maintenance(log_path: Path) -> None:
     _AUDIT_LAST_MAINTENANCE[os.fspath(log_path)] = time.monotonic()
+
+
+def _update_audit_pressure_backoff(log_path: Path, max_bytes: int) -> None:
+    key = os.fspath(log_path)
+    if max_bytes > 0 and _audit_storage_bytes(log_path) > max_bytes:
+        _AUDIT_PRESSURE_BACKOFF_UNTIL[key] = time.monotonic() + _AUDIT_PAYLOAD_PRUNE_GRACE_S
+    else:
+        _AUDIT_PRESSURE_BACKOFF_UNTIL.pop(key, None)
 
 
 def _encode_audit_record(record: dict[str, Any]) -> bytes:
@@ -565,6 +600,7 @@ def audit(event: str, **fields: Any) -> None:
         if retention_needed or maintenance_due:
             _enforce_audit_storage_limit(path, settings.max_audit_log_bytes)
             _mark_audit_maintenance(path)
+            _update_audit_pressure_backoff(path, settings.max_audit_log_bytes)
 
 
 _TOOL_OPERATION_GROUPS: dict[str, frozenset[str]] = {

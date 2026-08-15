@@ -296,13 +296,19 @@ def test_payload_pruning_defers_recent_unreferenced_files(tmp_path, monkeypatch)
     reference = audit_module._write_payload("pending:" + "x" * 30_000)
     payload = audit_module._payload_path(audit_module._payload_digest(reference))
 
+    temporary = audit_module._payload_directory(log_path) / ".interrupted.json.gz.123.tmp"
+    temporary.write_bytes(b"partial")
+
     audit_module._prune_payload_store(log_path)
     assert payload.exists()
+    assert temporary.exists()
 
     stale = time.time() - audit_module._AUDIT_PAYLOAD_PRUNE_GRACE_S - 1
     os.utime(payload, (stale, stale))
+    os.utime(temporary, (stale, stale))
     audit_module._prune_payload_store(log_path)
     assert not payload.exists()
+    assert not temporary.exists()
 
 
 def test_payload_pruning_defers_when_the_log_cannot_be_read(tmp_path, monkeypatch):
@@ -475,7 +481,7 @@ def test_audit_skips_full_retention_scan_while_storage_is_below_budget(tmp_path,
     for index in range(100):
         audit_module.audit("small_event", index=index)
 
-    assert calls == 0
+    assert calls == 1
     assert len(log_path.read_text(encoding="utf-8").splitlines()) == 101
 
 
@@ -484,7 +490,7 @@ def test_audit_periodically_runs_payload_housekeeping_below_budget(tmp_path, mon
     monkeypatch.setenv("LOCAL_SHELL_MCP_MAX_AUDIT_LOG_BYTES", "20000000")
     get_settings.cache_clear()
     log_path = get_settings().audit_log_path
-    audit_module._AUDIT_LAST_MAINTENANCE[os.fspath(log_path)] = 0.0
+    audit_module._AUDIT_LAST_MAINTENANCE.pop(os.fspath(log_path), None)
     calls = 0
     original = audit_module._enforce_audit_storage_limit
 
@@ -496,6 +502,67 @@ def test_audit_periodically_runs_payload_housekeeping_below_budget(tmp_path, mon
     monkeypatch.setattr(audit_module, "_enforce_audit_storage_limit", track_enforcement)
 
     audit_module.audit("maintenance_event")
+
+    assert calls == 1
+
+
+def test_audit_pressure_backoff_avoids_repeated_scans_for_recent_orphans(
+    tmp_path, monkeypatch
+):
+    _configure(tmp_path, monkeypatch)
+    monkeypatch.setenv("LOCAL_SHELL_MCP_MAX_AUDIT_LOG_BYTES", "12000")
+    get_settings.cache_clear()
+    log_path = get_settings().audit_log_path
+    log_path.write_text("{}\n", encoding="utf-8")
+    audit_module._write_payload(os.urandom(18_000).hex())
+    calls = 0
+    original = audit_module._enforce_audit_storage_limit
+
+    def track_enforcement(path: Path, max_bytes: int) -> None:
+        nonlocal calls
+        calls += 1
+        original(path, max_bytes)
+
+    monkeypatch.setattr(audit_module, "_enforce_audit_storage_limit", track_enforcement)
+
+    audit_module.audit("pressure_trigger")
+    for index in range(20):
+        audit_module.audit("small_event", index=index)
+
+    assert calls == 1
+    assert audit_module._audit_pressure_backoff_active(log_path) is True
+
+
+def test_audit_storage_size_ignores_interrupted_payload_temporaries(tmp_path, monkeypatch):
+    _configure(tmp_path, monkeypatch)
+    log_path = get_settings().audit_log_path
+    log_path.write_bytes(b"{}\n")
+    directory = log_path.parent / audit_module._AUDIT_PAYLOAD_DIRECTORY
+    directory.mkdir()
+    (directory / ".interrupted.json.gz.123.tmp").write_bytes(b"x" * 50_000)
+
+    assert audit_module._audit_storage_bytes(log_path) == log_path.stat().st_size
+
+
+def test_new_payload_clears_pressure_backoff_and_rechecks_budget(tmp_path, monkeypatch):
+    _configure(tmp_path, monkeypatch)
+    monkeypatch.setenv("LOCAL_SHELL_MCP_MAX_AUDIT_LOG_BYTES", "12000")
+    get_settings.cache_clear()
+    log_path = get_settings().audit_log_path
+    key = os.fspath(log_path)
+    audit_module._AUDIT_LAST_MAINTENANCE[key] = time.monotonic()
+    audit_module._AUDIT_PRESSURE_BACKOFF_UNTIL[key] = time.monotonic() + 300
+    calls = 0
+    original = audit_module._enforce_audit_storage_limit
+
+    def track_enforcement(path: Path, max_bytes: int) -> None:
+        nonlocal calls
+        calls += 1
+        original(path, max_bytes)
+
+    monkeypatch.setattr(audit_module, "_enforce_audit_storage_limit", track_enforcement)
+
+    audit_module.audit("large_event", payload=os.urandom(18_000).hex())
 
     assert calls == 1
 
