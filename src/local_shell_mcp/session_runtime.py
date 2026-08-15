@@ -1702,10 +1702,19 @@ class SessionRuntimeManager:
                 pending_since = plan.continuation_pending_since or now
                 if now - pending_since < PLAN_CONTINUATION_PENDING_TTL_S:
                     return None
-                plan.continuation_pending = False
-                plan.continuation_pending_since = None
-                plan.continuation_claim_id = None
-                plan.continuation_reserved = False
+                snapshot = copy.deepcopy(logical)
+                try:
+                    plan.continuation_pending = False
+                    plan.continuation_pending_since = None
+                    plan.continuation_claim_id = None
+                    plan.continuation_reserved = False
+                    plan.updated_at = now
+                    self._save_locked(logical)
+                except Exception as exc:
+                    self._restore_snapshot_locked(
+                        snapshot, exc, context="Expired continuation cleanup"
+                    )
+                    raise
             if plan.continuation_count >= PLAN_MAX_CONTINUATIONS:
                 return None
             if plan.continuation_retry_after is not None and now < plan.continuation_retry_after:

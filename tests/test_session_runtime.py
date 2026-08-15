@@ -1468,6 +1468,40 @@ def test_continuation_validation_expires_claim_and_reserves_attempt(tmp_path, mo
     assert durable["continuation_reserved"] is True
 
 
+def test_expired_continuation_cleanup_persists_when_new_claim_is_ineligible(
+    tmp_path, monkeypatch
+):
+    state_dir = tmp_path / ".state"
+    manager = SessionRuntimeManager(state_dir)
+    now = [10_000.0]
+    monkeypatch.setattr("local_shell_mcp.session_runtime.time.time", lambda: now[0])
+    started = manager.manage("mcp:a", "user", action="start", objective="Task")
+    session_id = started["session_id"]
+    run_id = started["active_run"]["run_id"]
+    manager.manage_plan(
+        "mcp:a",
+        action="start",
+        session_run_id=run_id,
+        objective="Task",
+        steps=[{"id": "work", "text": "Work"}],
+    )
+    now[0] += PLAN_EXECUTION_LEASE_S + 1
+    claim = manager.claim_plan_continuation(session_id, subject="user")
+    assert claim is not None
+
+    now[0] += 5 * 60 + 1
+    logical = manager._sessions[session_id]
+    assert logical.plan is not None
+    logical.plan.last_agent_activity = now[0]
+    manager._save_locked(logical)
+
+    assert manager.claim_plan_continuation(session_id, subject="user") is None
+    assert manager.plan_state(session_id)["continuation_pending"] is False
+    restored = SessionRuntimeManager(state_dir).plan_state(session_id)
+    assert restored["continuation_pending"] is False
+    assert restored["continuation_claim_id"] is None
+
+
 def test_inflight_tool_lease_heartbeat_prevents_age_only_expiry(tmp_path, monkeypatch):
     state_dir = tmp_path / ".state"
     manager = SessionRuntimeManager(state_dir)

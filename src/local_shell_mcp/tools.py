@@ -3168,6 +3168,7 @@ def _register_live_workspace_tools(
         cwd: str,
         live_id: str | None,
         session_id: str | None = None,
+        app_reattach: bool = False,
     ) -> LiveChannelResult:
         principal = current_principal()
         subject = _current_principal_subject()
@@ -3192,6 +3193,7 @@ def _register_live_workspace_tools(
             scopes=scopes,
             live_id=live_id,
             logical_session_id=logical_session_id,
+            app_reattach=app_reattach,
             parent_expires_at=(
                 float(principal.claims["exp"])
                 if principal is not None and principal.claims.get("exp") is not None
@@ -3242,6 +3244,7 @@ def _register_live_workspace_tools(
             cwd=cwd,
             live_id=None,
             session_id=None,
+            app_reattach=False,
         )
 
     @mcp.tool(
@@ -3269,6 +3272,7 @@ def _register_live_workspace_tools(
             cwd=cwd,
             live_id=live_id,
             session_id=session_id,
+            app_reattach=True,
         )
 
 

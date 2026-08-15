@@ -89,6 +89,7 @@ class LiveChannelManager:
         self._lock = threading.RLock()
         self._channels: dict[str, LiveChannel] = {}
         self._session_channels: dict[str, str] = {}
+        self._app_session_keys: set[str] = set()
         self._logical_session_channels: dict[str, str] = {}
         self._recovered_live_ids: dict[str, str] = {}
         self._recovery_claims: dict[str, dict[str, float]] = {}
@@ -113,6 +114,7 @@ class LiveChannelManager:
                 for session_key, live_id in self._session_channels.items()
                 if live_id not in expired_ids
             }
+            self._app_session_keys.intersection_update(self._session_channels)
             self._logical_session_channels = {
                 session_id: live_id
                 for session_id, live_id in self._logical_session_channels.items()
@@ -144,6 +146,7 @@ class LiveChannelManager:
         parent_expires_at: float | None = None,
         live_id: str | None = None,
         logical_session_id: str | None = None,
+        app_reattach: bool = False,
     ) -> tuple[LiveChannel, str]:
         now = time.time()
         expires_at = now + LIVE_TOKEN_TTL_S
@@ -160,6 +163,11 @@ class LiveChannelManager:
             requested_live_id = live_id
             resolved_live_id = self._recovered_live_ids.get(live_id or "", live_id or "")
             channel = self._channels.get(resolved_live_id or "")
+            if app_reattach and channel is not None and channel.logical_session_id:
+                # App reconnect payloads may carry the Session id from the last
+                # rendered snapshot. The live channel is authoritative after a
+                # model-side Session switch, so a stale app payload must follow it.
+                logical_session_id = channel.logical_session_id
             if channel is None:
                 channel = self._channels.get(logical_live_id or "")
             if channel is None:
@@ -203,6 +211,10 @@ class LiveChannelManager:
                 channel.token_value = token
                 channel.token_digest = self._digest(token)
             self._session_channels[session_key] = channel.live_id
+            if app_reattach:
+                self._app_session_keys.add(session_key)
+            else:
+                self._app_session_keys.discard(session_key)
             if logical_session_id:
                 previous_session_id = channel.logical_session_id
                 if (
@@ -213,6 +225,8 @@ class LiveChannelManager:
                     self._logical_session_channels.pop(previous_session_id, None)
                 channel.logical_session_id = logical_session_id
                 self._logical_session_channels[logical_session_id] = channel.live_id
+                if not app_reattach:
+                    self._consume_recovery_claim_locked(subject, channel.live_id)
             channel.subject = subject
             channel.scopes = scopes
             channel.expires_at = expires_at
@@ -247,6 +261,7 @@ class LiveChannelManager:
     ) -> LiveChannel | None:
         with self._lock:
             self._prune_locked()
+            self._app_session_keys.discard(session_key)
             live_id = self._session_channels.get(session_key)
             if live_id is None:
                 live_id = self._logical_session_channels.get(logical_session_id)
@@ -262,7 +277,9 @@ class LiveChannelManager:
                 previous_session_id
                 and previous_session_id != logical_session_id
                 and any(
-                    key != session_key and mapped_live_id == channel.live_id
+                    key != session_key
+                    and key not in self._app_session_keys
+                    and mapped_live_id == channel.live_id
                     for key, mapped_live_id in self._session_channels.items()
                 )
             ):
@@ -283,6 +300,7 @@ class LiveChannelManager:
                 self._logical_session_channels.pop(previous_session_id, None)
             channel.logical_session_id = logical_session_id
             self._logical_session_channels[logical_session_id] = channel.live_id
+            self._consume_recovery_claim_locked(subject, channel.live_id)
             self._publish_locked(
                 channel,
                 "session.attached",
@@ -290,6 +308,14 @@ class LiveChannelManager:
                 data={"session_id": logical_session_id},
             )
             return channel
+
+    def _consume_recovery_claim_locked(self, subject: str, live_id: str) -> None:
+        claims = self._recovery_claims.get(subject)
+        if not claims:
+            return
+        claims.pop(live_id, None)
+        if not claims:
+            self._recovery_claims.pop(subject, None)
 
     def detach_logical_session(self, logical_session_id: str) -> list[LiveChannel]:
         with self._lock:
@@ -329,7 +355,8 @@ class LiveChannelManager:
             channel = self._channels.get(live_id)
             if channel is None:
                 return None
-            self._recovery_claims.pop(subject, None)
+            self._consume_recovery_claim_locked(subject, live_id)
+            self._app_session_keys.discard(session_key)
             self._session_channels[session_key] = channel.live_id
             return channel
 

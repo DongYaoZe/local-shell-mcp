@@ -201,6 +201,74 @@ def test_live_workspace_switch_does_not_rebind_channel_shared_by_another_transpo
     assert "s_second" not in manager._logical_session_channels
 
 
+def test_live_workspace_app_reattachment_follows_model_session_switch():
+    manager = LiveChannelManager()
+    channel, _ = manager.open(
+        session_key="mcp:model",
+        subject="user",
+        scopes=tuple(ALL_OAUTH_SCOPES),
+        logical_session_id="s_first",
+    )
+    app_channel, _ = manager.open(
+        session_key="mcp:app",
+        subject="user",
+        scopes=tuple(ALL_OAUTH_SCOPES),
+        live_id=channel.live_id,
+        logical_session_id="s_first",
+        app_reattach=True,
+    )
+    assert app_channel is channel
+
+    rebound = manager.bind_logical_session("mcp:model", "s_second", "user")
+
+    assert rebound is channel
+    assert manager.active_for_session("mcp:model") is channel
+    assert manager.active_for_session("mcp:app") is channel
+    assert channel.logical_session_id == "s_second"
+    assert "s_first" not in manager._logical_session_channels
+    assert manager._logical_session_channels["s_second"] == channel.live_id
+
+    reconnected, _ = manager.open(
+        session_key="mcp:app-after-remount",
+        subject="user",
+        scopes=tuple(ALL_OAUTH_SCOPES),
+        live_id=channel.live_id,
+        logical_session_id="s_first",
+        app_reattach=True,
+    )
+    assert reconnected is channel
+    assert reconnected.logical_session_id == "s_second"
+    assert manager.active_for_session("mcp:app-after-remount") is channel
+
+
+def test_exact_logical_binding_consumes_only_its_recovery_claim():
+    manager = LiveChannelManager()
+    first, _ = manager.open(
+        session_key="mcp:app-a",
+        subject="user",
+        scopes=tuple(ALL_OAUTH_SCOPES),
+        live_id="stale-a",
+        logical_session_id="s_first",
+        app_reattach=True,
+    )
+    second, _ = manager.open(
+        session_key="mcp:app-b",
+        subject="user",
+        scopes=tuple(ALL_OAUTH_SCOPES),
+        live_id="stale-b",
+        logical_session_id="s_second",
+        app_reattach=True,
+    )
+    assert len(manager._recovery_claims["user"]) == 2
+
+    attached = manager.bind_logical_session("mcp:model-a", "s_first", "user")
+
+    assert attached is first
+    assert set(manager._recovery_claims["user"]) == {second.live_id}
+    assert manager.claim_recovery_session("mcp:unrelated", "user") is second
+    assert manager.active_for_session("mcp:unrelated") is second
+
+
 def test_live_workspace_logical_session_binding_rejects_principal_reuse():
     manager = LiveChannelManager()
     channel, _ = manager.open(
