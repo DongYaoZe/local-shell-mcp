@@ -25,7 +25,6 @@ from local_shell_mcp.human_ui import (
     UI_MAX_ROWS,
     _authorize_websocket,
     _bounded_int,
-    _decode_tmux_control_output,
     _idle_timeout_remaining,
     _normalize_file_entries,
     _parent_path,
@@ -83,9 +82,10 @@ def test_webui_visual_regressions_are_packaged():
     assert ".files-layout{" in css
     assert ".file-parent-panel" in css
     assert ".terminal-touchbar{" in css
-    native_scrollbar_rule = css.split(".persistent-terminal .xterm-viewport{", 1)[1].split("}", 1)[0]
-    assert "overflow-y:scroll!important" in native_scrollbar_rule
-    assert "scrollbar-width:auto" in native_scrollbar_rule
+    assert ".terminal-scrollbar{" in css
+    assert ".terminal-scrollbar-spacer{" in css
+    assert "overflow-y:scroll" in css
+    assert 'data-role="scrollbar"' in script
     assert ".audit-layout{" in css
     assert "Call result" in script
     assert "Call input" in script
@@ -93,12 +93,6 @@ def test_webui_visual_regressions_are_packaged():
     assert "Persistent terminal" in script
     assert "Loading terminals" in script
     assert "row-menu" not in script
-
-
-def test_tmux_control_output_decodes_octal_escapes():
-    payload = b"hello\\015\\012\\033[31mred\\134tail"
-
-    assert _decode_tmux_control_output(payload) == b"hello\r\n\x1b[31mred\\tail"
 
 
 def test_ui_assets_reject_symlinks_outside_asset_root(tmp_path, monkeypatch):
