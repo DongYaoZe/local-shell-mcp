@@ -133,7 +133,8 @@ def _write_payload(value: Any) -> dict[str, Any]:
             "preview": _preview_audit_value(value),
         }
     path = _payload_path(digest)
-    if not path.exists():
+    created = not path.exists()
+    if created:
         temporary = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
         try:
             _write_private_bytes(
@@ -144,7 +145,8 @@ def _write_payload(value: Any) -> dict[str, Any]:
         finally:
             with contextlib.suppress(OSError):
                 temporary.unlink(missing_ok=True)
-    _AUDIT_PRESSURE_BACKOFF_UNTIL.pop(os.fspath(get_settings().audit_log_path), None)
+    if created:
+        _AUDIT_PRESSURE_BACKOFF_UNTIL.pop(os.fspath(get_settings().audit_log_path), None)
     return {
         _AUDIT_PAYLOAD_MARKER: {
             "version": _AUDIT_PAYLOAD_VERSION,
@@ -235,15 +237,15 @@ def _collect_payload_ids(record: Any, destination: set[str]) -> None:
             destination.add(_payload_digest(value))
 
 
-def _prune_payload_store(log_path: Path) -> None:
+def _prune_payload_store(log_path: Path) -> bool:
     directory = _payload_directory_path(log_path)
     if not directory.is_dir():
-        return
+        return True
     referenced: set[str] = set()
     try:
         lines = log_path.read_text(encoding="utf-8", errors="ignore").splitlines()
     except OSError:
-        return
+        return False
     for line in lines:
         with contextlib.suppress(json.JSONDecodeError):
             _collect_payload_ids(json.loads(line), referenced)
@@ -265,6 +267,7 @@ def _prune_payload_store(log_path: Path) -> None:
             temporary.unlink()
         except OSError:
             continue
+    return True
 
 
 def _payload_file_size(digest: str, log_path: Path | None = None) -> int:
@@ -459,20 +462,19 @@ def _select_retention_lines(
     return selected
 
 
-def _enforce_audit_storage_limit(log_path: Path, max_bytes: int) -> None:
+def _enforce_audit_storage_limit(log_path: Path, max_bytes: int) -> bool:
     if max_bytes <= 0 or not log_path.exists():
-        return
+        return True
     try:
         raw_lines = log_path.read_bytes().splitlines(keepends=True)
     except OSError:
-        return
+        return False
 
     parsed, all_referenced = _parse_retention_lines(raw_lines)
     payload_sizes = {digest: _payload_file_size(digest, log_path) for digest in all_referenced}
     selected = _select_retention_lines(parsed, payload_sizes, max_bytes)
     if selected is None:
-        _prune_payload_store(log_path)
-        return
+        return _prune_payload_store(log_path)
 
     temporary = log_path.with_name(f".{log_path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
     try:
@@ -481,7 +483,7 @@ def _enforce_audit_storage_limit(log_path: Path, max_bytes: int) -> None:
     finally:
         with contextlib.suppress(OSError):
             temporary.unlink(missing_ok=True)
-    _prune_payload_store(log_path)
+    return _prune_payload_store(log_path)
 
 
 def _enforce_state_audit_storage_limit(max_bytes: int) -> None:
@@ -598,9 +600,10 @@ def audit(event: str, **fields: Any) -> None:
         retention_needed = _audit_storage_limit_exceeded(path, settings.max_audit_log_bytes)
         maintenance_due = settings.max_audit_log_bytes > 0 and _audit_maintenance_due(path)
         if retention_needed or maintenance_due:
-            _enforce_audit_storage_limit(path, settings.max_audit_log_bytes)
-            _mark_audit_maintenance(path)
-            _update_audit_pressure_backoff(path, settings.max_audit_log_bytes)
+            maintained = _enforce_audit_storage_limit(path, settings.max_audit_log_bytes)
+            if maintained:
+                _mark_audit_maintenance(path)
+                _update_audit_pressure_backoff(path, settings.max_audit_log_bytes)
 
 
 _TOOL_OPERATION_GROUPS: dict[str, frozenset[str]] = {

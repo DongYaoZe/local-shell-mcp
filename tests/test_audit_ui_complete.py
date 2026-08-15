@@ -471,10 +471,10 @@ def test_audit_skips_full_retention_scan_while_storage_is_below_budget(tmp_path,
     calls = 0
     original = audit_module._enforce_audit_storage_limit
 
-    def track_enforcement(path: Path, max_bytes: int) -> None:
+    def track_enforcement(path: Path, max_bytes: int) -> bool:
         nonlocal calls
         calls += 1
-        original(path, max_bytes)
+        return original(path, max_bytes)
 
     monkeypatch.setattr(audit_module, "_enforce_audit_storage_limit", track_enforcement)
 
@@ -494,10 +494,10 @@ def test_audit_periodically_runs_payload_housekeeping_below_budget(tmp_path, mon
     calls = 0
     original = audit_module._enforce_audit_storage_limit
 
-    def track_enforcement(path: Path, max_bytes: int) -> None:
+    def track_enforcement(path: Path, max_bytes: int) -> bool:
         nonlocal calls
         calls += 1
-        original(path, max_bytes)
+        return original(path, max_bytes)
 
     monkeypatch.setattr(audit_module, "_enforce_audit_storage_limit", track_enforcement)
 
@@ -518,10 +518,10 @@ def test_audit_pressure_backoff_avoids_repeated_scans_for_recent_orphans(
     calls = 0
     original = audit_module._enforce_audit_storage_limit
 
-    def track_enforcement(path: Path, max_bytes: int) -> None:
+    def track_enforcement(path: Path, max_bytes: int) -> bool:
         nonlocal calls
         calls += 1
-        original(path, max_bytes)
+        return original(path, max_bytes)
 
     monkeypatch.setattr(audit_module, "_enforce_audit_storage_limit", track_enforcement)
 
@@ -555,16 +555,72 @@ def test_new_payload_clears_pressure_backoff_and_rechecks_budget(tmp_path, monke
     calls = 0
     original = audit_module._enforce_audit_storage_limit
 
-    def track_enforcement(path: Path, max_bytes: int) -> None:
+    def track_enforcement(path: Path, max_bytes: int) -> bool:
         nonlocal calls
         calls += 1
-        original(path, max_bytes)
+        return original(path, max_bytes)
 
     monkeypatch.setattr(audit_module, "_enforce_audit_storage_limit", track_enforcement)
 
     audit_module.audit("large_event", payload=os.urandom(18_000).hex())
 
     assert calls == 1
+
+
+def test_reused_payload_preserves_pressure_backoff(tmp_path, monkeypatch):
+    _configure(tmp_path, monkeypatch)
+    monkeypatch.setenv("LOCAL_SHELL_MCP_MAX_AUDIT_LOG_BYTES", "12000")
+    get_settings.cache_clear()
+    log_path = get_settings().audit_log_path
+    key = os.fspath(log_path)
+    value = os.urandom(18_000).hex()
+    audit_module._write_payload(value)
+    audit_module._AUDIT_LAST_MAINTENANCE[key] = time.monotonic()
+    audit_module._AUDIT_PRESSURE_BACKOFF_UNTIL[key] = time.monotonic() + 300
+    calls = 0
+    original = audit_module._enforce_audit_storage_limit
+
+    def track_enforcement(path: Path, max_bytes: int) -> bool:
+        nonlocal calls
+        calls += 1
+        return original(path, max_bytes)
+
+    monkeypatch.setattr(audit_module, "_enforce_audit_storage_limit", track_enforcement)
+
+    audit_module.audit("reused_payload", payload=value)
+
+    assert calls == 0
+    assert audit_module._audit_pressure_backoff_active(log_path) is True
+
+
+def test_failed_retention_pass_is_retried_without_backoff(tmp_path, monkeypatch):
+    _configure(tmp_path, monkeypatch)
+    monkeypatch.setenv("LOCAL_SHELL_MCP_MAX_AUDIT_LOG_BYTES", "12000")
+    get_settings.cache_clear()
+    log_path = get_settings().audit_log_path
+    key = os.fspath(log_path)
+    original_read_bytes = Path.read_bytes
+    failures = 0
+
+    def fail_once(path: Path) -> bytes:
+        nonlocal failures
+        if path == log_path and failures == 0:
+            failures += 1
+            raise OSError("transient audit read failure")
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", fail_once)
+
+    audit_module.audit("large_event", payload=os.urandom(18_000).hex())
+
+    assert failures == 1
+    assert key not in audit_module._AUDIT_LAST_MAINTENANCE
+    assert key not in audit_module._AUDIT_PRESSURE_BACKOFF_UNTIL
+
+    audit_module.audit("retry_event")
+
+    assert key in audit_module._AUDIT_LAST_MAINTENANCE
+    assert audit_module._audit_pressure_backoff_active(log_path) is True
 
 
 def test_audit_enters_full_retention_scan_only_after_storage_exceeds_budget(
@@ -576,10 +632,10 @@ def test_audit_enters_full_retention_scan_only_after_storage_exceeds_budget(
     calls = 0
     original = audit_module._enforce_audit_storage_limit
 
-    def track_enforcement(path: Path, max_bytes: int) -> None:
+    def track_enforcement(path: Path, max_bytes: int) -> bool:
         nonlocal calls
         calls += 1
-        original(path, max_bytes)
+        return original(path, max_bytes)
 
     monkeypatch.setattr(audit_module, "_enforce_audit_storage_limit", track_enforcement)
 
