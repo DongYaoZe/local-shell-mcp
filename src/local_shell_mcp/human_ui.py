@@ -2137,7 +2137,14 @@ async def ui_shell_websocket(websocket: WebSocket) -> None:
     last_activity = loop.time()
     send_lock = asyncio.Lock()
     scrollback_updated_at = 0.0
-    scrollback_owned_copy_mode = False
+    scrollback_initial_copy_mode: bool | None = None
+    if scrollback_enabled:
+        try:
+            initial_scrollback = await _tmux_scrollback_state(process)
+            if initial_scrollback.get("supported"):
+                scrollback_initial_copy_mode = bool(initial_scrollback.get("copy_mode"))
+        except Exception:
+            _LOGGER.debug("Unable to read initial Native WebUI scrollback state", exc_info=True)
 
     def live_credential_valid() -> bool:
         if not live_id or not live_token:
@@ -2187,7 +2194,7 @@ async def ui_shell_websocket(websocket: WebSocket) -> None:
             await send_scrollback_state()
 
     async def receiver() -> None:
-        nonlocal cols, rows, last_activity, scrollback_owned_copy_mode
+        nonlocal cols, rows, last_activity
         idle_timeout = max(0, settings.ui_terminal_idle_timeout_s)
 
         while True:
@@ -2252,17 +2259,12 @@ async def ui_shell_websocket(websocket: WebSocket) -> None:
                     state = await _tmux_scrollback_state(process)
                     current = int(state["position"])
                     history = int(state["history"])
-                    was_copy_mode = bool(state.get("copy_mode"))
                     if "position" in control:
                         requested = int(control.get("position") or 0)
                     else:
                         requested = current + int(control.get("offset") or 0)
                     requested = max(0, min(requested, history))
                     state = await _tmux_scroll_to(process, requested)
-                    if requested > 0 and not was_copy_mode:
-                        scrollback_owned_copy_mode = True
-                    elif requested == 0:
-                        scrollback_owned_copy_mode = False
                 except (TypeError, ValueError):
                     await websocket.close(code=4400, reason="Invalid scrollback request")
                     return
@@ -2293,9 +2295,11 @@ async def ui_shell_websocket(websocket: WebSocket) -> None:
         pass
     finally:
         _ACTIVE_UI_TERMINALS.discard(marker)
-        if scrollback_owned_copy_mode:
+        if scrollback_initial_copy_mode is False:
             try:
-                await _tmux_scroll_to(process, 0)
+                final_scrollback = await _tmux_scrollback_state(process)
+                if final_scrollback.get("copy_mode"):
+                    await _tmux_scroll_to(process, 0)
             except Exception:
                 _LOGGER.debug("Unable to leave Native WebUI tmux copy mode", exc_info=True)
         await process.close()
