@@ -2137,6 +2137,7 @@ async def ui_shell_websocket(websocket: WebSocket) -> None:
     last_activity = loop.time()
     send_lock = asyncio.Lock()
     scrollback_updated_at = 0.0
+    scrollback_owned_copy_mode = False
 
     def live_credential_valid() -> bool:
         if not live_id or not live_token:
@@ -2186,7 +2187,7 @@ async def ui_shell_websocket(websocket: WebSocket) -> None:
             await send_scrollback_state()
 
     async def receiver() -> None:
-        nonlocal cols, rows, last_activity
+        nonlocal cols, rows, last_activity, scrollback_owned_copy_mode
         idle_timeout = max(0, settings.ui_terminal_idle_timeout_s)
 
         while True:
@@ -2251,12 +2252,17 @@ async def ui_shell_websocket(websocket: WebSocket) -> None:
                     state = await _tmux_scrollback_state(process)
                     current = int(state["position"])
                     history = int(state["history"])
+                    was_copy_mode = bool(state.get("copy_mode"))
                     if "position" in control:
                         requested = int(control.get("position") or 0)
                     else:
                         requested = current + int(control.get("offset") or 0)
                     requested = max(0, min(requested, history))
                     state = await _tmux_scroll_to(process, requested)
+                    if requested > 0 and not was_copy_mode:
+                        scrollback_owned_copy_mode = True
+                    elif requested == 0:
+                        scrollback_owned_copy_mode = False
                 except (TypeError, ValueError):
                     await websocket.close(code=4400, reason="Invalid scrollback request")
                     return
@@ -2287,6 +2293,11 @@ async def ui_shell_websocket(websocket: WebSocket) -> None:
         pass
     finally:
         _ACTIVE_UI_TERMINALS.discard(marker)
+        if scrollback_owned_copy_mode:
+            try:
+                await _tmux_scroll_to(process, 0)
+            except Exception:
+                _LOGGER.debug("Unable to leave Native WebUI tmux copy mode", exc_info=True)
         await process.close()
         with contextlib.suppress(Exception):
             await websocket.close()

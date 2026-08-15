@@ -1273,13 +1273,25 @@ async def test_native_shell_websocket_exposes_opt_in_tmux_scrollback(tmp_path, m
         return Process()
 
     async def fake_state(process):
-        return {"type": "scrollback", "supported": True, "history": 100, "position": 10}
+        return {
+            "type": "scrollback",
+            "supported": True,
+            "history": 100,
+            "position": 10,
+            "copy_mode": False,
+        }
 
     requested = []
 
     async def fake_scroll(process, position):
         requested.append(position)
-        return {"type": "scrollback", "supported": True, "history": 100, "position": position}
+        return {
+            "type": "scrollback",
+            "supported": True,
+            "history": 100,
+            "position": position,
+            "copy_mode": position > 0,
+        }
 
     monkeypatch.setattr(ui, "_authorize_websocket", lambda websocket: True)
     monkeypatch.setattr(ui, "_spawn_shell_process", fake_spawn)
@@ -1290,15 +1302,103 @@ async def test_native_shell_websocket_exposes_opt_in_tmux_scrollback(tmp_path, m
 
     await ui.ui_shell_websocket(socket)
 
-    assert requested == [15, 42]
+    assert requested == [15, 42, 0]
     assert socket.sent_text[0] == {
         "type": "scrollback",
         "supported": True,
         "history": 100,
         "position": 10,
+        "copy_mode": False,
     }
     assert any(message["position"] == 15 for message in socket.sent_text)
     assert any(message["position"] == 42 for message in socket.sent_text)
+
+
+@pytest.mark.asyncio
+async def test_native_shell_websocket_preserves_preexisting_tmux_copy_mode(tmp_path, monkeypatch):
+    _configure(tmp_path, monkeypatch)
+
+    class Process:
+        _tmux_session_id = "demo"
+
+        async def read(self):
+            await asyncio.sleep(0.05)
+            return b""
+
+        async def write(self, data):
+            return None
+
+        async def resize(self, cols, rows):
+            return None
+
+        async def exit_code(self):
+            return None
+
+        async def close(self):
+            return None
+
+    class Socket:
+        headers = {"sec-websocket-protocol": "lsm-ui"}
+        query_params = {"machine": "local", "session_id": "demo", "scrollback": "1"}
+
+        def __init__(self):
+            self.messages = [
+                {
+                    "type": "websocket.receive",
+                    "text": json.dumps({"type": "scrollback", "position": 20}),
+                },
+                {"type": "websocket.disconnect"},
+            ]
+
+        async def accept(self, subprotocol=None):
+            return None
+
+        async def close(self, code=1000, reason=""):
+            return None
+
+        async def send_bytes(self, data):
+            return None
+
+        async def send_text(self, data):
+            return None
+
+        async def receive(self):
+            await asyncio.sleep(0)
+            return self.messages.pop(0)
+
+    async def fake_spawn(*args):
+        return Process()
+
+    async def fake_state(process):
+        return {
+            "type": "scrollback",
+            "supported": True,
+            "history": 100,
+            "position": 10,
+            "copy_mode": True,
+        }
+
+    requested = []
+
+    async def fake_scroll(process, position):
+        requested.append(position)
+        return {
+            "type": "scrollback",
+            "supported": True,
+            "history": 100,
+            "position": position,
+            "copy_mode": True,
+        }
+
+    monkeypatch.setattr(ui, "_authorize_websocket", lambda websocket: True)
+    monkeypatch.setattr(ui, "_spawn_shell_process", fake_spawn)
+    monkeypatch.setattr(ui, "_tmux_scrollback_state", fake_state)
+    monkeypatch.setattr(ui, "_tmux_scroll_to", fake_scroll)
+    ui._ACTIVE_UI_TERMINALS.clear()
+
+    await ui.ui_shell_websocket(Socket())
+
+    assert requested == [20]
 
 
 @pytest.mark.asyncio

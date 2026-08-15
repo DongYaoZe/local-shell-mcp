@@ -378,7 +378,8 @@ export class TerminalsController extends BaseController {
   }
 
   private onTerminalWheel(event: WheelEvent): void {
-    if (!this.scrollbackSupported || event.deltaY === 0) return
+    const terminal = this.terminal
+    if (!this.scrollbackSupported || !terminal || terminal.modes.mouseTrackingMode !== "none" || event.deltaY === 0) return
     event.preventDefault()
     event.stopPropagation()
     const magnitude = Math.max(1, Math.min(24, Math.ceil(Math.abs(event.deltaY) / 24)))
