@@ -181,7 +181,7 @@ class LogicalSession:
         return next((run for run in self.runs if run.run_id == self.active_run_id), None)
 
     def public_state(
-        self, *, recent_activity: int = 30, in_flight_calls: int = 0
+        self, *, recent_activity: int = SESSION_ACTIVITY_LIMIT, in_flight_calls: int = 0
     ) -> dict[str, Any]:
         active = self.active_run()
         return {
@@ -200,7 +200,7 @@ class LogicalSession:
                 else None
             ),
             "recent_activity": (
-                list(self.activity)[-min(recent_activity, 100) :]
+                list(self.activity)[-min(recent_activity, SESSION_ACTIVITY_LIMIT) :]
                 if recent_activity > 0
                 else []
             ),
@@ -693,7 +693,7 @@ class SessionRuntimeManager:
         return len(session.in_flight_calls)
 
     def _public_state_locked(
-        self, session: LogicalSession, *, recent_activity: int = 30
+        self, session: LogicalSession, *, recent_activity: int = SESSION_ACTIVITY_LIMIT
     ) -> dict[str, Any]:
         return session.public_state(
             recent_activity=recent_activity,

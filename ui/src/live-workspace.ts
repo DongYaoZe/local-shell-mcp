@@ -11,6 +11,7 @@ import {
   activityEventKey,
   activityIntent,
   basename,
+  coalesceActivityEvents,
   continuationCountdownState,
   escapeHtml,
   eventDetail,
@@ -330,20 +331,19 @@ function operationalEvents(): LiveEvent[] {
 }
 
 function currentRunningEvent(): LiveEvent | null {
-  const visible = operationalEvents()
-  const completed = new Set(visible.filter((event) => event.type === "tool.completed" || event.type === "tool.failed").map((event) => String(event.data.call_id || "")))
+  const visible = coalesceActivityEvents(operationalEvents())
   for (let index = visible.length - 1; index >= 0; index -= 1) {
     const event = visible[index]
-    if (event.type === "tool.started" && !completed.has(String(event.data.call_id || ""))) return event
+    if (event.type === "tool.started") return event
   }
   return null
 }
 
 function latestCompletedSummary(): string {
-  const visible = operationalEvents()
+  const visible = coalesceActivityEvents(operationalEvents())
   for (let index = visible.length - 1; index >= 0; index -= 1) {
     const event = visible[index]
-    if (["tool.completed", "tool.failed", "human.action"].includes(event.type)) return activityIntent(event)
+    if (["tool.completed", "tool.failed", "tool.cancelled", "tool.blocked", "human.action"].includes(event.type)) return activityIntent(event)
   }
   return connected ? "Ready" : "Waiting for connection"
 }
@@ -497,8 +497,8 @@ function planProgress(): { completed: number; total: number; percent: number; ac
 }
 
 function renderActivity(): void {
-  const visible = durableSessionEvents()
-  const recent = [...visible].reverse().slice(0, 80)
+  const visible = coalesceActivityEvents(durableSessionEvents())
+  const recent = [...visible].reverse().slice(0, 200)
   const running = currentRunningEvent()
   const progress = planProgress()
   const sessionStatus = logicalSession?.status || (config?.sessionId ? "active" : "unattached")

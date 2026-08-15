@@ -3,6 +3,7 @@ import {
   activityDestination,
   activityEventKey,
   activityIntent,
+  coalesceActivityEvents,
   continuationCountdownState,
   eventDetail,
   eventTitle,
@@ -75,23 +76,70 @@ describe("live workspace utilities", () => {
     expect(joinPath("C:\\work", "src")).toBe("C:\\work\\src")
   })
 
-  test("activity row identity stays unique across events from one tool call", () => {
+  test("activity lifecycle events coalesce into one stable tool row", () => {
     const started: LiveEvent = {
       seq: 40,
       ts: 1,
       type: "tool.started",
       actor: "agent",
-      data: { tool: "run_shell_tool", call_id: "call-1" },
+      data: { tool: "run_shell_tool", call_id: "call-1", cwd: "/workspace" },
     }
     const completed: LiveEvent = {
       seq: 41,
       ts: 2,
       type: "tool.completed",
       actor: "agent",
-      data: { tool: "run_shell_tool", call_id: "call-1" },
+      data: { tool: "run_shell_tool", call_id: "call-1", duration_ms: 1000 },
     }
 
-    expect(activityEventKey(started)).not.toBe(activityEventKey(completed))
+    const rows = coalesceActivityEvents([started, completed])
+    expect(rows).toHaveLength(1)
+    expect(rows[0]?.type).toBe("tool.completed")
+    expect(rows[0]?.ts).toBe(1)
+    expect(rows[0]?.data.cwd).toBe("/workspace")
+    expect(rows[0]?.data.duration_ms).toBe(1000)
+    expect(rows[0]?.data.started_at).toBe(1)
+    expect(rows[0]?.data.finished_at).toBe(2)
+    expect(activityEventKey(started)).toBe(activityEventKey(completed))
+    expect(activityEventKey(rows[0]!)).toBe("call:call-1")
+  })
+
+  test("activity coalescing preserves rolling-window boundary completions", () => {
+    const oldestCompletion: LiveEvent = {
+      seq: 201,
+      ts: 201,
+      type: "tool.completed",
+      actor: "agent",
+      data: { tool: "read_file", call_id: "aged-out-start", path: "/workspace/old.txt", duration_ms: 500 },
+    }
+    const started: LiveEvent = {
+      seq: 202,
+      ts: 202,
+      type: "tool.started",
+      actor: "agent",
+      data: { tool: "run_shell_tool", call_id: "paired", cwd: "/workspace" },
+    }
+    const completed: LiveEvent = {
+      seq: 203,
+      ts: 203,
+      type: "tool.completed",
+      actor: "agent",
+      data: { tool: "run_shell_tool", call_id: "paired", duration_ms: 1000 },
+    }
+    const running: LiveEvent = {
+      seq: 204,
+      ts: 204,
+      type: "tool.started",
+      actor: "agent",
+      data: { tool: "grep_search", call_id: "still-running" },
+    }
+
+    const rows = coalesceActivityEvents([oldestCompletion, started, completed, running])
+    expect(rows).toHaveLength(3)
+    expect(rows[0]).toEqual(oldestCompletion)
+    expect(rows[1]?.type).toBe("tool.completed")
+    expect(rows[1]?.data.call_id).toBe("paired")
+    expect(rows[2]).toEqual(running)
   })
 
   test("activity summaries stay operational", () => {

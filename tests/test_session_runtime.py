@@ -15,6 +15,7 @@ from local_shell_mcp.session_runtime import (
     PLAN_OBJECTIVE_LIMIT,
     PLAN_STEP_ID_LIMIT,
     PLAN_STEP_TEXT_LIMIT,
+    SESSION_ACTIVITY_LIMIT,
     SESSION_HISTORY_LIMIT_PER_PRINCIPAL,
     SESSION_RUN_HISTORY_LIMIT,
     SessionRuntimeManager,
@@ -64,6 +65,37 @@ def test_session_progress_and_plan_survive_manager_reload(tmp_path):
     assert state["progress"]["findings"] == ["Live channels must not own plans"]
     assert state["plan"]["objective"] == "Ship the change"
     assert any(event["type"] == "session.reported" for event in state["recent_activity"])
+
+
+def test_session_public_state_exposes_full_rolling_activity_window(tmp_path):
+    state_dir = tmp_path / ".state"
+    manager = SessionRuntimeManager(state_dir)
+    started = manager.manage(
+        "mcp:activity",
+        "user",
+        action="start",
+        objective="Exercise the activity window",
+    )
+    session_id = started["session_id"]
+    run_id = started["active_run"]["run_id"]
+
+    for index in range(SESSION_ACTIVITY_LIMIT + 5):
+        manager.manage(
+            "mcp:activity",
+            "user",
+            action="report",
+            session_run_id=run_id,
+            summary=f"checkpoint {index}",
+        )
+
+    state = manager.get(session_id)
+    activity = state["recent_activity"]
+    assert len(activity) == SESSION_ACTIVITY_LIMIT
+    assert activity[-1]["data"]["summary"] == f"checkpoint {SESSION_ACTIVITY_LIMIT + 4}"
+    assert activity[0]["seq"] == activity[-1]["seq"] - SESSION_ACTIVITY_LIMIT + 1
+
+    restored = SessionRuntimeManager(state_dir).get(session_id)
+    assert len(restored["recent_activity"]) == SESSION_ACTIVITY_LIMIT
 
 
 def test_resume_takeover_supersedes_previous_agent_run(tmp_path):

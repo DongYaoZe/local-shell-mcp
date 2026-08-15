@@ -157,7 +157,52 @@ export function formatCountdown(seconds: number): string {
   return `${minutes}:${String(remainder).padStart(2, "0")}`
 }
 
+const TOOL_TERMINAL_EVENTS = new Set(["tool.completed", "tool.failed", "tool.cancelled", "tool.blocked"])
+
+export function coalesceActivityEvents(events: LiveEvent[]): LiveEvent[] {
+  const rows: LiveEvent[] = []
+  const pendingByCallId = new Map<string, number>()
+
+  for (const event of events) {
+    const callId = String(event.data.call_id || "")
+    if (event.type === "tool.started") {
+      rows.push(event)
+      if (callId) pendingByCallId.set(callId, rows.length - 1)
+      continue
+    }
+
+    if (callId && TOOL_TERMINAL_EVENTS.has(event.type)) {
+      const pendingIndex = pendingByCallId.get(callId)
+      if (pendingIndex !== undefined) {
+        const started = rows[pendingIndex]
+        rows[pendingIndex] = {
+          ...event,
+          ts: started.ts,
+          data: {
+            ...started.data,
+            ...event.data,
+            started_at: started.ts,
+            finished_at: event.ts,
+          },
+        }
+        pendingByCallId.delete(callId)
+        continue
+      }
+    }
+
+    // A rolling activity window may begin with a completion whose matching
+    // start has already aged out. Keep that terminal event as a valid row.
+    rows.push(event)
+  }
+
+  return rows
+}
+
 export function activityEventKey(event: LiveEvent): string {
+  const callId = String(event.data.call_id || "")
+  if (callId && (event.type === "tool.started" || TOOL_TERMINAL_EVENTS.has(event.type))) {
+    return `call:${callId}`
+  }
   return String(event.seq)
 }
 
@@ -218,6 +263,7 @@ export function eventTitle(event: LiveEvent): string {
   if (event.type === "tool.started") return tool ? `Running ${tool}` : "Tool started"
   if (event.type === "tool.completed") return tool ? `${tool} completed` : "Tool completed"
   if (event.type === "tool.failed") return tool ? `${tool} failed` : "Tool failed"
+  if (event.type === "tool.cancelled") return tool ? `${tool} cancelled` : "Tool cancelled"
   if (event.type === "tool.blocked") return tool ? `${tool} blocked` : "Tool blocked"
   if (event.type === "channel.opened") return "Live workspace connected"
   if (event.type === "human.inspected_diff") return "Human inspected diff"
@@ -259,6 +305,7 @@ export function eventDetail(event: LiveEvent): string {
 
 export function eventTone(event: LiveEvent): "success" | "danger" | "warning" | "info" | "muted" {
   if (event.type === "tool.failed") return "danger"
+  if (event.type === "tool.cancelled") return "warning"
   if (event.type === "tool.blocked") return "warning"
   if (event.type === "tool.completed") return "success"
   if (event.type === "tool.started") return "info"
