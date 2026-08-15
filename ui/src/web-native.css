@@ -135,7 +135,11 @@
 .terminal-stage-actions { display: flex; align-items: center; justify-content: flex-end; gap: 5px; flex-wrap: wrap; }
 .persistent-terminal { grid-row: 2; grid-column: 1; min-width: 0; min-height: 0; padding: 9px 10px 5px; overflow: hidden; }
 .persistent-terminal .xterm { height: 100%; }
-.persistent-terminal .xterm-viewport { scrollbar-width: thin; scrollbar-color: #34415a transparent; }
+.persistent-terminal .xterm-viewport { overflow-y: scroll !important; scrollbar-width: auto; scrollbar-color: #4a5872 #0b1220; }
+.persistent-terminal .xterm-viewport::-webkit-scrollbar { width: 11px; }
+.persistent-terminal .xterm-viewport::-webkit-scrollbar-track { background: #0b1220; }
+.persistent-terminal .xterm-viewport::-webkit-scrollbar-thumb { background: #4a5872; border: 2px solid #0b1220; border-radius: 8px; }
+.persistent-terminal .xterm-viewport::-webkit-scrollbar-thumb:hover { background: #60708f; }
 .terminal-overlay { z-index: 3; grid-row: 2; grid-column: 1; min-width: 0; min-height: 0; display: grid; place-items: center; padding: 20px; color: #8491a6; background: rgba(8,13,24,.9); font-size: 12px; text-align: center; }
 .terminal-overlay[hidden] { display: none; }
 .command-dock { display: grid; grid-template-columns: auto minmax(0,1fr) auto; gap: 8px; align-items: center; min-height: 43px; padding: 6px 8px; color: #7a89a0; background: #111a2a; border-top: 1px solid #263249; }

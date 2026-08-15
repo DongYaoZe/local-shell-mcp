@@ -44,7 +44,15 @@ from .oauth import ALL_OAUTH_SCOPES
 from .remote import remote_manager
 from .settings import get_settings
 from .shell_environment import subprocess_env
-from .shell_ops import kill_shell, list_shells, read_shell, resize_shell, send_shell, start_shell
+from .shell_ops import (
+    kill_shell,
+    list_shells,
+    read_shell,
+    resize_shell,
+    send_shell,
+    start_shell,
+    tmux,
+)
 from .tmux_helper import resolve_tmux, tmux_socket_name
 from .todo_ops import TodoConflictError, todo_read, todo_write
 from .tui_runtime import materialize_embedded_tui
@@ -1740,6 +1748,171 @@ class _PollingShellProcess:
         self._closed = True
 
 
+def _decode_tmux_control_output(payload: bytes) -> bytes:
+    """Decode tmux control-mode octal escapes without touching UTF-8 payload bytes."""
+
+    decoded = bytearray()
+    index = 0
+    while index < len(payload):
+        if (
+            payload[index] == 0x5C
+            and index + 3 < len(payload)
+            and all(0x30 <= value <= 0x37 for value in payload[index + 1 : index + 4])
+        ):
+            decoded.append(int(payload[index + 1 : index + 4], 8))
+            index += 4
+            continue
+        decoded.append(payload[index])
+        index += 1
+    return bytes(decoded)
+
+
+class _TmuxControlShellProcess:
+    """Stream a tmux pane through control mode instead of attaching a tmux UI client.
+
+    A normal ``tmux attach-session`` switches xterm.js into the alternate screen and
+    keeps scrollback inside tmux, which leaves the Native WebUI without browser wheel
+    scrolling or a usable scrollbar. Control mode exposes the pane's raw output, so
+    xterm.js remains the terminal emulator and owns its normal scrollback buffer.
+    """
+
+    _SCROLLBACK_LINES = 12_000
+
+    def __init__(
+        self,
+        process: asyncio.subprocess.Process,
+        session_id: str,
+        initial_output: bytes,
+    ):
+        self.process = process
+        self.session_id = session_id
+        self._initial_output = initial_output
+        self._control_lock = asyncio.Lock()
+
+    @classmethod
+    async def create(cls, session_id: str, cols: int, rows: int) -> _TmuxControlShellProcess:
+        selection = resolve_tmux()
+        if selection.path is None:
+            raise RuntimeError("tmux is unavailable")
+        env = subprocess_env()
+        env.update(
+            {
+                "TERM": "xterm-256color",
+                "COLORTERM": "truecolor",
+                "TERM_PROGRAM": "local-shell-mcp-webui",
+            }
+        )
+        process = await asyncio.create_subprocess_exec(
+            selection.path,
+            "-L",
+            tmux_socket_name(),
+            "-C",
+            "attach-session",
+            "-t",
+            f"={session_id}",
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+            env=env,
+            start_new_session=True,
+            limit=8 * 1024 * 1024,
+        )
+        instance = cls(process, session_id, b"")
+        try:
+            await instance.resize(cols, rows)
+            snapshot = await tmux(
+                [
+                    "capture-pane",
+                    "-p",
+                    "-e",
+                    "-t",
+                    session_id,
+                    "-S",
+                    f"-{cls._SCROLLBACK_LINES}",
+                ],
+                bypass_limit=True,
+            )
+            if not snapshot.ok:
+                raise RuntimeError(
+                    snapshot.stderr or snapshot.stdout or "Unable to capture tmux pane"
+                )
+        except BaseException:
+            await instance.close()
+            raise
+        rendered = snapshot.stdout.replace("\r\n", "\n").replace("\r", "\n").replace("\n", "\r\n")
+        instance._initial_output = b"\x1b[2J\x1b[H" + rendered.encode("utf-8", errors="replace")
+        return instance
+
+    async def _send_control(self, command: str) -> None:
+        stdin = self.process.stdin
+        if stdin is None or self.process.returncode is not None:
+            return
+        async with self._control_lock:
+            stdin.write(command.encode("utf-8") + b"\n")
+            await stdin.drain()
+
+    async def read(self) -> bytes:
+        if self._initial_output:
+            initial = self._initial_output
+            self._initial_output = b""
+            return initial
+        stdout = self.process.stdout
+        if stdout is None:
+            return b""
+        while True:
+            line = await stdout.readline()
+            if not line:
+                return b""
+            if line.startswith(b"%output "):
+                parts = line.split(b" ", 2)
+                if len(parts) != 3:
+                    continue
+                payload = parts[2][:-1] if parts[2].endswith(b"\n") else parts[2]
+                decoded = _decode_tmux_control_output(payload)
+                if decoded:
+                    return decoded
+                continue
+            if line.startswith(b"%exit"):
+                with contextlib.suppress(Exception):
+                    await self.process.wait()
+                return b""
+
+    async def write(self, data: bytes) -> None:
+        if not data:
+            return
+        target = shlex.quote(self.session_id)
+        for offset in range(0, len(data), 512):
+            chunk = data[offset : offset + 512]
+            encoded = " ".join(f"{value:02x}" for value in chunk)
+            await self._send_control(f"send-keys -t {target} -H {encoded}")
+
+    async def resize(self, cols: int, rows: int) -> None:
+        target = shlex.quote(self.session_id)
+        columns = max(UI_MIN_COLUMNS, min(UI_MAX_COLUMNS, int(cols)))
+        lines = max(UI_MIN_ROWS, min(UI_MAX_ROWS, int(rows)))
+        await self._send_control(f"resize-window -t {target} -x {columns} -y {lines}")
+        await self._send_control(f"refresh-client -C {columns}x{lines}")
+
+    async def exit_code(self) -> int | None:
+        if self.process.returncode is not None:
+            return int(self.process.returncode)
+        try:
+            return int(await asyncio.wait_for(self.process.wait(), timeout=0.25))
+        except TimeoutError:
+            return None
+
+    async def close(self) -> None:
+        if self.process.returncode is not None:
+            return
+        self.process.terminate()
+        with contextlib.suppress(Exception):
+            await asyncio.wait_for(self.process.wait(), timeout=2)
+        if self.process.returncode is None:
+            self.process.kill()
+            with contextlib.suppress(Exception):
+                await self.process.wait()
+
+
 async def _spawn_shell_process(machine: str, session_id: str, cols: int, rows: int):  # noqa: ANN201
     sessions = await _machine_dispatch(machine, list_shells, "shell_list", {})
     rows_payload = list((sessions or {}).get("sessions") or []) if isinstance(sessions, dict) else []
@@ -1751,30 +1924,13 @@ async def _spawn_shell_process(machine: str, session_id: str, cols: int, rows: i
         raise ValueError(f"Persistent terminal session not found: {session_id}")
 
     backend = str(session.get("backend") or "")
-    if machine == "local" and os.name != "nt" and backend.startswith("tmux-"):
-        selection = resolve_tmux()
-        if selection.path:
-            env = subprocess_env()
-            env.update(
-                {
-                    "TERM": "xterm-256color",
-                    "COLORTERM": "truecolor",
-                    "TERM_PROGRAM": "local-shell-mcp-webui",
-                }
-            )
-            return _UnixPtyProcess(
-                [
-                    selection.path,
-                    "-L",
-                    tmux_socket_name(),
-                    "attach-session",
-                    "-t",
-                    f"={session_id}",
-                ],
-                env,
-                cols,
-                rows,
-            )
+    if (
+        machine == "local"
+        and os.name != "nt"
+        and backend.startswith("tmux-")
+        and resolve_tmux().path
+    ):
+        return await _TmuxControlShellProcess.create(session_id, cols, rows)
     return _PollingShellProcess(machine, session_id, cols, rows)
 
 

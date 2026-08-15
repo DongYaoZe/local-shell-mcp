@@ -29,6 +29,7 @@ export class TerminalsController extends BaseController {
   private manualClose = false
   private loading = false
   private refreshQueued = false
+  private loadedMachine: string | null = null
   private history: string[] = []
   private historyIndex = 0
   private lastSearch = ""
@@ -39,15 +40,16 @@ export class TerminalsController extends BaseController {
     this.machine = this.context.machines().some((item) => item.name === "local") ? "local" : this.context.machines()[0]?.name || "local"
     this.root.innerHTML = `<section class="native-page terminals-page">
       <div class="native-toolbar terminal-toolbar">
-        <div class="toolbar-group"><label>Machine<select data-role="terminal-machine"></select></label><span class="connection-pill" data-role="connection"><i></i><strong>No session</strong></span><span class="terminal-dimensions" data-role="dimensions">—</span></div>
+        <div class="toolbar-group"><label>Machine<select data-role="terminal-machine"></select></label><span class="connection-pill connecting" data-role="connection"><i></i><strong>Loading…</strong></span><span class="terminal-dimensions" data-role="dimensions">—</span></div>
         <div class="toolbar-actions">${button("New", "new-session", { icon: "+", primary: true })}${button("Kill", "kill-session", { danger: true, disabled: true })}${button("Reconnect", "reconnect", { icon: "↻" })}${button("Previous", "previous-session", { disabled: true })}${button("Next", "next-session", { disabled: true })}</div>
       </div>
       <div class="terminal-layout" data-role="terminal-workspace">
         <aside class="native-panel terminal-sessions"><header><div><h3>Sessions</h3><p data-role="session-summary">Loading…</p></div></header><div class="session-list" data-role="sessions"></div></aside>
-        <section class="native-panel terminal-stage-panel"><header><div><h3 data-role="terminal-title">Persistent terminal</h3><p data-role="terminal-subtitle">Select or create a session</p></div><div class="terminal-stage-actions">${button("Copy", "copy")}${button("Paste", "paste")}${button("Find", "search")}${button("Clear", "clear")}${button("Fullscreen", "fullscreen")}<div class="terminal-search" data-role="search-box" hidden><input data-role="search-input" placeholder="Find in terminal"/><button type="button" data-action="search-prev">Previous</button><button type="button" data-action="search-next">Next</button><button type="button" data-action="search-close">Close</button></div></div></header><div class="persistent-terminal" data-role="terminal"></div><div class="terminal-overlay" data-role="terminal-overlay">Select or create a persistent session.</div><nav class="terminal-touchbar"><button type="button" data-sequence="\u001b">Esc</button><button type="button" data-sequence="\t">Tab</button><button type="button" data-sequence="\u001b[D">←</button><button type="button" data-sequence="\u001b[A">↑</button><button type="button" data-sequence="\u001b[B">↓</button><button type="button" data-sequence="\u001b[C">→</button><button type="button" data-sequence="\r">Enter</button><button type="button" data-sequence="\u0003">Ctrl-C</button></nav><form class="command-dock" data-role="command-form"><span>$</span><input data-role="command-input" autocomplete="off" placeholder="Send a command to the attached session"/><button class="native-button primary" type="submit">Send</button></form></section>
+        <section class="native-panel terminal-stage-panel"><header><div><h3 data-role="terminal-title">Persistent terminal</h3><p data-role="terminal-subtitle">Loading terminals…</p></div><div class="terminal-stage-actions">${button("Copy", "copy")}${button("Paste", "paste")}${button("Find", "search")}${button("Clear", "clear")}${button("Fullscreen", "fullscreen")}<div class="terminal-search" data-role="search-box" hidden><input data-role="search-input" placeholder="Find in terminal"/><button type="button" data-action="search-prev">Previous</button><button type="button" data-action="search-next">Next</button><button type="button" data-action="search-close">Close</button></div></div></header><div class="persistent-terminal" data-role="terminal"></div><div class="terminal-overlay" data-role="terminal-overlay">Loading terminals…</div><nav class="terminal-touchbar"><button type="button" data-sequence="\u001b">Esc</button><button type="button" data-sequence="\t">Tab</button><button type="button" data-sequence="\u001b[D">←</button><button type="button" data-sequence="\u001b[A">↑</button><button type="button" data-sequence="\u001b[B">↓</button><button type="button" data-sequence="\u001b[C">→</button><button type="button" data-sequence="\r">Enter</button><button type="button" data-sequence="\u0003">Ctrl-C</button></nav><form class="command-dock" data-role="command-form"><span>$</span><input data-role="command-input" autocomplete="off" placeholder="Send a command to the attached session"/><button class="native-button primary" type="submit">Send</button></form></section>
       </div>
     </section>`
     this.renderMachineSelect()
+    this.showLoadingState()
     this.initializeTerminal()
     this.listen(root, "click", (event) => this.onClick(event))
     this.listen(root, "change", (event) => this.onChange(event))
@@ -125,13 +127,15 @@ export class TerminalsController extends BaseController {
     this.loading = true
     const machines = this.context.machines()
     if (!machines.some((machine) => machine.name === this.machine)) {
-      this.disconnect(true)
+      this.disconnect(false)
       this.machine = machines.some((machine) => machine.name === "local") ? "local" : machines[0]?.name || "local"
       this.sessions = []
       this.selectedSessionId = null
+      this.loadedMachine = null
       this.terminalWrites?.clear()
       this.terminalWrites?.setHeld(false)
       this.terminal?.clear()
+      this.showLoadingState()
     }
     this.renderMachineSelect()
     const requestedMachine = this.machine
@@ -139,6 +143,7 @@ export class TerminalsController extends BaseController {
       const payload = await this.context.api.get<TerminalPayload>(`/terminals${queryString({ machine: requestedMachine })}`)
       if (this.destroyed || requestedMachine !== this.machine || payload.machine !== requestedMachine) return
       this.sessions = payload.sessions
+      this.loadedMachine = requestedMachine
       const previous = this.selectedSessionId
       if (!previous || !this.sessions.some((session) => session.session_id === previous)) this.selectedSessionId = this.sessions[0]?.session_id || null
       this.renderSessions()
@@ -147,6 +152,7 @@ export class TerminalsController extends BaseController {
     } catch (error) {
       if (this.destroyed || requestedMachine !== this.machine) return
       this.context.notify(`Terminals: ${error instanceof Error ? error.message : String(error)}`, "error")
+      if (this.loadedMachine !== requestedMachine) this.showLoadError(error)
     } finally {
       this.loading = false
       if (this.refreshQueued && !this.destroyed) {
@@ -154,6 +160,31 @@ export class TerminalsController extends BaseController {
         void this.refresh()
       }
     }
+  }
+
+  private showLoadingState(): void {
+    const list = this.root.querySelector<HTMLElement>("[data-role=sessions]")
+    const summary = this.root.querySelector<HTMLElement>("[data-role=session-summary]")
+    const title = this.root.querySelector<HTMLElement>("[data-role=terminal-title]")
+    const subtitle = this.root.querySelector<HTMLElement>("[data-role=terminal-subtitle]")
+    if (list) list.innerHTML = '<div class="native-loading">Loading terminals…</div>'
+    if (summary) summary.textContent = "Loading…"
+    if (title) title.textContent = "Persistent terminal"
+    if (subtitle) subtitle.textContent = "Loading terminals…"
+    for (const action of ["kill-session", "previous-session", "next-session", "reconnect", "copy", "paste", "search", "clear"]) {
+      const control = this.root.querySelector<HTMLButtonElement>(`[data-action=${action}]`)
+      if (control) control.disabled = true
+    }
+    this.setConnection("connecting", "Loading…")
+  }
+
+  private showLoadError(error: unknown): void {
+    const detail = error instanceof Error ? error.message : String(error)
+    const list = this.root.querySelector<HTMLElement>("[data-role=sessions]")
+    const summary = this.root.querySelector<HTMLElement>("[data-role=session-summary]")
+    if (list) list.innerHTML = `<div class="native-error">${escapeHtml(detail || "Unable to load terminals")}</div>`
+    if (summary) summary.textContent = "Load failed"
+    this.setConnection("error", "Load failed")
   }
 
   private renderSessions(): void {
@@ -428,14 +459,15 @@ export class TerminalsController extends BaseController {
 
   private switchMachine(machine: string): void {
     if (!machine || machine === this.machine) return
-    this.disconnect(true)
+    this.disconnect(false)
     this.machine = machine
     this.sessions = []
     this.selectedSessionId = null
+    this.loadedMachine = null
     this.terminalWrites?.clear()
     this.terminalWrites?.setHeld(false)
     this.terminal?.clear()
-    this.renderSessions()
+    this.showLoadingState()
     void this.refresh()
   }
 
