@@ -324,9 +324,35 @@ def test_payload_pruning_defers_when_the_log_cannot_be_read(tmp_path, monkeypatc
         raise OSError("temporary read failure")
 
     monkeypatch.setattr(Path, "read_text", fail_read_text)
-    audit_module._prune_payload_store(log_path)
 
+    assert audit_module._prune_payload_store(log_path) is False
     assert payload.exists()
+
+
+def test_payload_pruning_retries_transient_stale_delete_failure(tmp_path, monkeypatch):
+    _configure(tmp_path, monkeypatch)
+    log_path = get_settings().audit_log_path
+    log_path.write_text("{}\n", encoding="utf-8")
+    reference = audit_module._write_payload(os.urandom(18_000).hex())
+    payload = audit_module._payload_path(audit_module._payload_digest(reference))
+    stale = time.time() - audit_module._AUDIT_PAYLOAD_PRUNE_GRACE_S - 1
+    os.utime(payload, (stale, stale))
+    original_unlink = Path.unlink
+    failures = 0
+
+    def fail_once(path: Path, *args, **kwargs):
+        nonlocal failures
+        if path == payload and failures == 0:
+            failures += 1
+            raise OSError("transient delete failure")
+        return original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", fail_once)
+
+    assert audit_module._enforce_audit_storage_limit(log_path, 200_000) is False
+    assert payload.exists()
+    assert audit_module._enforce_audit_storage_limit(log_path, 200_000) is True
+    assert not payload.exists()
 
 
 def test_get_audit_entry_rejects_empty_and_unknown_ids(tmp_path, monkeypatch):

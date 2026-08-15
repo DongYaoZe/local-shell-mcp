@@ -250,6 +250,7 @@ def _prune_payload_store(log_path: Path) -> bool:
         with contextlib.suppress(json.JSONDecodeError):
             _collect_payload_ids(json.loads(line), referenced)
     prune_before = time.time() - _AUDIT_PAYLOAD_PRUNE_GRACE_S
+    complete = True
     for payload in directory.glob("*.json.gz"):
         digest = payload.name.removesuffix(".json.gz")
         if digest in referenced:
@@ -259,15 +260,15 @@ def _prune_payload_store(log_path: Path) -> bool:
                 continue
             payload.unlink()
         except OSError:
-            continue
+            complete = False
     for temporary in directory.glob(".*.tmp"):
         try:
             if temporary.stat().st_mtime > prune_before:
                 continue
             temporary.unlink()
         except OSError:
-            continue
-    return True
+            complete = False
+    return complete
 
 
 def _payload_file_size(digest: str, log_path: Path | None = None) -> int:
