@@ -12,6 +12,7 @@ import {
   formatCountdown,
   isOperationalActivityEvent,
   joinPath,
+  mergeActivityEvents,
   parentPath,
   renderDiffHtml,
   toggleWorkspaceDisplayMode,
@@ -193,6 +194,47 @@ describe("live workspace utilities", () => {
     expect(activityDestination(job)).toBe("jobs")
     expect(activityDestination(shellStarted)).toBe("detail")
     expect(activityDestination(shellReady)).toBe("terminal")
+  })
+
+  test("activity merges durable tool events with live-only human events", () => {
+    const durableStarted: LiveEvent = {
+      seq: 1,
+      ts: 10,
+      type: "session.started",
+      actor: "agent",
+      data: { run_id: "run-1" },
+    }
+    const durableTool: LiveEvent = {
+      seq: 2,
+      ts: 12,
+      type: "tool.completed",
+      actor: "agent",
+      data: { call_id: "call-1", tool: "write_file", path: "a.txt", durable: true },
+    }
+    const liveDuplicate: LiveEvent = {
+      seq: 20,
+      ts: 11.9,
+      type: "tool.completed",
+      actor: "agent",
+      data: { call_id: "call-1", tool: "write_file", path: "a.txt" },
+    }
+    const humanDiff: LiveEvent = {
+      seq: 21,
+      ts: 13,
+      type: "human.inspected_diff",
+      actor: "human",
+      data: { cwd: "." },
+    }
+
+    const merged = mergeActivityEvents(
+      [durableStarted, durableTool],
+      [liveDuplicate, humanDiff],
+    )
+
+    expect(merged).toHaveLength(3)
+    expect(merged[0]).toEqual(durableStarted)
+    expect(merged[1]).toEqual(durableTool)
+    expect(merged[2]).toEqual(humanDiff)
   })
 
   test("diff renderer escapes content and classifies lines", () => {

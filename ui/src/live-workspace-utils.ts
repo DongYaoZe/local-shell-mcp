@@ -178,6 +178,37 @@ export function continuationDispatchStillValid(
 
 const TOOL_TERMINAL_EVENTS = new Set(["tool.completed", "tool.failed", "tool.cancelled", "tool.blocked"])
 
+function mergedActivityKey(event: LiveEvent): string | null {
+  const callId = String(event.data.call_id || "")
+  if (callId && (event.type === "tool.started" || TOOL_TERMINAL_EVENTS.has(event.type))) {
+    return `${event.type}:${callId}`
+  }
+  return null
+}
+
+export function mergeActivityEvents(durable: LiveEvent[], live: LiveEvent[]): LiveEvent[] {
+  const keyed = new Map<string, LiveEvent>()
+  const unkeyed: LiveEvent[] = []
+
+  for (const event of live) {
+    const key = mergedActivityKey(event)
+    if (key) keyed.set(key, event)
+    else unkeyed.push(event)
+  }
+  // Prefer durable copies of agent tool lifecycle events because they survive
+  // reconnects/restarts, while retaining human/live-only channel events.
+  for (const event of durable) {
+    const key = mergedActivityKey(event)
+    if (key) keyed.set(key, event)
+    else unkeyed.push(event)
+  }
+
+  return [...unkeyed, ...keyed.values()].sort((left, right) => {
+    if (left.ts !== right.ts) return left.ts - right.ts
+    return left.seq - right.seq
+  })
+}
+
 export function coalesceActivityEvents(events: LiveEvent[]): LiveEvent[] {
   const rows: LiveEvent[] = []
   const pendingByCallId = new Map<string, number>()

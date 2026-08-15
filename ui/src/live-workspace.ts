@@ -23,6 +23,7 @@ import {
   formatCountdown,
   isOperationalActivityEvent,
   joinPath,
+  mergeActivityEvents,
   toggleWorkspaceDisplayMode,
   parentPath,
   reconnectDelayMs,
@@ -535,7 +536,7 @@ function renderCurrentTab(): void {
 
 function durableSessionEvents(): LiveEvent[] {
   const durable = logicalSession?.recent_activity || []
-  return durable.length ? durable : operationalEvents()
+  return mergeActivityEvents(durable, operationalEvents())
 }
 
 function planProgress(): { completed: number; total: number; percent: number; active: PlanStep | null } {

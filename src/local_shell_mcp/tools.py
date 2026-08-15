@@ -630,13 +630,42 @@ async def _finish_session_tool_activity(
     except Exception as exc:  # noqa: BLE001 - activity failures must not mask tool results.
         persistence_error = f"{type(exc).__name__}: {exc}"
     if persistence_error:
-        audit(
-            "session_activity_persistence_failed",
-            tool=tool_name,
-            call_id=call_id,
-            stage=stage,
-            error=persistence_error,
-        )
+        # Lease cleanup is best-effort telemetry and must never mask the
+        # original tool result or cancellation path.
+        with suppress(Exception):
+            audit(
+                "session_activity_persistence_failed",
+                tool=tool_name,
+                call_id=call_id,
+                stage=stage,
+                error=persistence_error,
+            )
+
+
+async def _await_non_cancellable(awaitable):  # noqa: ANN001, ANN202
+    """Keep an already-started side effect running until it actually settles.
+
+    asyncio cancellation does not stop worker threads created by to_thread().
+    Shielding the tool coroutine ensures its durable Session lease is held until
+    the underlying side effect has really completed, even if the MCP request is
+    cancelled or disconnected in the meantime.
+    """
+
+    task = asyncio.create_task(awaitable)
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                continue
+            except Exception:
+                break
+        if task.done() and not task.cancelled():
+            with suppress(Exception):
+                task.result()
+        raise
 
 
 async def _renew_session_tool_lease(
@@ -733,37 +762,6 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
                     require_run_token=require_run_token,
                     data=live_arguments,
                 )
-                if logical_lease and logical_lease.get("persistence_error"):
-                    audit(
-                        "session_activity_persistence_failed",
-                        tool=__tool_name,
-                        call_id=call_id,
-                        stage="started",
-                        error=str(logical_lease["persistence_error"]),
-                    )
-            if __tool_name not in {"open_live_workspace", "live_workspace_reconnect"}:
-                live_subject = _current_principal_subject()
-                attached_live = None
-                if logical_lease and logical_lease.get("session_id"):
-                    attached_live = live_manager.bind_logical_session(
-                        live_session_key,
-                        str(logical_lease["session_id"]),
-                        live_subject,
-                    )
-                if attached_live is None:
-                    live_manager.claim_recovery_session(live_session_key, live_subject)
-            live_manager.publish_for_session(
-                live_session_key,
-                "tool.started",
-                data={"call_id": call_id, **live_arguments},
-            )
-            audit(
-                "mcp_tool_call_start",
-                call_id=call_id,
-                tool=__tool_name,
-                arguments=arguments,
-                **audit_context,
-            )
             logical_activity_finished = False
             lease_heartbeat_task = (
                 asyncio.create_task(
@@ -778,11 +776,71 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
                 else None
             )
             try:
+                if logical_lease and logical_lease.get("persistence_error"):
+                    audit(
+                        "session_activity_persistence_failed",
+                        tool=__tool_name,
+                        call_id=call_id,
+                        stage="started",
+                        error=str(logical_lease["persistence_error"]),
+                    )
+                if __tool_name not in {"open_live_workspace", "live_workspace_reconnect"}:
+                    live_subject = _current_principal_subject()
+                    attached_live = None
+                    if logical_lease and logical_lease.get("session_id"):
+                        attached_live = live_manager.bind_logical_session(
+                            live_session_key,
+                            str(logical_lease["session_id"]),
+                            live_subject,
+                        )
+                    if attached_live is None:
+                        live_manager.claim_recovery_session(live_session_key, live_subject)
+                live_manager.publish_for_session(
+                    live_session_key,
+                    "tool.started",
+                    data={"call_id": call_id, **live_arguments},
+                )
+                audit(
+                    "mcp_tool_call_start",
+                    call_id=call_id,
+                    tool=__tool_name,
+                    arguments=arguments,
+                    **audit_context,
+                )
+            except BaseException as setup_exc:
+                if lease_heartbeat_task is not None:
+                    lease_heartbeat_task.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await lease_heartbeat_task
+                if logical_lease is not None:
+                    setup_data = {
+                        "call_id": call_id,
+                        "ok": False,
+                        "duration_ms": round((time.monotonic() - started_at) * 1000),
+                        "error": (str(setup_exc) or type(setup_exc).__name__)[:500],
+                        "error_type": type(setup_exc).__name__,
+                        **live_arguments,
+                    }
+                    await _finish_session_tool_activity(
+                        logical_manager,
+                        logical_lease,
+                        "tool.cancelled"
+                        if isinstance(setup_exc, asyncio.CancelledError)
+                        else "tool.failed",
+                        setup_data,
+                        tool_name=__tool_name,
+                        call_id=call_id,
+                        stage="setup",
+                    )
+                raise
+            try:
                 with audit_call_context(call_id) as call_state:
                     if local_access_error is not None:
                         result = _handled_error(RuntimeError(local_access_error))
                     elif __tool_name in NON_CANCELLABLE_TOOL_NAMES:
-                        result = await __original(*args, **invoke_kwargs)
+                        result = await _await_non_cancellable(
+                            __original(*args, **invoke_kwargs)
+                        )
                     else:
                         result = await asyncio.wait_for(
                             __original(*args, **invoke_kwargs), timeout=PUBLIC_TOOL_TIMEOUT_S
@@ -3185,8 +3243,16 @@ def _register_live_workspace_tools(
             subject=subject,
         )
         if logical_session_id is None and session_id:
-            await asyncio.to_thread(session_manager.get, session_id, subject=subject)
-            logical_session_id = session_id
+            try:
+                await asyncio.to_thread(session_manager.get, session_id, subject=subject)
+            except ValueError as exc:
+                if not app_reattach or not str(exc).startswith("Unknown logical session:"):
+                    raise
+                # A suspended app can miss the detach/delete event. Treat only a
+                # missing Session as stale; ownership errors still propagate.
+                get_live_channel_manager().detach_logical_session(session_id)
+            else:
+                logical_session_id = session_id
         channel, live_token = get_live_channel_manager().open(
             session_key=session_key,
             subject=subject,

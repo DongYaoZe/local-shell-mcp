@@ -660,6 +660,51 @@ async def test_live_workspace_reconnect_restores_persisted_logical_session(
 
 
 @pytest.mark.asyncio
+async def test_live_workspace_reconnect_ignores_deleted_cached_session(
+    tmp_path, monkeypatch
+):
+    _configure(tmp_path, monkeypatch, auth="none")
+    mcp = build_mcp()
+
+    _, started = await mcp.call_tool(
+        "session_manage", {"action": "start", "objective": "Deleted while app sleeps"}
+    )
+    session_id = started["data"]["session_id"]
+    run_id = started["data"]["active_run"]["run_id"]
+    opened = await mcp.call_tool(
+        "open_live_workspace", {"cwd": ".", "session_run_id": run_id}
+    )
+    old_live_id = opened.structuredContent["live_id"]
+    channel = live_channel_module.get_live_channel_manager().active_for_session("direct")
+    assert channel is not None and channel.logical_session_id == session_id
+
+    session_manager = session_runtime_module.get_session_runtime_manager()
+    session_manager.manage(
+        "direct",
+        "local-mcp-client",
+        action="cancel",
+        session_id=session_id,
+        session_run_id=run_id,
+        require_run_token=True,
+    )
+    session_manager.manage(
+        "mcp:other",
+        "local-mcp-client",
+        action="delete",
+        session_id=session_id,
+    )
+    assert channel.logical_session_id == session_id
+
+    reconnected = await mcp.call_tool(
+        "live_workspace_reconnect",
+        {"cwd": ".", "live_id": old_live_id, "session_id": session_id},
+    )
+
+    assert reconnected.structuredContent["session_id"] is None
+    assert channel.logical_session_id is None
+
+
+@pytest.mark.asyncio
 async def test_live_workspace_reconnect_drops_attachment_after_principal_change(
     tmp_path, monkeypatch
 ):
@@ -742,6 +787,91 @@ async def test_cancelled_tool_call_releases_logical_inflight_lease(tmp_path, mon
     assert manager._sessions[session_id].in_flight_calls == {}
     assert begin_threads and all(thread_id != event_loop_thread for thread_id in begin_threads)
     assert finish_threads and all(thread_id != event_loop_thread for thread_id in finish_threads)
+
+
+@pytest.mark.asyncio
+async def test_cancelled_thread_mutation_holds_logical_lease_until_worker_finishes(
+    tmp_path, monkeypatch
+):
+    _configure(tmp_path, monkeypatch, auth="none")
+    manager = session_runtime_module.get_session_runtime_manager()
+    started = manager.manage(
+        "direct", "local-mcp-client", action="start", objective="Thread mutation"
+    )
+    session_id = started["session_id"]
+    run_id = started["active_run"]["run_id"]
+    entered = threading.Event()
+    release = threading.Event()
+    from local_shell_mcp.fs_ops import write_text as real_write_text
+
+    def blocking_write_text(path, content, overwrite=True):  # noqa: ANN001, ANN202
+        entered.set()
+        assert release.wait(timeout=5)
+        return real_write_text(path, content, overwrite)
+
+    monkeypatch.setattr("local_shell_mcp.tools.write_text", blocking_write_text)
+    mcp = build_mcp()
+    task = asyncio.create_task(
+        mcp.call_tool(
+            "write_file",
+            {
+                "path": "threaded.txt",
+                "content": "completed after cancellation",
+                "session_run_id": run_id,
+            },
+        )
+    )
+    assert await asyncio.to_thread(entered.wait, 1)
+    assert manager._sessions[session_id].in_flight_calls
+
+    task.cancel()
+    await asyncio.sleep(0.05)
+    assert not task.done()
+    assert manager._sessions[session_id].in_flight_calls
+    with pytest.raises(ValueError, match="tool calls are still in flight"):
+        manager.manage(
+            "mcp:takeover",
+            "local-mcp-client",
+            action="resume",
+            session_id=session_id,
+            takeover=True,
+        )
+
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert manager._sessions[session_id].in_flight_calls == {}
+    assert (tmp_path / "threaded.txt").read_text(encoding="utf-8") == "completed after cancellation"
+
+
+@pytest.mark.asyncio
+async def test_predispatch_failure_releases_logical_inflight_lease(tmp_path, monkeypatch):
+    _configure(tmp_path, monkeypatch, auth="none")
+    manager = session_runtime_module.get_session_runtime_manager()
+    started = manager.manage(
+        "direct", "local-mcp-client", action="start", objective="Setup failure"
+    )
+    session_id = started["session_id"]
+    run_id = started["active_run"]["run_id"]
+    mcp = build_mcp()
+
+    def fail_start_audit(event, **kwargs):  # noqa: ANN001, ANN003, ANN202
+        if event == "mcp_tool_call_start":
+            raise OSError("audit volume unavailable")
+
+    monkeypatch.setattr("local_shell_mcp.tools.audit", fail_start_audit)
+    with pytest.raises(Exception, match="audit volume unavailable"):
+        await mcp.call_tool(
+            "write_file",
+            {
+                "path": "never.txt",
+                "content": "must not run",
+                "session_run_id": run_id,
+            },
+        )
+
+    assert manager._sessions[session_id].in_flight_calls == {}
+    assert not (tmp_path / "never.txt").exists()
 
 
 @pytest.mark.asyncio
