@@ -681,12 +681,16 @@ async def _renew_session_tool_lease(
         try:
             renewed = await asyncio.to_thread(manager.renew_tool_call, lease)
         except Exception as exc:  # noqa: BLE001 - a later heartbeat may recover.
-            audit(
-                "session_lease_renewal_failed",
-                tool=tool_name,
-                call_id=call_id,
-                error=f"{type(exc).__name__}: {exc}",
-            )
+            # Renewal telemetry must never terminate the heartbeat loop. The
+            # audit sink can fail for the same transient storage outage that
+            # caused the renewal attempt to fail.
+            with suppress(Exception):
+                audit(
+                    "session_lease_renewal_failed",
+                    tool=tool_name,
+                    call_id=call_id,
+                    error=f"{type(exc).__name__}: {exc}",
+                )
             continue
         if not renewed:
             return
@@ -810,7 +814,7 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
             except BaseException as setup_exc:
                 if lease_heartbeat_task is not None:
                     lease_heartbeat_task.cancel()
-                    with suppress(asyncio.CancelledError):
+                    with suppress(asyncio.CancelledError, Exception):
                         await lease_heartbeat_task
                 if logical_lease is not None:
                     setup_data = {
@@ -969,7 +973,7 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
             finally:
                 if lease_heartbeat_task is not None:
                     lease_heartbeat_task.cancel()
-                    with suppress(asyncio.CancelledError):
+                    with suppress(asyncio.CancelledError, Exception):
                         await lease_heartbeat_task
                 if not logical_activity_finished and logical_lease is not None:
                     cancellation_data = {

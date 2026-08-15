@@ -168,8 +168,24 @@ class LiveChannelManager:
                 # rendered snapshot. The live channel is authoritative after a
                 # model-side Session switch, so a stale app payload must follow it.
                 logical_session_id = channel.logical_session_id
-            if channel is None:
-                channel = self._channels.get(logical_live_id or "")
+                logical_live_id = self._logical_session_channels.get(logical_session_id)
+            canonical_channel = self._channels.get(logical_live_id or "")
+            if canonical_channel is not None:
+                if canonical_channel.subject != subject:
+                    raise PermissionError("Logical session workspace belongs to a different principal")
+                if (
+                    channel is not None
+                    and channel is not canonical_channel
+                    and channel.logical_session_id == logical_session_id
+                ):
+                    channel.logical_session_id = None
+                    self._publish_locked(
+                        channel,
+                        "session.detached",
+                        actor="system",
+                        data={"session_id": logical_session_id},
+                    )
+                channel = canonical_channel
             if channel is None:
                 channel = self._channels.get(session_live_id or "")
             if (
@@ -262,10 +278,39 @@ class LiveChannelManager:
         with self._lock:
             self._prune_locked()
             self._app_session_keys.discard(session_key)
-            live_id = self._session_channels.get(session_key)
-            if live_id is None:
-                live_id = self._logical_session_channels.get(logical_session_id)
-            channel = self._channels.get(live_id or "")
+            current_live_id = self._session_channels.get(session_key)
+            target_live_id = self._logical_session_channels.get(logical_session_id)
+            channel = self._channels.get(current_live_id or "")
+            target_channel = self._channels.get(target_live_id or "")
+            if target_live_id and target_channel is None:
+                self._logical_session_channels.pop(logical_session_id, None)
+            if target_channel is not None:
+                if target_channel.subject != subject:
+                    return None
+                if channel is not None and channel is not target_channel:
+                    # A Logical Session has one canonical LiveChannel. When a
+                    # transport switches to a Session that already has one,
+                    # move only that transport onto the canonical channel and
+                    # leave its previous workspace attached to its old task.
+                    if channel.logical_session_id == logical_session_id:
+                        channel.logical_session_id = None
+                        self._publish_locked(
+                            channel,
+                            "session.detached",
+                            actor="system",
+                            data={"session_id": logical_session_id},
+                        )
+                    self._session_channels[session_key] = target_channel.live_id
+                    target_channel.logical_session_id = logical_session_id
+                    self._consume_recovery_claim_locked(subject, target_channel.live_id)
+                    self._publish_locked(
+                        target_channel,
+                        "session.attached",
+                        actor="system",
+                        data={"session_id": logical_session_id},
+                    )
+                    return target_channel
+                channel = target_channel
             if channel is None:
                 return None
             if channel.subject != subject:

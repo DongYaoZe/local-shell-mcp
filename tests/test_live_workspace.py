@@ -16,6 +16,7 @@ from starlette.requests import Request
 import local_shell_mcp.live_channel as live_channel_module
 import local_shell_mcp.live_channel_routes as live_routes
 import local_shell_mcp.session_runtime as session_runtime_module
+import local_shell_mcp.tools as tools_module
 from local_shell_mcp.auth import Principal
 from local_shell_mcp.live_channel import (
     LIVE_EVENT_LIMIT,
@@ -239,6 +240,86 @@ def test_live_workspace_app_reattachment_follows_model_session_switch():
     assert reconnected is channel
     assert reconnected.logical_session_id == "s_second"
     assert manager.active_for_session("mcp:app-after-remount") is channel
+
+
+def test_live_workspace_session_switch_uses_existing_canonical_target_channel():
+    manager = LiveChannelManager()
+    source, _ = manager.open(
+        session_key="mcp:model-a",
+        subject="user",
+        scopes=tuple(ALL_OAUTH_SCOPES),
+        logical_session_id="s_first",
+    )
+    source_app, _ = manager.open(
+        session_key="mcp:app-a",
+        subject="user",
+        scopes=tuple(ALL_OAUTH_SCOPES),
+        live_id=source.live_id,
+        logical_session_id="s_first",
+        app_reattach=True,
+    )
+    target, _ = manager.open(
+        session_key="mcp:model-b",
+        subject="user",
+        scopes=tuple(ALL_OAUTH_SCOPES),
+        logical_session_id="s_second",
+    )
+    assert source_app is source
+    assert target is not source
+
+    rebound = manager.bind_logical_session("mcp:model-a", "s_second", "user")
+
+    assert rebound is target
+    assert manager.active_for_session("mcp:model-a") is target
+    assert manager.active_for_session("mcp:model-b") is target
+    assert manager.active_for_session("mcp:app-a") is source
+    assert source.logical_session_id == "s_first"
+    assert target.logical_session_id == "s_second"
+    assert manager._logical_session_channels["s_first"] == source.live_id
+    assert manager._logical_session_channels["s_second"] == target.live_id
+    assert [
+        channel.live_id
+        for channel in manager._channels.values()
+        if channel.logical_session_id == "s_second"
+    ] == [target.live_id]
+
+    manager.publish_for_session(
+        "mcp:model-a",
+        "tool.completed",
+        data={"tool": "write_file", "call_id": "on-target"},
+    )
+    assert target.events[-1]["data"]["call_id"] == "on-target"
+    assert source.events[-1]["data"].get("call_id") != "on-target"
+
+
+def test_live_workspace_open_consolidates_duplicate_logical_target():
+    manager = LiveChannelManager()
+    unattached, _ = manager.open(
+        session_key="mcp:old-app",
+        subject="user",
+        scopes=tuple(ALL_OAUTH_SCOPES),
+    )
+    target, _ = manager.open(
+        session_key="mcp:model",
+        subject="user",
+        scopes=tuple(ALL_OAUTH_SCOPES),
+        logical_session_id="s_target",
+    )
+
+    reattached, token = manager.open(
+        session_key="mcp:new-app",
+        subject="user",
+        scopes=tuple(ALL_OAUTH_SCOPES),
+        live_id=unattached.live_id,
+        logical_session_id="s_target",
+        app_reattach=True,
+    )
+
+    assert reattached is target
+    assert token == target.token_value
+    assert manager.active_for_session("mcp:new-app") is target
+    assert unattached.logical_session_id is None
+    assert manager._logical_session_channels["s_target"] == target.live_id
 
 
 def test_exact_logical_binding_consumes_only_its_recovery_claim():
@@ -872,6 +953,37 @@ async def test_predispatch_failure_releases_logical_inflight_lease(tmp_path, mon
 
     assert manager._sessions[session_id].in_flight_calls == {}
     assert not (tmp_path / "never.txt").exists()
+
+
+@pytest.mark.asyncio
+async def test_lease_heartbeat_survives_renewal_audit_failure(monkeypatch):
+    calls = 0
+
+    class FlakyManager:
+        def renew_tool_call(self, lease):  # noqa: ANN001, ANN201
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise OSError("state backend unavailable")
+            return False
+
+    async def no_wait(_seconds):  # noqa: ANN001, ANN202
+        return None
+
+    def fail_audit(*_args, **_kwargs):  # noqa: ANN002, ANN003, ANN202
+        raise OSError("audit backend unavailable")
+
+    monkeypatch.setattr(tools_module.asyncio, "sleep", no_wait)
+    monkeypatch.setattr(tools_module, "audit", fail_audit)
+
+    await tools_module._renew_session_tool_lease(
+        FlakyManager(),
+        {"session_id": "s_test", "run_id": "r_test", "call_id": "call-test"},
+        tool_name="write_file",
+        call_id="call-test",
+    )
+
+    assert calls == 2
 
 
 @pytest.mark.asyncio
