@@ -157,6 +157,25 @@ export function formatCountdown(seconds: number): string {
   return `${minutes}:${String(remainder).padStart(2, "0")}`
 }
 
+export function continuationDispatchStillValid(
+  plan: {
+    status: string
+    continuation_pending: boolean
+    continuation_claim_id?: string | null
+    last_agent_activity: number
+  } | null,
+  claimId: string,
+  validatedAgentActivity: number,
+): boolean {
+  return Boolean(
+    plan
+    && plan.status === "active"
+    && plan.continuation_pending
+    && plan.continuation_claim_id === claimId
+    && Number(plan.last_agent_activity) <= validatedAgentActivity,
+  )
+}
+
 const TOOL_TERMINAL_EVENTS = new Set(["tool.completed", "tool.failed", "tool.cancelled", "tool.blocked"])
 
 export function coalesceActivityEvents(events: LiveEvent[]): LiveEvent[] {

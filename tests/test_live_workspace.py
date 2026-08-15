@@ -717,7 +717,7 @@ async def test_mcp_run_lease_blocks_stale_same_transport_agent(tmp_path, monkeyp
 
 
 @pytest.mark.asyncio
-async def test_tool_recovery_binds_live_channel_by_resolved_logical_session(
+async def test_explicit_resume_binds_live_channel_by_resolved_logical_session(
     tmp_path, monkeypatch
 ):
     _configure(tmp_path, monkeypatch, auth="none")
@@ -746,15 +746,35 @@ async def test_tool_recovery_binds_live_channel_by_resolved_logical_session(
     assert live_manager.claim_recovery_session("direct", "local-mcp-client") is None
 
     mcp = build_mcp()
+    with pytest.raises(Exception, match="No logical session is attached"):
+        await mcp.call_tool(
+            "write_file",
+            {
+                "path": "must-not-write.txt",
+                "content": "no",
+                "session_run_id": first["active_run"]["run_id"],
+            },
+        )
+
+    _, resumed = await mcp.call_tool(
+        "session_manage",
+        {
+            "action": "resume",
+            "session_id": first["session_id"],
+            "takeover": True,
+        },
+    )
+    resumed_run_id = resumed["data"]["active_run"]["run_id"]
     await mcp.call_tool(
         "write_file",
         {
             "path": "recovered.txt",
             "content": "ok",
-            "session_run_id": first["active_run"]["run_id"],
+            "session_run_id": resumed_run_id,
         },
     )
 
+    assert not (tmp_path / "must-not-write.txt").exists()
     assert live_manager.active_for_session("direct") is first_channel
     assert any(
         event["type"] == "tool.completed" and event["data"].get("tool") == "write_file"

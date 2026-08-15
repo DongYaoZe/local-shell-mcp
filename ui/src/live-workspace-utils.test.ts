@@ -4,6 +4,7 @@ import {
   activityEventKey,
   activityIntent,
   coalesceActivityEvents,
+  continuationDispatchStillValid,
   continuationCountdownState,
   eventDetail,
   eventTitle,
@@ -58,6 +59,20 @@ describe("live workspace utilities", () => {
     expect(formatCountdown(600)).toBe("10:00")
     expect(continuationCountdownState({ ...plan, continuation_retry_after: 2_000 }, 1_300).remainingSeconds).toBe(700)
     expect(continuationCountdownState({ ...plan, in_flight_calls: 1 }, 1_500).visible).toBeFalse()
+  })
+
+  test("continuation dispatch invalidates on plan changes or newer agent activity", () => {
+    const plan = {
+      status: "active",
+      continuation_pending: true,
+      continuation_claim_id: "c_1",
+      last_agent_activity: 1_000,
+    }
+    expect(continuationDispatchStillValid(plan, "c_1", 1_000)).toBeTrue()
+    expect(continuationDispatchStillValid({ ...plan, status: "blocked" }, "c_1", 1_000)).toBeFalse()
+    expect(continuationDispatchStillValid({ ...plan, continuation_pending: false }, "c_1", 1_000)).toBeFalse()
+    expect(continuationDispatchStillValid({ ...plan, continuation_claim_id: "c_2" }, "c_1", 1_000)).toBeFalse()
+    expect(continuationDispatchStillValid({ ...plan, last_agent_activity: 1_001 }, "c_1", 1_000)).toBeFalse()
   })
 
   test("paths work for POSIX and Windows", () => {

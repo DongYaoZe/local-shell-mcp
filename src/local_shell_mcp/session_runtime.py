@@ -1169,31 +1169,10 @@ class SessionRuntimeManager:
             if session_key not in self._attachments:
                 if expected_run_id is None:
                     return None
-                if self._uses_shared_state_backend():
-                    self._refresh_all_sessions_locked()
-                matches: list[LogicalSession] = []
-                for candidate in self._sessions.values():
-                    if subject is not None and candidate.subject != subject:
-                        continue
-                    run = candidate.active_run()
-                    if (
-                        candidate.status == "active"
-                        and candidate.active_run_id == expected_run_id
-                        and run is not None
-                        and run.status == "active"
-                    ):
-                        matches.append(candidate)
-                if len(matches) != 1:
-                    raise RuntimeError(
-                        "This agent run is stale or unknown; resume the logical session and use its current active_run.run_id"
-                    )
-                recovered = matches[0]
-                recovered_run = recovered.active_run()
-                assert recovered_run is not None
-                recovered_run.session_key = session_key
-                self._attachments[session_key] = (
-                    recovered.session_id,
-                    recovered_run.run_id,
+                raise RuntimeError(
+                    "No logical session is attached to this MCP transport; call "
+                    "session_manage(action='resume', session_id=..., takeover=true) "
+                    "before using execution tools"
                 )
             attachment = self._attachments[session_key]
             if not _state_lock_held and self._uses_shared_state_backend():

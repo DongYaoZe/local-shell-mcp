@@ -820,7 +820,7 @@ def test_current_attachment_is_discarded_when_principal_changes(tmp_path):
     assert "mcp:a" not in manager._attachments
 
 
-def test_run_token_recovers_attachment_after_restart_and_rejects_stale_token(tmp_path):
+def test_new_transport_requires_explicit_resume_before_execution(tmp_path):
     state_dir = tmp_path / ".state"
     first = SessionRuntimeManager(state_dir)
     started = first.manage("mcp:a", "user", action="start", objective="Task")
@@ -828,40 +828,44 @@ def test_run_token_recovers_attachment_after_restart_and_rejects_stale_token(tmp
     first_run_id = started["active_run"]["run_id"]
 
     restarted = SessionRuntimeManager(state_dir)
-    lease = restarted.begin_tool_call(
-        "mcp:recovered",
-        "call-1",
-        expected_run_id=first_run_id,
-        subject="user",
-    )
-    assert lease is not None
-    assert restarted.current_session_id("mcp:recovered", subject="user") == session_id
-    assert restarted.finish_tool_call(lease, "tool.completed") is None
+    with pytest.raises(RuntimeError, match="No logical session is attached"):
+        restarted.begin_tool_call(
+            "mcp:recovered",
+            "call-1",
+            expected_run_id=first_run_id,
+            subject="user",
+        )
 
-    takeover = first.manage(
-        "mcp:a",
+    resumed = restarted.manage(
+        "mcp:recovered",
         "user",
         action="resume",
         session_id=session_id,
         takeover=True,
     )
-    second_run_id = takeover["active_run"]["run_id"]
-    assert second_run_id != first_run_id
+    resumed_run_id = resumed["active_run"]["run_id"]
+    assert resumed_run_id != first_run_id
+    lease = restarted.begin_tool_call(
+        "mcp:recovered", "call-2", expected_run_id=resumed_run_id, subject="user"
+    )
+    assert lease is not None
+    assert restarted.current_session_id("mcp:recovered", subject="user") == session_id
+    assert restarted.finish_tool_call(lease, "tool.completed") is None
 
     another = SessionRuntimeManager(state_dir)
-    with pytest.raises(RuntimeError, match="stale or unknown"):
+    with pytest.raises(RuntimeError, match="No logical session is attached"):
         another.begin_tool_call(
             "mcp:stale",
-            "call-2",
+            "call-3",
             expected_run_id=first_run_id,
             subject="user",
         )
-    with pytest.raises(RuntimeError, match="stale or unknown"):
+    with pytest.raises(RuntimeError, match="No logical session is attached"):
         another.begin_tool_call(
-            "mcp:wrong-principal",
-            "call-3",
-            expected_run_id=second_run_id,
-            subject="other-user",
+            "mcp:unattached-current",
+            "call-4",
+            expected_run_id=resumed_run_id,
+            subject="user",
         )
 
 

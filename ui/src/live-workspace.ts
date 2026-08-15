@@ -13,6 +13,7 @@ import {
   basename,
   coalesceActivityEvents,
   continuationCountdownState,
+  continuationDispatchStillValid,
   escapeHtml,
   eventDetail,
   eventTitle,
@@ -142,6 +143,13 @@ let coreRefreshQueued = false
 let plan: PlanState | null = null
 let logicalSession: LogicalSessionState | null = null
 let continuationChecking = false
+type ContinuationDispatch = {
+  claimId: string
+  validatedAgentActivity: number
+  controller: AbortController
+  invalidationReason: string
+}
+let continuationDispatch: ContinuationDispatch | null = null
 let activityExpandedEventKey = ""
 const activityAuditDetails = new Map<string, JsonRecord>()
 let activityDetailRevision = 0
@@ -437,6 +445,9 @@ async function requestDisplayMode(mode: "fullscreen" | "pip"): Promise<void> {
 
 async function controlPlan(action: "pause" | "resume" | "cancel", note?: string): Promise<void> {
   if (!config || !plan) return
+  if (action === "pause" || action === "cancel") {
+    abortContinuationDispatch(`Goal ${action === "pause" ? "paused" : "cancelled"} by user`)
+  }
   const payload = await api<{ goal_mode: boolean; plan: PlanState }>("/api/live/plan", {
     method: "POST",
     body: JSON.stringify({ action, ...(note ? { note } : {}) }),
@@ -448,6 +459,49 @@ async function controlPlan(action: "pause" | "resume" | "cancel", note?: string)
     action === "pause" ? "Goal paused" : action === "resume" ? "Goal resumed" : "Goal cancelled",
     action === "cancel" ? "warning" : "success",
   )
+}
+
+function abortContinuationDispatch(reason: string): void {
+  const dispatch = continuationDispatch
+  if (!dispatch || dispatch.controller.signal.aborted) return
+  dispatch.invalidationReason = reason
+  dispatch.controller.abort()
+}
+
+function observeContinuationPlan(nextPlan: PlanState | null): void {
+  const dispatch = continuationDispatch
+  if (!dispatch) return
+  if (!continuationDispatchStillValid(nextPlan, dispatch.claimId, dispatch.validatedAgentActivity)) {
+    abortContinuationDispatch("Continuation became stale before host dispatch completed")
+  }
+}
+
+async function watchContinuationDispatch(dispatch: ContinuationDispatch): Promise<void> {
+  while (!shuttingDown && continuationDispatch === dispatch && !dispatch.controller.signal.aborted) {
+    await waitForRetry(500)
+    if (continuationDispatch !== dispatch || dispatch.controller.signal.aborted) return
+    try {
+      const validation = await api<{ valid: boolean; plan?: PlanState | null }>("/api/live/plan/continuation", {
+        method: "POST",
+        body: JSON.stringify({ action: "validate", claim_id: dispatch.claimId }),
+      })
+      if (continuationDispatch !== dispatch || dispatch.controller.signal.aborted) return
+      const nextPlan = validation.plan || null
+      observeContinuationPlan(nextPlan)
+      plan = nextPlan || plan
+      if (!validation.valid) {
+        abortContinuationDispatch("Continuation claim was invalidated before host dispatch completed")
+        if (activeTab === "activity") renderActivity()
+        return
+      }
+    } catch (error) {
+      if (isLiveCredentialError(error)) {
+        abortContinuationDispatch("Live Workspace authorization changed during continuation dispatch")
+        return
+      }
+      console.warn("Unable to revalidate continuation while dispatching", error)
+    }
+  }
 }
 
 async function switchTab(next: string): Promise<void> {
@@ -1400,7 +1454,9 @@ async function pollEvents(generation: number): Promise<void> {
   while (!shuttingDown && config && generation === pollGeneration) {
     const payload = await api<{ events: LiveEvent[]; cursor: number; plan?: PlanState | null; session?: LogicalSessionState | null; session_id?: string | null }>(`/api/live/events?after=${cursor}&timeout=25`)
     if (generation !== pollGeneration) return
-    plan = payload.plan || null
+    const nextPlan = payload.plan || null
+    observeContinuationPlan(nextPlan)
+    plan = nextPlan
     logicalSession = payload.session || null
     if (config) config.sessionId = String(payload.session_id ?? "")
     mergeEvents(payload.events || [])
@@ -1456,18 +1512,33 @@ async function checkPlanContinuation(): Promise<void> {
         if (activeTab === "activity") renderActivity()
         return
       }
+      const dispatch: ContinuationDispatch = {
+        claimId,
+        validatedAgentActivity: Number(plan.last_agent_activity),
+        controller: new AbortController(),
+        invalidationReason: "",
+      }
+      continuationDispatch = dispatch
+      const dispatchWatcher = watchContinuationDispatch(dispatch)
       const resumeInstruction = sessionId
         ? `First call session_manage(action="resume", session_id="${sessionId}", takeover=true) so this agent run inherits the durable task context. `
         : ""
-      const response = await app.sendMessage({
-        role: "user",
-        content: [{ type: "text", text: `${resumeInstruction}Continue working on the active plan from its current state. Do not repeat completed steps. Keep working autonomously and keep the Session progress and Plan synchronized with execution: report meaningful checkpoints with session_manage(action="report", ...); use plan_manage(action="update") whenever step status or the execution plan changes; when every step is completed or skipped, call plan_manage(action="finish") before ending the turn; if you genuinely cannot continue without user input or an external condition, call plan_manage(action="block", note=...) and report the blocker before ending the turn.` }],
-      })
-      const result = response as unknown as JsonRecord
-      accepted = result?.isError !== true
-      if (!accepted) error = String(result?.message || "Host rejected the continuation message")
+      try {
+        const response = await app.sendMessage({
+          role: "user",
+          content: [{ type: "text", text: `${resumeInstruction}Continue working on the active plan from its current state. Do not repeat completed steps. Keep working autonomously and keep the Session progress and Plan synchronized with execution: report meaningful checkpoints with session_manage(action="report", ...); use plan_manage(action="update") whenever step status or the execution plan changes; when every step is completed or skipped, call plan_manage(action="finish") before ending the turn; if you genuinely cannot continue without user input or an external condition, call plan_manage(action="block", note=...) and report the blocker before ending the turn.` }],
+        }, { signal: dispatch.controller.signal })
+        const result = response as unknown as JsonRecord
+        accepted = result?.isError !== true
+        if (!accepted) error = String(result?.message || "Host rejected the continuation message")
+      } finally {
+        if (dispatch.invalidationReason) error = dispatch.invalidationReason
+        if (continuationDispatch === dispatch) continuationDispatch = null
+        dispatch.controller.abort()
+        await dispatchWatcher
+      }
     } catch (sendError) {
-      error = sendError instanceof Error ? sendError.message : String(sendError)
+      error = error || (sendError instanceof Error ? sendError.message : String(sendError))
     }
 
     try {
@@ -1776,6 +1847,7 @@ app.onhostcontextchanged = (context) => applyHostContext(context)
 function stopLiveWorkspace(): void {
   if (shuttingDown) return
   shuttingDown = true
+  abortContinuationDispatch("Live Workspace closed during continuation dispatch")
   pollGeneration += 1
   config = null
   connected = false
