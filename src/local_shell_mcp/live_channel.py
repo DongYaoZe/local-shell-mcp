@@ -98,6 +98,25 @@ class LiveChannelManager:
     def _digest(token: str) -> str:
         return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
+    def _set_logical_session_locked(
+        self, channel: LiveChannel, logical_session_id: str
+    ) -> None:
+        previous_session_id = channel.logical_session_id
+        if previous_session_id == logical_session_id:
+            self._logical_session_channels[logical_session_id] = channel.live_id
+            return
+        if (
+            previous_session_id
+            and self._logical_session_channels.get(previous_session_id) == channel.live_id
+        ):
+            self._logical_session_channels.pop(previous_session_id, None)
+        # Live-channel events are task-local. Keep the sequence monotonic so
+        # long-poll cursors remain valid, but never carry operational/human
+        # events across a Logical Session attachment boundary.
+        channel.events.clear()
+        channel.logical_session_id = logical_session_id
+        self._logical_session_channels[logical_session_id] = channel.live_id
+
     def _prune_locked(self, now: float | None = None) -> None:
         current = time.time() if now is None else now
         expired = [
@@ -179,6 +198,7 @@ class LiveChannelManager:
                     and channel.logical_session_id == logical_session_id
                 ):
                     channel.logical_session_id = None
+                    channel.events.clear()
                     self._publish_locked(
                         channel,
                         "session.detached",
@@ -232,20 +252,18 @@ class LiveChannelManager:
             else:
                 self._app_session_keys.discard(session_key)
             if logical_session_id:
-                previous_session_id = channel.logical_session_id
-                if (
-                    previous_session_id
-                    and previous_session_id != logical_session_id
-                    and self._logical_session_channels.get(previous_session_id) == channel.live_id
-                ):
-                    self._logical_session_channels.pop(previous_session_id, None)
-                channel.logical_session_id = logical_session_id
-                self._logical_session_channels[logical_session_id] = channel.live_id
+                self._set_logical_session_locked(channel, logical_session_id)
                 if not app_reattach:
                     self._consume_recovery_claim_locked(subject, channel.live_id)
             channel.subject = subject
             channel.scopes = scopes
-            channel.expires_at = expires_at
+            # App-only reconnects reuse the channel-wide bearer credential. A
+            # second view authenticated by a shorter-lived parent token must
+            # not shorten that shared credential for views which are already
+            # attached. A later valid reconnect may still refresh/extend it.
+            channel.expires_at = (
+                max(channel.expires_at, expires_at) if app_reattach else expires_at
+            )
             self._publish_locked(
                 channel,
                 "channel.opened",
@@ -294,6 +312,7 @@ class LiveChannelManager:
                     # leave its previous workspace attached to its old task.
                     if channel.logical_session_id == logical_session_id:
                         channel.logical_session_id = None
+                        channel.events.clear()
                         self._publish_locked(
                             channel,
                             "session.detached",
@@ -336,15 +355,7 @@ class LiveChannelManager:
                 if channel is None or channel.subject != subject:
                     return None
             self._session_channels[session_key] = channel.live_id
-            previous_session_id = channel.logical_session_id
-            if (
-                previous_session_id
-                and previous_session_id != logical_session_id
-                and self._logical_session_channels.get(previous_session_id) == channel.live_id
-            ):
-                self._logical_session_channels.pop(previous_session_id, None)
-            channel.logical_session_id = logical_session_id
-            self._logical_session_channels[logical_session_id] = channel.live_id
+            self._set_logical_session_locked(channel, logical_session_id)
             self._consume_recovery_claim_locked(subject, channel.live_id)
             self._publish_locked(
                 channel,
@@ -371,6 +382,7 @@ class LiveChannelManager:
                 if channel.logical_session_id != logical_session_id:
                     continue
                 channel.logical_session_id = None
+                channel.events.clear()
                 detached.append(channel)
                 self._publish_locked(
                     channel,

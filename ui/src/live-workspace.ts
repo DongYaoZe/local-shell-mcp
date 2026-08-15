@@ -1434,12 +1434,27 @@ function mergeEvents(incoming: LiveEvent[]): void {
   if (activeTab === "activity") renderActivity()
 }
 
+function resetActivityForSessionBoundary(): void {
+  events = []
+  activityExpandedEventKey = ""
+  activityAuditDetails.clear()
+  activityDetailRevision += 1
+}
+
+function applyLogicalSessionId(value: string | null | undefined): boolean {
+  const nextSessionId = String(value ?? "")
+  const changed = Boolean(config && config.sessionId !== nextSessionId)
+  if (changed) resetActivityForSessionBoundary()
+  if (config) config.sessionId = nextSessionId
+  return changed
+}
+
 async function loadSnapshot(generation: number): Promise<boolean> {
   const payload = await api<{ channel: JsonRecord & { plan?: PlanState | null; session?: LogicalSessionState | null; session_id?: string | null }; events: LiveEvent[] }>("/api/live/snapshot")
   if (generation !== pollGeneration) return false
+  applyLogicalSessionId(payload.channel.session_id)
   plan = payload.channel.plan || null
   logicalSession = payload.channel.session || null
-  if (config) config.sessionId = String(payload.channel.session_id ?? "")
   activityAuditDetails.clear()
   activityDetailRevision += 1
   events = payload.events || []
@@ -1457,9 +1472,9 @@ async function pollEvents(generation: number): Promise<void> {
     if (generation !== pollGeneration) return
     const nextPlan = payload.plan || null
     observeContinuationPlan(nextPlan)
+    applyLogicalSessionId(payload.session_id)
     plan = nextPlan
     logicalSession = payload.session || null
-    if (config) config.sessionId = String(payload.session_id ?? "")
     mergeEvents(payload.events || [])
     cursor = Math.max(cursor, Number(payload.cursor || 0))
     connected = true
@@ -1618,16 +1633,14 @@ function activateLiveConfig(nextConfig: LiveConfig): void {
     && config.cwd === nextConfig.cwd
   ) return
   const channelChanged = !config || config.liveId !== nextConfig.liveId
+  const sessionChanged = !config || config.sessionId !== nextConfig.sessionId
   const targetChanged = !config || config.machine !== nextConfig.machine || config.cwd !== nextConfig.cwd
-  if (channelChanged) {
-    events = []
-    cursor = 0
+  if (channelChanged || sessionChanged) {
+    resetActivityForSessionBoundary()
+    if (channelChanged) cursor = 0
     connected = false
     plan = null
     logicalSession = null
-    activityExpandedEventKey = ""
-    activityAuditDetails.clear()
-    activityDetailRevision += 1
   }
   if (targetChanged) resetWorkspaceTarget(nextConfig.machine, nextConfig.cwd)
   config = nextConfig

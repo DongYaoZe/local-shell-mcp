@@ -30,6 +30,14 @@ describe("live workspace utilities", () => {
     expect(source).not.toContain('name: "open_live_workspace"')
   })
 
+  test("Live Workspace clears live-only activity when the Logical Session changes", async () => {
+    const source = await Bun.file(new URL("./live-workspace.ts", import.meta.url)).text()
+    expect(source).toContain("function resetActivityForSessionBoundary(): void")
+    expect(source).toContain("if (changed) resetActivityForSessionBoundary()")
+    expect(source).toContain("applyLogicalSessionId(payload.session_id)")
+    expect(source).toContain("const sessionChanged = !config || config.sessionId !== nextConfig.sessionId")
+  })
+
   test("display mode toggles only between floating and fullscreen", () => {
     expect(toggleWorkspaceDisplayMode("pip")).toBe("fullscreen")
     expect(toggleWorkspaceDisplayMode("fullscreen")).toBe("pip")

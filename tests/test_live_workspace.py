@@ -117,6 +117,33 @@ def test_live_workspace_tokens_rotate_and_events_are_bounded():
     assert channel.events[0]["seq"] == channel.seq - LIVE_EVENT_LIMIT + 1
 
 
+def test_app_reattach_does_not_shorten_shared_channel_expiry():
+    manager = LiveChannelManager()
+    now = time.time()
+    channel, token = manager.open(
+        session_key="mcp:model",
+        subject="user",
+        scopes=tuple(ALL_OAUTH_SCOPES),
+        parent_expires_at=now + 600,
+        logical_session_id="s_task",
+    )
+    original_expiry = channel.expires_at
+
+    attached, app_token = manager.open(
+        session_key="mcp:app",
+        subject="user",
+        scopes=tuple(ALL_OAUTH_SCOPES),
+        parent_expires_at=now + 60,
+        live_id=channel.live_id,
+        logical_session_id="s_task",
+        app_reattach=True,
+    )
+
+    assert attached is channel
+    assert app_token == token
+    assert channel.expires_at == original_expiry
+
+
 def test_live_workspace_can_reattach_a_second_mcp_session_by_live_id():
     manager = LiveChannelManager()
     channel, first_token = manager.open(
@@ -175,6 +202,44 @@ def test_live_workspace_logical_session_binding_replaces_old_mapping():
     assert channel.logical_session_id == "s_second"
     assert "s_first" not in manager._logical_session_channels
     assert manager._logical_session_channels["s_second"] == channel.live_id
+
+
+def test_live_workspace_session_rebind_drops_prior_operational_events():
+    manager = LiveChannelManager()
+    channel, _ = manager.open(
+        session_key="mcp:model",
+        subject="user",
+        scopes=tuple(ALL_OAUTH_SCOPES),
+        logical_session_id="s_first",
+    )
+    manager.publish_for_session(
+        "mcp:model",
+        "tool.completed",
+        data={"call_id": "old-call", "tool": "write_file"},
+    )
+    manager.publish_for_session(
+        "mcp:model",
+        "human.inspected_diff",
+        actor="human",
+        data={"cwd": "old-task"},
+    )
+    old_seq = channel.seq
+
+    rebound = manager.bind_logical_session("mcp:model", "s_second", "user")
+
+    assert rebound is channel
+    assert channel.seq > old_seq
+    assert channel.logical_session_id == "s_second"
+    assert [event["type"] for event in channel.events] == ["session.attached"]
+    assert all(event["data"].get("call_id") != "old-call" for event in channel.events)
+    manager.publish_for_session(
+        "mcp:model",
+        "tool.completed",
+        data={"call_id": "new-call", "tool": "read_file"},
+    )
+    visible = manager.events_since(channel, 0)
+    assert any(event["data"].get("call_id") == "new-call" for event in visible)
+    assert all(event["data"].get("call_id") != "old-call" for event in visible)
 
 
 def test_live_workspace_switch_does_not_rebind_channel_shared_by_another_transport():
