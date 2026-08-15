@@ -43,7 +43,7 @@ export class TerminalsController extends BaseController {
         <div class="toolbar-actions">${button("New", "new-session", { icon: "+", primary: true })}${button("Kill", "kill-session", { danger: true, disabled: true })}${button("Reconnect", "reconnect", { icon: "↻" })}${button("Previous", "previous-session", { disabled: true })}${button("Next", "next-session", { disabled: true })}</div>
       </div>
       <div class="terminal-layout" data-role="terminal-workspace">
-        <aside class="native-panel terminal-sessions"><header><div><h3>Sessions</h3><p data-role="session-summary">Loading…</p></div>${button("Refresh", "refresh-sessions", { icon: "↻" })}</header><div class="session-list" data-role="sessions"></div></aside>
+        <aside class="native-panel terminal-sessions"><header><div><h3>Sessions</h3><p data-role="session-summary">Loading…</p></div></header><div class="session-list" data-role="sessions"></div></aside>
         <section class="native-panel terminal-stage-panel"><header><div><h3 data-role="terminal-title">Persistent terminal</h3><p data-role="terminal-subtitle">Select or create a session</p></div><div class="terminal-stage-actions">${button("Copy", "copy")}${button("Paste", "paste")}${button("Find", "search")}${button("Clear", "clear")}${button("Fullscreen", "fullscreen")}<div class="terminal-search" data-role="search-box" hidden><input data-role="search-input" placeholder="Find in terminal"/><button type="button" data-action="search-prev">Previous</button><button type="button" data-action="search-next">Next</button><button type="button" data-action="search-close">Close</button></div></div></header><div class="persistent-terminal" data-role="terminal"></div><div class="terminal-overlay" data-role="terminal-overlay">Select or create a persistent session.</div><nav class="terminal-touchbar"><button type="button" data-sequence="\u001b">Esc</button><button type="button" data-sequence="\t">Tab</button><button type="button" data-sequence="\u001b[D">←</button><button type="button" data-sequence="\u001b[A">↑</button><button type="button" data-sequence="\u001b[B">↓</button><button type="button" data-sequence="\u001b[C">→</button><button type="button" data-sequence="\r">Enter</button><button type="button" data-sequence="\u0003">Ctrl-C</button></nav><form class="command-dock" data-role="command-form"><span>$</span><input data-role="command-input" autocomplete="off" placeholder="Send a command to the attached session"/><button class="native-button primary" type="submit">Send</button></form></section>
       </div>
     </section>`
@@ -71,7 +71,7 @@ export class TerminalsController extends BaseController {
       cursorBlink: true,
       cursorStyle: "bar",
       fontFamily: '"JetBrains Mono", "Cascadia Code", "SFMono-Regular", Consolas, monospace',
-      fontSize: 13,
+      fontSize: 14,
       lineHeight: 1.12,
       scrollback: 12_000,
       smoothScrollDuration: 70,
@@ -456,7 +456,6 @@ export class TerminalsController extends BaseController {
     if (!action) return
     if (action === "new-session") void this.createSession()
     else if (action === "kill-session") void this.killSession()
-    else if (action === "refresh-sessions") void this.refresh()
     else if (action === "reconnect") this.connect()
     else if (action === "previous-session") this.switchSession(-1)
     else if (action === "next-session") this.switchSession(1)
