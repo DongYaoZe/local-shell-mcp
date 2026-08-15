@@ -39,9 +39,10 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 .interface-switch button:hover { color: #dce2ed; background: rgba(255,255,255,.045); }
 .interface-switch button.active { color: white; background: #29344b; box-shadow: 0 1px 5px rgba(0,0,0,.18), inset 0 0 0 1px rgba(117,103,239,.3); }
 .interface-switch svg { width: 17px; height: 17px; }
-.interface-switch strong, .interface-switch small { display: block; white-space: nowrap; }
-.interface-switch strong { font-size: 12px; font-weight: 650; }
-.interface-switch small { margin-top: 2px; color: #69758b; font-size: 9px; }
+.interface-switch button > span { min-width: 0; }
+.interface-switch strong, .interface-switch small { display: block; }
+.interface-switch strong { font-size: 12px; font-weight: 650; white-space: nowrap; }
+.interface-switch small { margin-top: 2px; color: #69758b; font-size: 9px; line-height: 1.2; white-space: normal; }
 .interface-switch button.active small { color: #9fa9bc; }
 .primary-nav { display: grid; gap: 4px; }
 .nav-item { display: grid; grid-template-columns: 22px minmax(0,1fr) auto; align-items: center; min-height: 42px; padding: 0 11px; border-radius: 9px; color: #9fa9bc; font-size: 13px; font-weight: 540; transition: .16s ease; }
