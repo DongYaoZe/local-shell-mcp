@@ -64,13 +64,23 @@ class LiveChannel:
     logical_session_id: str | None = None
 
     def public_state(self) -> dict[str, Any]:
+        session_manager = get_session_runtime_manager()
+        session_state = None
+        if self.logical_session_id:
+            try:
+                session_state = session_manager.get(
+                    self.logical_session_id, subject=self.subject
+                )
+            except (PermissionError, ValueError):
+                session_state = None
         return {
             "live_id": self.live_id,
             "created_at": self.created_at,
             "expires_at": self.expires_at,
             "seq": self.seq,
             "session_id": self.logical_session_id,
-            "plan": get_session_runtime_manager().plan_state(self.logical_session_id),
+            "session": session_state,
+            "plan": session_state.get("plan") if session_state else None,
         }
 
 

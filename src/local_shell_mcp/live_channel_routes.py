@@ -121,14 +121,19 @@ async def live_events(request: Request) -> Response:
             raise HTTPException(status_code=400, detail="Invalid event cursor") from exc
         events = await get_live_channel_manager().wait_events(channel, after, timeout_s)
         logical_session_id = channel.logical_session_id
-        plan = await asyncio.to_thread(
-            get_session_runtime_manager().plan_state, logical_session_id
-        )
+        session_state = None
+        if logical_session_id:
+            session_state = await asyncio.to_thread(
+                get_session_runtime_manager().get,
+                logical_session_id,
+                subject=channel.subject,
+            )
         return _ok(
             {
                 "events": events,
                 "cursor": events[-1]["seq"] if events else after,
-                "plan": plan,
+                "plan": session_state.get("plan") if session_state else None,
+                "session": session_state,
                 "session_id": logical_session_id,
             }
         )
@@ -147,11 +152,12 @@ async def live_plan_control(request: Request) -> Response:
         session_manager = get_session_runtime_manager()
         live_manager = get_live_channel_manager()
         if action == "pause":
+            note = str(body.get("note") or "Paused by user").strip() or "Paused by user"
             result = await asyncio.to_thread(
                 session_manager.manage_plan_for_session,
                 channel.logical_session_id,
                 action="block",
-                note="Paused by user",
+                note=note,
                 actor="human",
                 subject=channel.subject,
             )

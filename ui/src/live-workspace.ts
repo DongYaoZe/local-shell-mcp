@@ -11,12 +11,14 @@ import {
   activityEventKey,
   activityIntent,
   basename,
+  continuationCountdownState,
   escapeHtml,
   eventDetail,
   eventTitle,
   eventTone,
   formatBytes,
   formatClock,
+  formatCountdown,
   isOperationalActivityEvent,
   joinPath,
   toggleWorkspaceDisplayMode,
@@ -68,8 +70,27 @@ type PlanState = {
   execution_lease_s: number
   continuation_due_at: number
   continuation_due: boolean
+  continuation_retry_after?: number | null
   max_continuations: number
   auto_continue_exhausted: boolean
+  in_flight_calls?: number
+}
+
+type LogicalSessionState = {
+  session_id: string
+  label?: string | null
+  objective?: string | null
+  status: string
+  active_run?: { run_id?: string; status?: string } | null
+  progress?: {
+    summary?: string | null
+    findings?: string[]
+    next?: string | null
+    blockers?: string[]
+    updated_at?: number | null
+  }
+  recent_activity?: LiveEvent[]
+  plan?: PlanState | null
 }
 
 type LiveConfig = {
@@ -118,6 +139,7 @@ let lastPassiveRefresh = 0
 let passiveRefreshing = false
 let coreRefreshQueued = false
 let plan: PlanState | null = null
+let logicalSession: LogicalSessionState | null = null
 let continuationChecking = false
 let activityExpandedEventKey = ""
 const activityAuditDetails = new Map<string, JsonRecord>()
@@ -128,6 +150,7 @@ let knownStandaloneSessions = new Set<string>()
 let shuttingDown = false
 let passiveRefreshTimer: number | null = null
 let planContinuationTimer: number | null = null
+let countdownRenderTimer: number | null = null
 
 let terminal: Terminal | null = null
 let fitAddon: FitAddon | null = null
@@ -341,6 +364,7 @@ async function handleAction(action: string, target: HTMLElement): Promise<void> 
     else if (action === "plan-pause") await controlPlan("pause")
     else if (action === "plan-resume") await controlPlan("resume")
     else if (action === "plan-cancel") await controlPlan("cancel")
+    else if (action === "plan-cancel-countdown") await controlPlan("pause", "Auto continuation cancelled by user")
     else if (action === "activity-open-detail") await toggleActivityDetail(target.dataset.eventKey || "", target.dataset.callId || "")
     else if (action === "activity-open-terminal") {
       terminalMachine = target.dataset.machine || "local"
@@ -411,13 +435,14 @@ async function requestDisplayMode(mode: "fullscreen" | "pip"): Promise<void> {
   }
 }
 
-async function controlPlan(action: "pause" | "resume" | "cancel"): Promise<void> {
+async function controlPlan(action: "pause" | "resume" | "cancel", note?: string): Promise<void> {
   if (!config || !plan) return
   const payload = await api<{ goal_mode: boolean; plan: PlanState }>("/api/live/plan", {
     method: "POST",
-    body: JSON.stringify({ action }),
+    body: JSON.stringify({ action, ...(note ? { note } : {}) }),
   })
   plan = payload.plan
+  if (logicalSession) logicalSession = { ...logicalSession, plan }
   renderCurrentTab()
   notify(
     action === "pause" ? "Goal paused" : action === "resume" ? "Goal resumed" : "Goal cancelled",
@@ -454,44 +479,126 @@ function renderCurrentTab(): void {
   else renderAudit()
 }
 
+function durableSessionEvents(): LiveEvent[] {
+  const durable = logicalSession?.recent_activity || []
+  return durable.length ? durable : operationalEvents()
+}
+
+function planProgress(): { completed: number; total: number; percent: number; active: PlanStep | null } {
+  if (!plan) return { completed: 0, total: 0, percent: 0, active: null }
+  const completed = plan.steps.filter((step) => step.status === "completed" || step.status === "skipped").length
+  const total = plan.steps.length
+  return {
+    completed,
+    total,
+    percent: total ? Math.round((completed / total) * 100) : 0,
+    active: plan.steps.find((step) => step.status === "active") || null,
+  }
+}
+
 function renderActivity(): void {
-  const visible = operationalEvents()
-  const recent = [...visible].reverse().slice(0, 120)
+  const visible = durableSessionEvents()
+  const recent = [...visible].reverse().slice(0, 80)
   const running = currentRunningEvent()
-  const completed = visible.filter((event) => event.type === "tool.completed").length
-  const failed = visible.filter((event) => event.type === "tool.failed").length
-  const human = visible.filter((event) => event.actor === "human").length
+  const progress = planProgress()
+  const sessionStatus = logicalSession?.status || (config?.sessionId ? "active" : "unattached")
   mainNode().innerHTML = `
-    <section class="view activity-view">
-      <div class="view-toolbar"><div><h2>Operational activity</h2><p>What ChatGPT is doing in LSM, with direct paths to the relevant workspace view.</p></div><div class="toolbar-actions"><button class="button" data-action="activity-ask">${icon("chat")}Ask about latest</button><button class="button" data-action="refresh">${icon("refresh")}Refresh</button></div></div>
-      ${planCard()}
-      ${activityFocusCards()}
-      <div class="metric-row">
-        <div><small>Current</small><strong>${running ? escapeHtml(activityIntent(running)) : dashboard?.jobs?.length ? "Background work" : dashboard?.sessions?.length ? "Terminal ready" : "Idle"}</strong><span>${running ? escapeHtml(eventDetail(running) || "running") : dashboard?.jobs?.length ? escapeHtml(String(dashboard.jobs[0]?.name || dashboard.jobs[0]?.job_id || "job")) : dashboard?.sessions?.length ? escapeHtml(String(dashboard.sessions[0]?.name || dashboard.sessions[0]?.session_id || "session")) : "Ready"}</span></div>
-        <div><small>Completed</small><strong>${completed}</strong><span>operations</span></div>
-        <div><small>Failures</small><strong>${failed}</strong><span>${failed ? "needs attention" : "none"}</span></div>
-        <div><small>Human actions</small><strong>${human}</strong><span>interventions</span></div>
+    <section class="view activity-view task-monitor-view">
+      <div class="view-toolbar task-monitor-toolbar"><div><h2>Live task monitor</h2><p>${config?.sessionId ? `Logical Session ${escapeHtml(config.sessionId)}` : "No Logical Session attached yet"}</p></div><div class="toolbar-actions"><button class="button" data-action="activity-ask">${icon("chat")}Ask</button><button class="button" data-action="refresh">${icon("refresh")}Refresh</button></div></div>
+      <div class="task-monitor-grid">
+        <section class="monitor-card session-monitor-card">
+          <div class="monitor-card-head"><span>Session</span><strong class="status-pill ${escapeHtml(sessionStatus)}">${escapeHtml(sessionStatus)}</strong></div>
+          <strong class="monitor-primary">${escapeHtml(logicalSession?.label || logicalSession?.objective || (config?.sessionId ? "Active logical task" : "Standard workspace"))}</strong>
+          <span class="monitor-secondary">${logicalSession?.active_run?.run_id ? `Run ${escapeHtml(logicalSession.active_run.run_id)}` : config?.sessionId ? "Waiting for active run" : "No extra user action required"}</span>
+        </section>
+        <section class="monitor-card operation-monitor-card">
+          <div class="monitor-card-head"><span>Latest operation</span><strong class="live-dot-label"><i class="live-dot ${running ? "busy" : ""}"></i>${running ? "Running" : connected ? "Live" : "Offline"}</strong></div>
+          <strong class="monitor-primary">${escapeHtml(running ? activityIntent(running) : latestCompletedSummary())}</strong>
+          <span class="monitor-secondary">${escapeHtml(running ? eventDetail(running) || "Tool call in progress" : recent[0] ? eventTitle(recent[0]) : "Waiting for activity")}</span>
+        </section>
+        <section class="monitor-card plan-monitor-card">
+          <div class="monitor-card-head"><span>Plan progress</span><strong>${plan ? `${progress.percent}%` : "Standard"}</strong></div>
+          ${plan ? `<div class="progress-track"><span style="width:${progress.percent}%"></span></div><strong class="monitor-primary">${progress.completed}/${progress.total} steps complete</strong><span class="monitor-secondary">${escapeHtml(progress.active?.text || (plan.status === "completed" ? "Plan completed" : plan.status === "blocked" ? "Plan paused" : "No active step"))}</span>` : '<strong class="monitor-primary">No active plan</strong><span class="monitor-secondary">Session tracking remains active without Goal mode.</span>'}
+        </section>
+        ${autoContinueCard()}
       </div>
-      <div class="panel activity-panel">
-        <div class="panel-head"><strong>Timeline</strong><span>${recent.length} recent events</span></div>
-        <div class="timeline">${recent.length ? recent.map(activityRow).join("") : '<div class="empty-state">No execution activity yet. Start a task and this view will follow it.</div>'}</div>
+      <div class="task-monitor-body">
+        <div class="task-context-column">
+          ${sessionProgressPanel()}
+          ${planCard()}
+          ${activityFocusCards()}
+        </div>
+        <section class="panel activity-panel session-activity-panel">
+          <div class="panel-head"><div><strong>Logical Session activity</strong><small>Durable, live execution feed</small></div><span>${recent.length} recent</span></div>
+          <div class="timeline session-timeline">${recent.length ? recent.map(activityRow).join("") : '<div class="empty-state">No execution activity yet. The current task will appear here automatically.</div>'}</div>
+        </section>
       </div>
     </section>`
 }
 
+function sessionProgressPanel(): string {
+  if (!logicalSession) return ""
+  const progress = logicalSession.progress || {}
+  const findings = progress.findings || []
+  const blockers = progress.blockers || []
+  if (!progress.summary && !progress.next && !findings.length && !blockers.length) return ""
+  return `
+    <section class="panel session-progress-panel">
+      <div class="panel-head"><div><strong>Session checkpoint</strong><small>Semantic progress reported by the active agent</small></div>${progress.updated_at ? `<span>${escapeHtml(formatClock(progress.updated_at))}</span>` : ""}</div>
+      <div class="checkpoint-grid">
+        <div><small>Current</small><strong>${escapeHtml(progress.summary || "No summary yet")}</strong></div>
+        <div><small>Next</small><strong>${escapeHtml(progress.next || "No next action reported")}</strong></div>
+        <div class="${blockers.length ? "has-blocker" : ""}"><small>Blockers</small><strong>${escapeHtml(blockers.length ? blockers.join(" · ") : "None")}</strong></div>
+      </div>
+      ${findings.length ? `<div class="checkpoint-findings"><small>Findings</small>${findings.slice(0, 6).map((item) => `<span>${escapeHtml(item)}</span>`).join("")}</div>` : ""}
+    </section>`
+}
+
+function autoContinueCard(): string {
+  if (!plan) {
+    return `<section class="monitor-card auto-monitor-card" data-role="auto-continue-card"><div class="monitor-card-head"><span>Auto continue</span><strong>Off</strong></div><strong class="monitor-primary">Plan mode inactive</strong><span class="monitor-secondary">No continuation timer is needed.</span></section>`
+  }
+  if (plan.status === "blocked") {
+    return `<section class="monitor-card auto-monitor-card paused" data-role="auto-continue-card"><div class="monitor-card-head"><span>Auto continue</span><strong>Paused</strong></div><strong class="monitor-primary">Waiting for you</strong><span class="monitor-secondary">Automatic continuation is disabled while the plan is paused.</span><button class="button compact-monitor-action" data-action="plan-resume">Resume</button></section>`
+  }
+  if (plan.auto_continue_exhausted) {
+    return `<section class="monitor-card auto-monitor-card paused" data-role="auto-continue-card"><div class="monitor-card-head"><span>Auto continue</span><strong>Stopped</strong></div><strong class="monitor-primary">${plan.continuation_count}/${plan.max_continuations} attempts used</strong><span class="monitor-secondary">The automatic continuation cap has been reached.</span></section>`
+  }
+  if (plan.continuation_pending) {
+    return `<section class="monitor-card auto-monitor-card active" data-role="auto-continue-card"><div class="monitor-card-head"><span>Auto continue</span><strong>Triggering</strong></div><strong class="monitor-primary">Continuation requested</strong><span class="monitor-secondary">Handing the same Logical Session to the next agent run.</span></section>`
+  }
+  if (Number(plan.in_flight_calls || 0) > 0) {
+    return `<section class="monitor-card auto-monitor-card" data-role="auto-continue-card"><div class="monitor-card-head"><span>Auto continue</span><strong>Waiting</strong></div><strong class="monitor-primary">Tool call in progress</strong><span class="monitor-secondary">The idle timer does not trigger while work is still running.</span></section>`
+  }
+  const countdown = continuationCountdownState(plan)
+  if (!countdown.visible) {
+    const untilVisible = Math.max(0, (5 * 60) - countdown.idleSeconds)
+    return `<section class="monitor-card auto-monitor-card" data-role="auto-continue-card"><div class="monitor-card-head"><span>Auto continue</span><strong>Armed</strong></div><strong class="monitor-primary">${plan.continuation_count}/${plan.max_continuations} continuations</strong><span class="monitor-secondary">Countdown appears after 5 min idle${countdown.idleSeconds > 0 ? ` · ${formatCountdown(untilVisible)} until visible` : ""}.</span></section>`
+  }
+  return `<section class="monitor-card auto-monitor-card countdown" data-role="auto-continue-card"><div class="monitor-card-head"><span>Auto continue</span><strong>Countdown</strong></div><strong class="countdown-time">${escapeHtml(formatCountdown(countdown.remainingSeconds))}</strong><div class="countdown-track"><span style="width:${Math.round(countdown.progress * 100)}%"></span></div><span class="monitor-secondary">until automatic continuation · attempt ${plan.continuation_count + 1}/${plan.max_continuations}</span><button class="button compact-monitor-action" data-action="plan-cancel-countdown">Cancel countdown</button></section>`
+}
+
+function refreshAutoContinueCard(): void {
+  if (activeTab !== "activity") return
+  const node = qs<HTMLElement>('[data-role="auto-continue-card"]')
+  if (!node) return
+  const replacement = document.createElement("div")
+  replacement.innerHTML = autoContinueCard()
+  const next = replacement.firstElementChild
+  if (next) node.replaceWith(next)
+}
+
 function planCard(): string {
   if (!plan || !["active", "blocked"].includes(plan.status)) return ""
-  const completed = plan.steps.filter((step) => step.status === "completed" || step.status === "skipped").length
-  const continuation = plan.auto_continue_exhausted
-    ? `Auto continue stopped at ${plan.continuation_count}/${plan.max_continuations}`
-    : `Auto continue ${plan.continuation_count}/${plan.max_continuations} · ${Math.round(plan.execution_lease_s / 60)} min lease`
+  const progress = planProgress()
   const status = plan.status === "blocked" ? "Needs you" : plan.continuation_pending ? "Continuing" : "Active"
   return `
-    <section class="goal-card ${escapeHtml(plan.status)}">
-      <div class="goal-head"><div><small>Goal</small><strong>${escapeHtml(plan.objective)}</strong></div><span class="goal-status">${escapeHtml(status)}</span></div>
+    <section class="goal-card ${escapeHtml(plan.status)} detailed-plan-card">
+      <div class="goal-head"><div><small>Plan</small><strong>${escapeHtml(plan.objective)}</strong></div><span class="goal-status">${escapeHtml(status)}</span></div>
+      <div class="plan-progress-summary"><div class="progress-track"><span style="width:${progress.percent}%"></span></div><span>${progress.completed}/${progress.total} complete · ${progress.percent}%</span></div>
       ${plan.note ? `<p class="goal-note">${escapeHtml(plan.note)}</p>` : ""}
       <div class="plan-steps">${plan.steps.map((step) => `<div class="plan-step ${escapeHtml(step.status)}"><span class="plan-step-mark">${step.status === "completed" ? "✓" : step.status === "skipped" ? "–" : step.status === "active" ? "→" : "○"}</span><div><strong>${escapeHtml(step.text)}</strong>${step.note ? `<small>${escapeHtml(step.note)}</small>` : ""}</div></div>`).join("")}</div>
-      <footer><span>${completed}/${plan.steps.length} steps complete</span><span>${escapeHtml(continuation)}</span><div class="goal-actions">${plan.status === "blocked" ? '<button class="button" data-action="plan-resume">Resume</button>' : '<button class="button" data-action="plan-pause">Pause</button>'}<button class="button danger" data-action="plan-cancel">Cancel</button></div></footer>
+      <footer><span>Auto continue ${plan.continuation_count}/${plan.max_continuations}</span><div class="goal-actions">${plan.status === "blocked" ? '<button class="button" data-action="plan-resume">Resume</button>' : '<button class="button" data-action="plan-pause">Pause</button>'}<button class="button danger" data-action="plan-cancel">Cancel plan</button></div></footer>
     </section>`
 }
 
@@ -592,7 +699,7 @@ async function toggleActivityDetail(eventKey: string, callId: string): Promise<v
 }
 
 async function askAboutLatestActivity(): Promise<void> {
-  const recent = operationalEvents().slice(-20)
+  const recent = durableSessionEvents().slice(-20)
   await app.updateModelContext({
     content: [{ type: "text", text: `Live Workspace recent operational activity:\n${recent.map((event) => `${formatClock(event.ts)} ${eventTitle(event)} — ${eventDetail(event)}`).join("\n")}` }],
     structuredContent: { liveWorkspaceEvents: recent },
@@ -1273,9 +1380,10 @@ function mergeEvents(incoming: LiveEvent[]): void {
 }
 
 async function loadSnapshot(generation: number): Promise<boolean> {
-  const payload = await api<{ channel: JsonRecord & { plan?: PlanState | null; session_id?: string | null }; events: LiveEvent[] }>("/api/live/snapshot")
+  const payload = await api<{ channel: JsonRecord & { plan?: PlanState | null; session?: LogicalSessionState | null; session_id?: string | null }; events: LiveEvent[] }>("/api/live/snapshot")
   if (generation !== pollGeneration) return false
   plan = payload.channel.plan || null
+  logicalSession = payload.channel.session || null
   if (config) config.sessionId = String(payload.channel.session_id ?? "")
   activityAuditDetails.clear()
   activityDetailRevision += 1
@@ -1290,9 +1398,10 @@ async function loadSnapshot(generation: number): Promise<boolean> {
 
 async function pollEvents(generation: number): Promise<void> {
   while (!shuttingDown && config && generation === pollGeneration) {
-    const payload = await api<{ events: LiveEvent[]; cursor: number; plan?: PlanState | null; session_id?: string | null }>(`/api/live/events?after=${cursor}&timeout=25`)
+    const payload = await api<{ events: LiveEvent[]; cursor: number; plan?: PlanState | null; session?: LogicalSessionState | null; session_id?: string | null }>(`/api/live/events?after=${cursor}&timeout=25`)
     if (generation !== pollGeneration) return
     plan = payload.plan || null
+    logicalSession = payload.session || null
     if (config) config.sessionId = String(payload.session_id ?? "")
     mergeEvents(payload.events || [])
     cursor = Math.max(cursor, Number(payload.cursor || 0))
@@ -1442,6 +1551,8 @@ function activateLiveConfig(nextConfig: LiveConfig): void {
     events = []
     cursor = 0
     connected = false
+    plan = null
+    logicalSession = null
     activityExpandedEventKey = ""
     activityAuditDetails.clear()
     activityDetailRevision += 1
@@ -1678,6 +1789,10 @@ function stopLiveWorkspace(): void {
     window.clearInterval(planContinuationTimer)
     planContinuationTimer = null
   }
+  if (countdownRenderTimer !== null) {
+    window.clearInterval(countdownRenderTimer)
+    countdownRenderTimer = null
+  }
 }
 
 app.onteardown = async () => {
@@ -1717,6 +1832,13 @@ passiveRefreshTimer = window.setInterval(() => {
 planContinuationTimer = window.setInterval(() => {
   if (!shuttingDown && config) void checkPlanContinuation()
 }, 30_000)
+
+countdownRenderTimer = window.setInterval(() => {
+  if (shuttingDown || !config || activeTab !== "activity") return
+  refreshAutoContinueCard()
+  const countdown = continuationCountdownState(plan)
+  if (countdown.visible && countdown.remainingSeconds <= 0) void checkPlanContinuation()
+}, 1_000)
 
 window.addEventListener("beforeunload", () => {
   stopLiveWorkspace()

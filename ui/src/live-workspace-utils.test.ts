@@ -3,9 +3,11 @@ import {
   activityDestination,
   activityEventKey,
   activityIntent,
+  continuationCountdownState,
   eventDetail,
   eventTitle,
   formatBytes,
+  formatCountdown,
   isOperationalActivityEvent,
   joinPath,
   parentPath,
@@ -36,6 +38,25 @@ describe("live workspace utilities", () => {
     expect(reconnectDelayMs(4)).toBe(8000)
     expect(reconnectDelayMs(5)).toBe(15000)
     expect(reconnectDelayMs(50)).toBe(15000)
+  })
+
+  test("auto continuation countdown appears only after five idle minutes", () => {
+    const plan = {
+      status: "active",
+      continuation_pending: false,
+      auto_continue_exhausted: false,
+      in_flight_calls: 0,
+      last_agent_activity: 1_000,
+      execution_lease_s: 900,
+      continuation_due_at: 1_900,
+    }
+    expect(continuationCountdownState(plan, 1_299).visible).toBeFalse()
+    const visible = continuationCountdownState(plan, 1_300)
+    expect(visible.visible).toBeTrue()
+    expect(visible.remainingSeconds).toBe(600)
+    expect(formatCountdown(600)).toBe("10:00")
+    expect(continuationCountdownState({ ...plan, continuation_retry_after: 2_000 }, 1_300).remainingSeconds).toBe(700)
+    expect(continuationCountdownState({ ...plan, in_flight_calls: 1 }, 1_500).visible).toBeFalse()
   })
 
   test("paths work for POSIX and Windows", () => {

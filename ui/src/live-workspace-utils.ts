@@ -110,6 +110,53 @@ export function reconnectDelayMs(attempt: number): number {
   return Math.min(15_000, 500 * (2 ** exponent))
 }
 
+export type ContinuationCountdownState = {
+  visible: boolean
+  remainingSeconds: number
+  idleSeconds: number
+  progress: number
+}
+
+export function continuationCountdownState(
+  plan: {
+    status: string
+    continuation_pending: boolean
+    auto_continue_exhausted: boolean
+    in_flight_calls?: number
+    last_agent_activity: number
+    execution_lease_s: number
+    continuation_due_at: number
+    continuation_retry_after?: number | null
+  } | null,
+  nowSeconds = Date.now() / 1000,
+  revealAfterSeconds = 5 * 60,
+): ContinuationCountdownState {
+  if (!plan || plan.status !== "active" || plan.continuation_pending || plan.auto_continue_exhausted || Number(plan.in_flight_calls || 0) > 0) {
+    return { visible: false, remainingSeconds: 0, idleSeconds: 0, progress: 0 }
+  }
+  const idleSeconds = Math.max(0, nowSeconds - Number(plan.last_agent_activity))
+  const dueAt = Math.max(
+    Number(plan.continuation_due_at),
+    Number(plan.continuation_retry_after || 0),
+  )
+  const remainingSeconds = Math.max(0, dueAt - nowSeconds)
+  const countdownWindow = Math.max(1, Number(plan.execution_lease_s || 0) - revealAfterSeconds)
+  const elapsedInWindow = Math.max(0, idleSeconds - revealAfterSeconds)
+  return {
+    visible: idleSeconds >= revealAfterSeconds,
+    remainingSeconds,
+    idleSeconds,
+    progress: Math.min(1, elapsedInWindow / countdownWindow),
+  }
+}
+
+export function formatCountdown(seconds: number): string {
+  const rounded = Math.max(0, Math.ceil(seconds))
+  const minutes = Math.floor(rounded / 60)
+  const remainder = rounded % 60
+  return `${minutes}:${String(remainder).padStart(2, "0")}`
+}
+
 export function activityEventKey(event: LiveEvent): string {
   return String(event.seq)
 }
@@ -175,6 +222,20 @@ export function eventTitle(event: LiveEvent): string {
   if (event.type === "channel.opened") return "Live workspace connected"
   if (event.type === "human.inspected_diff") return "Human inspected diff"
   if (event.type === "human.action") return action ? `Human: ${action}` : "Human action"
+  if (event.type === "session.started") return "Logical session started"
+  if (event.type === "session.resumed") return "Logical session resumed"
+  if (event.type === "session.reported") return "Progress checkpoint"
+  if (event.type === "session.completed") return "Logical session completed"
+  if (event.type === "session.cancelled") return "Logical session cancelled"
+  if (event.type === "plan.started") return "Plan started"
+  if (event.type === "plan.updated") return "Plan updated"
+  if (event.type === "plan.blocked") return "Plan paused"
+  if (event.type === "plan.resumed") return "Plan resumed"
+  if (event.type === "plan.completed") return "Plan completed"
+  if (event.type === "plan.cancelled") return "Plan cancelled"
+  if (event.type === "plan.continuation_requested") return "Auto continuation requested"
+  if (event.type === "plan.continuation_sent") return "Auto continuation sent"
+  if (event.type === "plan.continuation_failed") return "Auto continuation failed"
   return event.type.replaceAll(".", " ")
 }
 
@@ -185,6 +246,10 @@ export function eventDetail(event: LiveEvent): string {
     const value = data[key]
     if (value !== undefined && value !== null && value !== "") pieces.push(String(value))
   }
+  if (typeof data.summary === "string" && data.summary) pieces.push(data.summary)
+  if (typeof data.next === "string" && data.next) pieces.push(`Next: ${data.next}`)
+  if (typeof data.objective === "string" && data.objective) pieces.push(data.objective)
+  if (typeof data.reason === "string" && data.reason) pieces.push(data.reason)
   if (typeof data.command === "string" && data.command) pieces.push(data.command)
   if (typeof data.error === "string" && data.error) pieces.push(data.error)
   const duration = formatDuration(data.duration_ms)
@@ -198,6 +263,10 @@ export function eventTone(event: LiveEvent): "success" | "danger" | "warning" | 
   if (event.type === "tool.completed") return "success"
   if (event.type === "tool.started") return "info"
   if (event.type === "human.action") return "info"
+  if (event.type === "session.completed" || event.type === "plan.completed" || event.type === "plan.continuation_sent") return "success"
+  if (event.type === "session.cancelled" || event.type === "plan.cancelled" || event.type === "plan.continuation_failed") return "danger"
+  if (event.type === "plan.blocked") return "warning"
+  if (event.type.startsWith("session.") || event.type.startsWith("plan.")) return "info"
   return "muted"
 }
 

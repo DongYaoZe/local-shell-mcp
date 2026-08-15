@@ -760,6 +760,8 @@ def test_live_http_token_cors_and_collaborative_human_mutation(tmp_path, monkeyp
         assert snapshot.status_code == 200
         assert snapshot.headers["access-control-allow-origin"] == "*"
         assert snapshot.json()["data"]["channel"]["live_id"] == channel.live_id
+        assert snapshot.json()["data"]["channel"]["session"]["session_id"] == logical["session_id"]
+        assert snapshot.json()["data"]["channel"]["session"]["objective"] == "Exercise human goal controls"
 
         bootstrap = client.get("/api/ui/bootstrap", headers=headers)
         assert bootstrap.status_code == 200
@@ -767,6 +769,7 @@ def test_live_http_token_cors_and_collaborative_human_mutation(tmp_path, monkeyp
         events = client.get("/api/live/events?after=0&timeout=1", headers=headers)
         assert events.status_code == 200
         assert events.json()["data"]["events"]
+        assert events.json()["data"]["session"]["session_id"] == logical["session_id"]
 
         invalid_cursor = client.get("/api/live/events?after=not-a-number", headers=headers)
         assert invalid_cursor.status_code == 400
@@ -826,9 +829,14 @@ def test_live_http_token_cors_and_collaborative_human_mutation(tmp_path, monkeyp
             json={"action": "claim"},
         )
         stale_claim_id = stale_claim.json()["data"]["claim_id"]
-        paused = client.post("/api/live/plan", headers=headers, json={"action": "pause"})
+        paused = client.post(
+            "/api/live/plan",
+            headers=headers,
+            json={"action": "pause", "note": "Auto continuation cancelled by user"},
+        )
         assert paused.status_code == 200
         assert paused.json()["data"]["plan"]["status"] == "blocked"
+        assert paused.json()["data"]["plan"]["note"] == "Auto continuation cancelled by user"
         invalidated = client.post(
             "/api/live/plan/continuation",
             headers=headers,
