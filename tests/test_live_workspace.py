@@ -245,7 +245,7 @@ def test_live_workspace_can_reattach_a_second_mcp_session_by_live_id():
     manager.publish_for_session(
         "mcp:model-session",
         "tool.completed",
-        data={"tool": "run_shell_tool", "call_id": "model-call"},
+        data={"tool": "run_shell", "call_id": "model-call"},
     )
     assert channel.events[-1]["data"]["call_id"] == "model-call"
 
@@ -291,7 +291,7 @@ def test_live_workspace_session_rebind_drops_prior_operational_events():
     manager.publish_for_session(
         "mcp:model",
         "tool.completed",
-        data={"call_id": "old-call", "tool": "write_file"},
+        data={"call_id": "old-call", "tool": "file_write"},
     )
     manager.publish_for_session(
         "mcp:model",
@@ -311,7 +311,7 @@ def test_live_workspace_session_rebind_drops_prior_operational_events():
     manager.publish_for_session(
         "mcp:model",
         "tool.completed",
-        data={"call_id": "new-call", "tool": "read_file"},
+        data={"call_id": "new-call", "tool": "file_read"},
     )
     visible = manager.events_since(channel, 0)
     assert any(event["data"].get("call_id") == "new-call" for event in visible)
@@ -427,7 +427,7 @@ def test_live_workspace_session_switch_uses_existing_canonical_target_channel():
     manager.publish_for_session(
         "mcp:model-a",
         "tool.completed",
-        data={"tool": "write_file", "call_id": "on-target"},
+        data={"tool": "file_write", "call_id": "on-target"},
     )
     assert target.events[-1]["data"]["call_id"] == "on-target"
     assert source.events[-1]["data"].get("call_id") != "on-target"
@@ -844,7 +844,7 @@ async def test_mcp_app_resource_and_render_result_hide_live_token(tmp_path, monk
     mcp = build_mcp()
 
     tools = {tool.name: tool for tool in await mcp.list_tools()}
-    render_tool = tools["open_live_workspace"]
+    render_tool = tools["workspace_open"]
     reconnect_tool = tools["live_workspace_reconnect"]
     assert render_tool.meta["ui"]["resourceUri"] == LIVE_RESOURCE_VERSIONED_URI
     assert render_tool.meta["ui/resourceUri"] == LIVE_RESOURCE_VERSIONED_URI
@@ -873,7 +873,7 @@ async def test_mcp_app_resource_and_render_result_hide_live_token(tmp_path, monk
     assert resource.meta["ui"]["permissions"] == {"clipboardWrite": {}}
     assert resource.meta["openai/widgetDomain"] == "https://lsm.example.test"
 
-    result = await mcp.call_tool("open_live_workspace", {"machine": "local", "cwd": "."})
+    result = await mcp.call_tool("workspace_open", {"machine": "local", "cwd": "."})
     assert isinstance(result, CallToolResult)
     assert result.structuredContent["live_id"]
     assert "token" not in result.structuredContent
@@ -924,7 +924,7 @@ async def test_live_workspace_reconnect_restores_persisted_logical_session(
     session_id = started["data"]["session_id"]
     run_id = started["data"]["active_run"]["run_id"]
     opened = await mcp.call_tool(
-        "open_live_workspace", {"cwd": ".", "session_run_id": run_id}
+        "workspace_open", {"cwd": ".", "session_run_id": run_id}
     )
     assert isinstance(opened, CallToolResult)
     old_live_id = opened.structuredContent["live_id"]
@@ -976,7 +976,7 @@ async def test_live_workspace_reconnect_ignores_deleted_cached_session(
     session_id = started["data"]["session_id"]
     run_id = started["data"]["active_run"]["run_id"]
     opened = await mcp.call_tool(
-        "open_live_workspace", {"cwd": ".", "session_run_id": run_id}
+        "workspace_open", {"cwd": ".", "session_run_id": run_id}
     )
     old_live_id = opened.structuredContent["live_id"]
     channel = live_channel_module.get_live_channel_manager().active_for_session("direct")
@@ -1064,7 +1064,7 @@ async def test_live_workspace_reconnect_drops_attachment_after_principal_change(
     session_id = started["data"]["session_id"]
     run_id = started["data"]["active_run"]["run_id"]
     opened = await mcp.call_tool(
-        "open_live_workspace", {"cwd": ".", "session_run_id": run_id}
+        "workspace_open", {"cwd": ".", "session_run_id": run_id}
     )
     assert opened.structuredContent["session_id"] == session_id
 
@@ -1155,7 +1155,7 @@ async def test_cancelled_thread_mutation_holds_logical_lease_until_worker_finish
     mcp = build_mcp()
     task = asyncio.create_task(
         mcp.call_tool(
-            "write_file",
+            "file_write",
             {
                 "path": "threaded.txt",
                 "content": "completed after cancellation",
@@ -1204,7 +1204,7 @@ async def test_predispatch_failure_releases_logical_inflight_lease(tmp_path, mon
     monkeypatch.setattr("local_shell_mcp.tools.audit", fail_start_audit)
     with pytest.raises(Exception, match="audit volume unavailable"):
         await mcp.call_tool(
-            "write_file",
+            "file_write",
             {
                 "path": "never.txt",
                 "content": "must not run",
@@ -1240,7 +1240,7 @@ async def test_lease_heartbeat_survives_renewal_audit_failure(monkeypatch):
     await tools_module._renew_session_tool_lease(
         FlakyManager(),
         {"session_id": "s_test", "run_id": "r_test", "call_id": "call-test"},
-        tool_name="write_file",
+        tool_name="file_write",
         call_id="call-test",
     )
 
@@ -1266,7 +1266,7 @@ async def test_mcp_run_lease_blocks_stale_same_transport_agent(tmp_path, monkeyp
 
     with pytest.raises(Exception, match="superseded"):
         await mcp.call_tool(
-            "write_file",
+            "file_write",
             {
                 "path": "stale.txt",
                 "content": "must not be written",
@@ -1276,7 +1276,7 @@ async def test_mcp_run_lease_blocks_stale_same_transport_agent(tmp_path, monkeyp
     assert not (tmp_path / "stale.txt").exists()
 
     _, written = await mcp.call_tool(
-        "write_file",
+        "file_write",
         {
             "path": "current.txt",
             "content": "current run",
@@ -1356,7 +1356,7 @@ async def test_explicit_resume_binds_live_channel_by_resolved_logical_session(
     mcp = build_mcp()
     with pytest.raises(Exception, match="No logical session is attached"):
         await mcp.call_tool(
-            "write_file",
+            "file_write",
             {
                 "path": "must-not-write.txt",
                 "content": "no",
@@ -1374,7 +1374,7 @@ async def test_explicit_resume_binds_live_channel_by_resolved_logical_session(
     )
     resumed_run_id = resumed["data"]["active_run"]["run_id"]
     await mcp.call_tool(
-        "write_file",
+        "file_write",
         {
             "path": "recovered.txt",
             "content": "ok",
@@ -1385,11 +1385,11 @@ async def test_explicit_resume_binds_live_channel_by_resolved_logical_session(
     assert not (tmp_path / "must-not-write.txt").exists()
     assert live_manager.active_for_session("direct") is first_channel
     assert any(
-        event["type"] == "tool.completed" and event["data"].get("tool") == "write_file"
+        event["type"] == "tool.completed" and event["data"].get("tool") == "file_write"
         for event in first_channel.events
     )
     assert not any(
-        event["type"] == "tool.completed" and event["data"].get("tool") == "write_file"
+        event["type"] == "tool.completed" and event["data"].get("tool") == "file_write"
         for event in second_channel.events
     )
 
@@ -1412,7 +1412,7 @@ async def test_tool_does_not_execute_when_start_lease_persistence_fails(
     monkeypatch.setattr(manager, "_save_locked", fail_save)
     with pytest.raises(Exception, match="refusing to execute"):
         await mcp.call_tool(
-            "write_file",
+            "file_write",
             {
                 "path": "completed.txt",
                 "content": "must not be written",
@@ -1426,19 +1426,19 @@ async def test_tool_does_not_execute_when_start_lease_persistence_fails(
 async def test_live_workspace_keeps_model_and_human_mutations_collaborative(tmp_path, monkeypatch):
     _configure(tmp_path, monkeypatch, auth="none")
     mcp = build_mcp()
-    result = await mcp.call_tool("open_live_workspace", {"cwd": "."})
+    result = await mcp.call_tool("workspace_open", {"cwd": "."})
     assert isinstance(result, CallToolResult)
     live_token = result.meta["local-shell-mcp/live"]["token"]
     channel = live_channel_module.get_live_channel_manager().active_for_session("direct")
     assert channel is not None
 
-    reopened = await mcp.call_tool("open_live_workspace", {"cwd": "."})
+    reopened = await mcp.call_tool("workspace_open", {"cwd": "."})
     assert isinstance(reopened, CallToolResult)
     refreshed_live_token = reopened.meta["local-shell-mcp/live"]["token"]
     assert refreshed_live_token != live_token
-    await mcp.call_tool("write_file", {"path": "shared.txt", "content": "shared"})
+    await mcp.call_tool("file_write", {"path": "shared.txt", "content": "shared"})
     assert (tmp_path / "shared.txt").read_text(encoding="utf-8") == "shared"
-    _, structured = await mcp.call_tool("list_files", {"path": "."})
+    _, structured = await mcp.call_tool("file_list", {"path": "."})
     assert structured["ok"] is True
     assert live_channel_module.get_live_channel_manager().authenticate(live_token) is None
     assert live_channel_module.get_live_channel_manager().authenticate(refreshed_live_token) is channel
@@ -1791,7 +1791,7 @@ def test_live_workspace_is_hidden_when_ui_is_disabled(tmp_path, monkeypatch):
         return tools, resources
 
     tools, resources = asyncio.run(inspect_surface())
-    assert "open_live_workspace" not in tools
+    assert "workspace_open" not in tools
     assert LIVE_RESOURCE_URI not in resources
 
     app = _build_mcp_http_app(mcp)
@@ -1811,7 +1811,7 @@ def test_live_workspace_is_hidden_in_stdio_mode(tmp_path, monkeypatch):
         return tools, resources
 
     tools, resources = asyncio.run(inspect_surface())
-    assert "open_live_workspace" not in tools
+    assert "workspace_open" not in tools
     assert LIVE_RESOURCE_URI not in resources
 
 
