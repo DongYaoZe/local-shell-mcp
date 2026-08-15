@@ -453,6 +453,76 @@ def test_audit_payload_helpers_cover_edge_paths(tmp_path, monkeypatch):
     assert retained["audit_payloads_omitted"] == "record exceeded audit retention limit"
 
 
+def test_audit_skips_full_retention_scan_while_storage_is_below_budget(tmp_path, monkeypatch):
+    _configure(tmp_path, monkeypatch)
+    monkeypatch.setenv("LOCAL_SHELL_MCP_MAX_AUDIT_LOG_BYTES", "20000000")
+    get_settings.cache_clear()
+    log_path = get_settings().audit_log_path
+    log_path.write_text(
+        json.dumps({"id": "seed", "ts": 1, "event": "seed", "detail": "x" * 1_000_000}) + "\n",
+        encoding="utf-8",
+    )
+    calls = 0
+    original = audit_module._enforce_audit_storage_limit
+
+    def track_enforcement(path: Path, max_bytes: int) -> None:
+        nonlocal calls
+        calls += 1
+        original(path, max_bytes)
+
+    monkeypatch.setattr(audit_module, "_enforce_audit_storage_limit", track_enforcement)
+
+    for index in range(100):
+        audit_module.audit("small_event", index=index)
+
+    assert calls == 0
+    assert len(log_path.read_text(encoding="utf-8").splitlines()) == 101
+
+
+def test_audit_periodically_runs_payload_housekeeping_below_budget(tmp_path, monkeypatch):
+    _configure(tmp_path, monkeypatch)
+    monkeypatch.setenv("LOCAL_SHELL_MCP_MAX_AUDIT_LOG_BYTES", "20000000")
+    get_settings.cache_clear()
+    log_path = get_settings().audit_log_path
+    audit_module._AUDIT_LAST_MAINTENANCE[os.fspath(log_path)] = 0.0
+    calls = 0
+    original = audit_module._enforce_audit_storage_limit
+
+    def track_enforcement(path: Path, max_bytes: int) -> None:
+        nonlocal calls
+        calls += 1
+        original(path, max_bytes)
+
+    monkeypatch.setattr(audit_module, "_enforce_audit_storage_limit", track_enforcement)
+
+    audit_module.audit("maintenance_event")
+
+    assert calls == 1
+
+
+def test_audit_enters_full_retention_scan_only_after_storage_exceeds_budget(
+    tmp_path, monkeypatch
+):
+    _configure(tmp_path, monkeypatch)
+    monkeypatch.setenv("LOCAL_SHELL_MCP_MAX_AUDIT_LOG_BYTES", "3000")
+    get_settings.cache_clear()
+    calls = 0
+    original = audit_module._enforce_audit_storage_limit
+
+    def track_enforcement(path: Path, max_bytes: int) -> None:
+        nonlocal calls
+        calls += 1
+        original(path, max_bytes)
+
+    monkeypatch.setattr(audit_module, "_enforce_audit_storage_limit", track_enforcement)
+
+    for index in range(100):
+        audit_module.audit("budget_pressure", index=index, detail="x" * 80)
+
+    assert calls > 0
+    assert get_settings().audit_log_path.stat().st_size <= 3000
+
+
 def test_small_retention_budget_externalizes_recoverable_values(tmp_path, monkeypatch):
     _configure(tmp_path, monkeypatch)
     monkeypatch.setenv("LOCAL_SHELL_MCP_MAX_AUDIT_LOG_BYTES", "12000")

@@ -28,6 +28,8 @@ _AUDIT_PREVIEW_STRING_CHARS = 2_000
 _AUDIT_PREVIEW_ITEMS = 100
 _AUDIT_INLINE_VALUE_BYTES = 16 * 1024
 _AUDIT_PAYLOAD_PRUNE_GRACE_S = 300
+_AUDIT_MAINTENANCE_INTERVAL_S = _AUDIT_PAYLOAD_PRUNE_GRACE_S
+_AUDIT_LAST_MAINTENANCE: dict[str, float] = {}
 _AUDIT_PAYLOAD_DIRECTORY = "audit-payloads"
 _AUDIT_PAYLOAD_MARKER = "$local_shell_mcp_audit_payload"
 _AUDIT_PAYLOAD_VERSION = 1
@@ -261,6 +263,46 @@ def _payload_file_size(digest: str, log_path: Path | None = None) -> int:
         return _payload_path(digest, log_path).stat().st_size
     except OSError:
         return 0
+
+
+def _audit_storage_bytes(log_path: Path) -> int:
+    """Return the cheap on-disk size used by the audit log and payload store."""
+
+    try:
+        total = log_path.stat().st_size
+    except OSError:
+        total = 0
+
+    directory = _payload_directory_path(log_path)
+    try:
+        with os.scandir(directory) as entries:
+            for entry in entries:
+                try:
+                    if entry.is_file():
+                        total += entry.stat().st_size
+                except OSError:
+                    continue
+    except OSError:
+        pass
+    return total
+
+
+def _audit_storage_limit_exceeded(log_path: Path, max_bytes: int) -> bool:
+    return max_bytes > 0 and _audit_storage_bytes(log_path) > max_bytes
+
+
+def _audit_maintenance_due(log_path: Path) -> bool:
+    now = time.monotonic()
+    key = os.fspath(log_path)
+    previous = _AUDIT_LAST_MAINTENANCE.get(key)
+    if previous is None:
+        _AUDIT_LAST_MAINTENANCE[key] = now
+        return False
+    return now - previous >= _AUDIT_MAINTENANCE_INTERVAL_S
+
+
+def _mark_audit_maintenance(log_path: Path) -> None:
+    _AUDIT_LAST_MAINTENANCE[os.fspath(log_path)] = time.monotonic()
 
 
 def _encode_audit_record(record: dict[str, Any]) -> bytes:
@@ -518,7 +560,11 @@ def audit(event: str, **fields: Any) -> None:
             f.flush()
         with contextlib.suppress(OSError):
             path.chmod(0o600)
-        _enforce_audit_storage_limit(path, settings.max_audit_log_bytes)
+        retention_needed = _audit_storage_limit_exceeded(path, settings.max_audit_log_bytes)
+        maintenance_due = settings.max_audit_log_bytes > 0 and _audit_maintenance_due(path)
+        if retention_needed or maintenance_due:
+            _enforce_audit_storage_limit(path, settings.max_audit_log_bytes)
+            _mark_audit_maintenance(path)
 
 
 _TOOL_OPERATION_GROUPS: dict[str, frozenset[str]] = {
