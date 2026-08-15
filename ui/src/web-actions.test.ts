@@ -69,4 +69,11 @@ describe("Native WebUI actions", () => {
     for (const source of sources) expect(source).not.toContain('button("Refresh"')
     expect(sources.join("\n")).not.toContain("refresh-sessions")
   })
+
+  test("keeps native mobile content clear of the bottom nav and exposes shared refresh", async () => {
+    const styles = await Bun.file(new URL("./web.css", import.meta.url)).text()
+
+    expect(styles).toContain("body.native-view-active .main-content { padding: 16px 14px 84px; }")
+    expect(styles).toContain("body.native-view-active #refresh-button { display: inline-flex; }")
+  })
 })

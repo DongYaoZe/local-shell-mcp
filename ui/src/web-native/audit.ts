@@ -26,6 +26,7 @@ export class AuditController extends BaseController {
   private detail: AuditEntry | null = null
   private loading = false
   private refreshQueued = false
+  private preserveSelectionOnQueuedRefresh = false
   private totalMatched = 0
   private detailRequest = 0
   private filterTimer: number | null = null
@@ -51,9 +52,10 @@ export class AuditController extends BaseController {
     if (time) time.innerHTML = AUDIT_TIME_RANGES.map((item) => `<option value="${item.label}"${item.label === this.filters.time ? " selected" : ""}>${item.label}</option>`).join("")
   }
 
-  async refresh(): Promise<void> {
+  async refresh(preserveSelection = false): Promise<void> {
     if (this.loading) {
       this.refreshQueued = true
+      this.preserveSelectionOnQueuedRefresh ||= preserveSelection
       return
     }
     this.loading = true
@@ -65,7 +67,12 @@ export class AuditController extends BaseController {
       const range = AUDIT_TIME_RANGES.find((item) => item.label === requestedFilters.time) || AUDIT_TIME_RANGES[2]!
       const payload = await this.context.api.get<AuditPayload>(`/audit${queryString({ limit: 800, node: requestedFilters.node, operation: requestedFilters.operation, search: requestedFilters.search, event: requestedFilters.event, session: requestedFilters.session, start_ts: range.seconds ? Date.now() / 1000 - range.seconds : undefined, sort: requestedFilters.sort })}`)
       if (this.destroyed || filtersChanged()) return
-      const nextSelected = selectionAfterRefresh(this.entries, this.selected, payload.entries)
+      const nextSelected = selectionAfterRefresh(
+        this.entries,
+        this.selected,
+        payload.entries,
+        !preserveSelection,
+      )
       this.entries = payload.entries
       this.totalMatched = payload.total_matched
       this.selected = nextSelected
@@ -79,7 +86,9 @@ export class AuditController extends BaseController {
       this.loading = false
       if (this.refreshQueued && !this.destroyed) {
         this.refreshQueued = false
-        void this.refresh()
+        const preserveQueuedSelection = this.preserveSelectionOnQueuedRefresh
+        this.preserveSelectionOnQueuedRefresh = false
+        void this.refresh(preserveQueuedSelection)
       }
     }
   }
@@ -108,8 +117,11 @@ export class AuditController extends BaseController {
   private async loadDetail(): Promise<void> {
     const current = this.entries[this.selected]
     const request = ++this.detailRequest
-    this.detail = null
-    this.renderDetail()
+    const detailMatchesCurrent = Boolean(current?.id && this.detail?.id === current.id)
+    if (!detailMatchesCurrent) {
+      this.detail = null
+      this.renderDetail()
+    }
     if (!current?.id) {
       return
     }
@@ -120,15 +132,17 @@ export class AuditController extends BaseController {
       this.renderDetail()
     } catch (error) {
       if (request !== this.detailRequest || this.destroyed) return
-      this.detail = null
-      this.renderDetail()
       this.context.notify(`Audit detail: ${error instanceof Error ? error.message : String(error)}`, "error")
     }
   }
 
-  private renderDetail(): void {
+  private displayedEntry(): AuditEntry | undefined {
     const current = this.entries[this.selected]
-    const entry = this.detail?.id === current?.id ? this.detail : current
+    return this.detail && this.detail.id === current?.id ? this.detail : current
+  }
+
+  private renderDetail(): void {
+    const entry = this.displayedEntry()
     const target = this.root.querySelector<HTMLElement>("[data-role=audit-detail]")
     const title = this.root.querySelector<HTMLElement>("[data-role=audit-title]")
     const meta = this.root.querySelector<HTMLElement>("[data-role=audit-meta]")
@@ -166,7 +180,7 @@ export class AuditController extends BaseController {
     if (this.filterTimer !== null) window.clearTimeout(this.filterTimer)
     this.filterTimer = window.setTimeout(() => {
       this.filterTimer = null
-      void this.refresh()
+      void this.refresh(true)
     }, 250)
   }
 
@@ -190,7 +204,7 @@ export class AuditController extends BaseController {
     }
     const copy = target.closest<HTMLElement>("[data-copy-detail]")?.dataset.copyDetail
     if (copy) {
-      const entry = this.detail || this.entries[this.selected]
+      const entry = this.displayedEntry()
       if (!entry) return
       const value = copy === "output" ? formatAuditValue(auditOutput(entry), "No return value recorded") : formatAuditValue(auditInput(entry), "No input recorded")
       void copyText(value).then((copied) => this.context.notify(copied ? "Audit detail copied" : "Copy failed", copied ? "success" : "error"))
@@ -205,7 +219,7 @@ export class AuditController extends BaseController {
     } else if (action === "clear-filters") {
       this.filters = { node: "", operation: "", time: "24h", sort: "desc", search: "", event: "", session: "" }
       this.root.querySelectorAll<HTMLInputElement | HTMLSelectElement>("[data-filter]").forEach((control) => { control.value = this.filters[control.dataset.filter as keyof typeof this.filters] })
-      void this.refresh()
+      void this.refresh(true)
     }
   }
 
@@ -214,7 +228,7 @@ export class AuditController extends BaseController {
     if (!(target instanceof HTMLSelectElement) || !target.dataset.filter) return
     const key = target.dataset.filter as keyof typeof this.filters
     this.filters[key] = target.value
-    void this.refresh()
+    void this.refresh(true)
   }
 
   private onFilterInput(event: Event): void {
