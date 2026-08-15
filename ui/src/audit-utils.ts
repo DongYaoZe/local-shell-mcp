@@ -66,8 +66,9 @@ export function selectionAfterRefresh(
   previousEntries: AuditEntry[],
   previousSelected: number,
   nextEntries: AuditEntry[],
+  followFirst = true,
 ): number {
-  if (nextEntries.length === 0 || previousSelected <= 0) return 0
+  if (nextEntries.length === 0 || (followFirst && previousSelected <= 0)) return 0
   const previous = previousEntries[previousSelected]
   if (!previous) return Math.min(previousSelected, nextEntries.length - 1)
   const key = auditEntryKey(previous)

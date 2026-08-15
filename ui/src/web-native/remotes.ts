@@ -20,7 +20,7 @@ export class RemotesController extends BaseController {
 
   mount(root: HTMLElement): void {
     this.root = root
-    this.root.innerHTML = `<section class="native-page remotes-page"><div class="remote-summary" data-role="remote-summary"></div><div class="native-toolbar"><div><strong>Remote workers</strong><span class="toolbar-detail">Persistent worker identities and one-time invitations</span></div><div class="toolbar-actions">${button("New invite", "invite", { icon: "+", primary: true })}${button("Rename", "rename", { disabled: true })}${button("Revoke", "revoke", { danger: true, disabled: true })}${button("Refresh", "refresh", { icon: "↻" })}</div></div><div class="remotes-layout"><section class="native-panel remote-list-panel"><header><div><h3>Remote nodes</h3><p data-role="remote-count">Loading…</p></div></header><div data-role="remote-list"><div class="native-loading">Loading remote nodes…</div></div></section><section class="native-panel remote-detail-panel"><header><div><h3>Node details</h3><p>Version, workdir, capabilities, and system information</p></div></header><div class="remote-detail" data-role="remote-detail"><div class="native-empty">No node selected</div></div></section></div></section>`
+    this.root.innerHTML = `<section class="native-page remotes-page"><div class="remote-summary" data-role="remote-summary"></div><div class="native-toolbar"><div><strong>Remote workers</strong><span class="toolbar-detail">Persistent worker identities and one-time invitations</span></div><div class="toolbar-actions">${button("New invite", "invite", { icon: "+", primary: true })}${button("Rename", "rename", { disabled: true })}${button("Revoke", "revoke", { danger: true, disabled: true })}</div></div><div class="remotes-layout"><section class="native-panel remote-list-panel"><header><div><h3>Remote nodes</h3><p data-role="remote-count">Loading…</p></div></header><div data-role="remote-list"><div class="native-loading">Loading remote nodes…</div></div></section><section class="native-panel remote-detail-panel"><header><div><h3>Node details</h3><p>Version, workdir, capabilities, and system information</p></div></header><div class="remote-detail" data-role="remote-detail"><div class="native-empty">No node selected</div></div></section></div></section>`
     this.listen(root, "click", (event) => this.onClick(event))
     this.listen(root, "keydown", (event) => this.onListKeyDown(event as KeyboardEvent))
     this.every(() => void this.refresh(), 4_000)
@@ -153,7 +153,6 @@ export class RemotesController extends BaseController {
     if (action === "invite") void this.invite()
     else if (action === "rename") void this.rename()
     else if (action === "revoke") void this.revoke()
-    else if (action === "refresh") void this.refresh()
   }
 
   private focusRemote(index: number): void {

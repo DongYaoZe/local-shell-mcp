@@ -115,7 +115,6 @@ export class FilesController extends BaseController {
     if (parent) parent.disabled = !this.payload?.parent || this.payload.parent === this.path
     if (!target) return
     target.innerHTML = [
-      button("Refresh", "refresh", { icon: "↻", disabled: this.busy }),
       button("New file", "new-file", { icon: "+", disabled: !ready }),
       button("New folder", "new-dir", { icon: "▰", disabled: !ready }),
       button(current?.type === "dir" ? "Open folder" : "Edit file", "open", { disabled: !current }),
@@ -199,12 +198,15 @@ export class FilesController extends BaseController {
   private renderParent(): void {
     const list = this.root.querySelector<HTMLElement>("[data-role=parent-list]")
     const summary = this.root.querySelector<HTMLElement>("[data-role=parent-summary]")
+    const layout = this.root.querySelector<HTMLElement>(".files-layout")
     if (!this.payload) {
+      layout?.classList.remove("no-parent")
       if (summary) summary.textContent = "Loading…"
       if (list) list.innerHTML = '<div class="native-loading">Loading parent directory…</div>'
       return
     }
     const entries = this.payload.parent_entries.filter((entry) => this.showHidden || !entry.hidden)
+    layout?.classList.toggle("no-parent", this.payload.parent === this.path)
     if (summary) summary.textContent = this.payload?.parent === this.path ? "Root" : this.payload?.parent || "."
     if (!list) return
     if (!entries.length) {
@@ -462,8 +464,7 @@ export class FilesController extends BaseController {
     }
     const action = target.closest<HTMLElement>("[data-action]")?.dataset.action
     if (!action) return
-    if (action === "refresh") void this.refresh()
-    else if (action === "parent") this.parent()
+    if (action === "parent") this.parent()
     else if (action === "new-file") void this.create("file")
     else if (action === "new-dir") void this.create("dir")
     else if (action === "open") this.activate(this.current())

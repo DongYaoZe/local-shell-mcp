@@ -39,9 +39,10 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 .interface-switch button:hover { color: #dce2ed; background: rgba(255,255,255,.045); }
 .interface-switch button.active { color: white; background: #29344b; box-shadow: 0 1px 5px rgba(0,0,0,.18), inset 0 0 0 1px rgba(117,103,239,.3); }
 .interface-switch svg { width: 17px; height: 17px; }
-.interface-switch strong, .interface-switch small { display: block; white-space: nowrap; }
-.interface-switch strong { font-size: 12px; font-weight: 650; }
-.interface-switch small { margin-top: 2px; color: #69758b; font-size: 9px; }
+.interface-switch button > span { min-width: 0; }
+.interface-switch strong, .interface-switch small { display: block; }
+.interface-switch strong { font-size: 12px; font-weight: 650; white-space: nowrap; }
+.interface-switch small { margin-top: 2px; color: #69758b; font-size: 9px; line-height: 1.2; white-space: normal; }
 .interface-switch button.active small { color: #9fa9bc; }
 .primary-nav { display: grid; gap: 4px; }
 .nav-item { display: grid; grid-template-columns: 22px minmax(0,1fr) auto; align-items: center; min-height: 42px; padding: 0 11px; border-radius: 9px; color: #9fa9bc; font-size: 13px; font-weight: 540; transition: .16s ease; }
@@ -58,7 +59,7 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 .status-orb { width: 8px; height: 8px; margin-top: 4px; border-radius: 50%; background: #42d39a; box-shadow: 0 0 0 4px rgba(66,211,154,.11); }
 .controller-row strong { display: block; color: #e9edf5; font-size: 13px; font-weight: 650; }
 .controller-row span:not(.status-orb) { display: block; margin-top: 3px; color: #737f95; font-size: 12px; }
-.controller-meta { display: flex; justify-content: space-between; margin-top: 13px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,.055); color: #657187; font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; }
+.controller-meta { display: flex; flex-direction: column; gap: 2px; margin-top: 13px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,.055); color: #657187; font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; }
 .sidebar-footer { display: flex; gap: 6px; align-items: center; padding-top: 12px; border-top: 1px solid rgba(255,255,255,.06); }
 .icon-button { display: grid; place-items: center; width: 34px; height: 34px; color: #6b7587; background: white; border: 1px solid var(--line); border-radius: 9px; cursor: pointer; }
 .icon-button svg { width: 16px; height: 16px; }
@@ -83,6 +84,10 @@ h1 { margin: 0; color: #182033; font-size: 24px; line-height: 1.2; letter-spacin
 .button svg { width: 15px; height: 15px; }
 .button.secondary { color: #4d5769; background: white; border: 1px solid #e1e4eb; }
 .button.primary { color: white; background: #6759e7; border: 1px solid #5d4fd8; box-shadow: 0 5px 14px rgba(94,78,215,.18); }
+body.native-view-active .main-content { padding: 20px 24px 20px; }
+body.native-view-active .topbar { margin-bottom: 14px; }
+body.native-view-active .breadcrumb { margin-bottom: 5px; }
+body.native-view-active .topbar p { margin-top: 3px; font-size: 13px; }
 .status-banner { position: relative; display: grid; grid-template-columns: 76px minmax(330px,1fr) auto; gap: 20px; align-items: center; min-height: 134px; padding: 22px 25px; overflow: hidden; color: #d9f5e9; background: linear-gradient(120deg,#153b35 0%,#17473c 54%,#1b5242 100%); border: 1px solid rgba(255,255,255,.08); border-radius: 15px; box-shadow: var(--shadow); }
 .status-banner::after { content:""; position:absolute; right:-80px; top:-125px; width:330px; height:330px; border:1px solid rgba(255,255,255,.055); border-radius:50%; box-shadow: 0 0 0 45px rgba(255,255,255,.018),0 0 0 90px rgba(255,255,255,.012); }
 .status-illustration { position: relative; display: grid; place-items: center; width: 64px; height: 64px; }
@@ -354,10 +359,12 @@ button.nav-item.active { color: white; background: #232d42; box-shadow: inset 3p
   .nav-item { min-height: 52px; }
   .nav-item svg { width: 19px; height: 19px; }
   .main-content { padding: 16px 14px 84px; }
+  body.native-view-active .main-content { padding: 16px 14px 84px; }
   .console-content { height: calc(100vh - 64px); padding: 16px 14px; }
   .console-content .terminal-card { height: calc(100vh - 144px); }
   .topbar { align-items: flex-start; }
   .topbar-actions .live-pill, .button.secondary { display: none; }
+  body.native-view-active #refresh-button { display: inline-flex; }
   .status-banner { grid-template-columns: 48px 1fr; padding: 18px; }
   .status-illustration { width: 48px; height: 48px; }
   .status-stats { grid-template-columns: repeat(2,1fr); }
