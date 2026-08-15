@@ -42,4 +42,30 @@ describe("Native WebUI terminal scrolling", () => {
     expect(stopped).toBe(true)
     expect(scrollbar.scrollTop).toBe(35)
   })
+
+  test("operates tmux scrollback from the keyboard", () => {
+    let prevented = false
+    let stopped = false
+    let requested = -1
+    const controller = {
+      scrollbackSupported: true,
+      scrollbackHistory: 100,
+      scrollbackPosition: 10,
+      terminal: { rows: 20 },
+      renderScrollbar: () => {},
+      queueScrollRequest: (position: number) => { requested = position },
+    }
+    const event = {
+      key: "PageUp",
+      preventDefault: () => { prevented = true },
+      stopPropagation: () => { stopped = true },
+    }
+
+    ;(TerminalsController.prototype as any).onScrollbarKeyDown.call(controller, event)
+
+    expect(prevented).toBe(true)
+    expect(stopped).toBe(true)
+    expect(controller.scrollbackPosition).toBe(30)
+    expect(requested).toBe(30)
+  })
 })

@@ -50,7 +50,7 @@ export class TerminalsController extends BaseController {
       </div>
       <div class="terminal-layout" data-role="terminal-workspace">
         <aside class="native-panel terminal-sessions"><header><div><h3>Sessions</h3><p data-role="session-summary">Loading…</p></div></header><div class="session-list" data-role="sessions"></div></aside>
-        <section class="native-panel terminal-stage-panel"><header><div><h3 data-role="terminal-title">Persistent terminal</h3><p data-role="terminal-subtitle">Loading terminals…</p></div><div class="terminal-stage-actions">${button("Copy", "copy")}${button("Paste", "paste")}${button("Find", "search")}${button("Clear", "clear")}${button("Fullscreen", "fullscreen")}<div class="terminal-search" data-role="search-box" hidden><input data-role="search-input" placeholder="Find in terminal"/><button type="button" data-action="search-prev">Previous</button><button type="button" data-action="search-next">Next</button><button type="button" data-action="search-close">Close</button></div></div></header><div class="persistent-terminal" data-role="terminal"></div><div class="terminal-scrollbar unsupported" data-role="scrollbar" role="scrollbar" aria-label="Terminal scrollback" aria-valuemin="0" aria-valuemax="0" aria-valuenow="0"><div class="terminal-scrollbar-spacer"></div></div><div class="terminal-overlay" data-role="terminal-overlay">Loading terminals…</div><nav class="terminal-touchbar"><button type="button" data-sequence="\u001b">Esc</button><button type="button" data-sequence="\t">Tab</button><button type="button" data-sequence="\u001b[D">←</button><button type="button" data-sequence="\u001b[A">↑</button><button type="button" data-sequence="\u001b[B">↓</button><button type="button" data-sequence="\u001b[C">→</button><button type="button" data-sequence="\r">Enter</button><button type="button" data-sequence="\u0003">Ctrl-C</button></nav><form class="command-dock" data-role="command-form"><span>$</span><input data-role="command-input" autocomplete="off" placeholder="Send a command to the attached session"/><button class="native-button primary" type="submit">Send</button></form></section>
+        <section class="native-panel terminal-stage-panel"><header><div><h3 data-role="terminal-title">Persistent terminal</h3><p data-role="terminal-subtitle">Loading terminals…</p></div><div class="terminal-stage-actions">${button("Copy", "copy")}${button("Paste", "paste")}${button("Find", "search")}${button("Clear", "clear")}${button("Fullscreen", "fullscreen")}<div class="terminal-search" data-role="search-box" hidden><input data-role="search-input" placeholder="Find in terminal"/><button type="button" data-action="search-prev">Previous</button><button type="button" data-action="search-next">Next</button><button type="button" data-action="search-close">Close</button></div></div></header><div class="persistent-terminal" data-role="terminal"></div><div class="terminal-scrollbar unsupported" data-role="scrollbar" role="scrollbar" tabindex="0" aria-label="Terminal scrollback" aria-valuemin="0" aria-valuemax="0" aria-valuenow="0"><div class="terminal-scrollbar-spacer"></div></div><div class="terminal-overlay" data-role="terminal-overlay">Loading terminals…</div><nav class="terminal-touchbar"><button type="button" data-sequence="\u001b">Esc</button><button type="button" data-sequence="\t">Tab</button><button type="button" data-sequence="\u001b[D">←</button><button type="button" data-sequence="\u001b[A">↑</button><button type="button" data-sequence="\u001b[B">↓</button><button type="button" data-sequence="\u001b[C">→</button><button type="button" data-sequence="\r">Enter</button><button type="button" data-sequence="\u0003">Ctrl-C</button></nav><form class="command-dock" data-role="command-form"><span>$</span><input data-role="command-input" autocomplete="off" placeholder="Send a command to the attached session"/><button class="native-button primary" type="submit">Send</button></form></section>
       </div>
     </section>`
     this.renderMachineSelect()
@@ -123,7 +123,10 @@ export class TerminalsController extends BaseController {
     this.resizeObserver.observe(host)
     this.listen(host, "wheel", (event) => this.onTerminalWheel(event as WheelEvent), { capture: true, passive: false })
     const scrollbar = this.root.querySelector<HTMLElement>("[data-role=scrollbar]")
-    if (scrollbar) this.listen(scrollbar, "scroll", () => this.onScrollbarScroll())
+    if (scrollbar) {
+      this.listen(scrollbar, "scroll", () => this.onScrollbarScroll())
+      this.listen(scrollbar, "keydown", (event) => this.onScrollbarKeyDown(event as KeyboardEvent))
+    }
     window.requestAnimationFrame(() => this.fit())
   }
 
@@ -386,6 +389,26 @@ export class TerminalsController extends BaseController {
     const scrollbar = this.root.querySelector<HTMLElement>("[data-role=scrollbar]")
     if (!scrollbar) return
     scrollbar.scrollTop += event.deltaY < 0 ? -magnitude : magnitude
+  }
+
+  private onScrollbarKeyDown(event: KeyboardEvent): void {
+    if (!this.scrollbackSupported) return
+    const page = Math.max(1, this.terminal?.rows ?? 24)
+    let position = this.scrollbackPosition
+    if (event.key === "ArrowUp") position += 1
+    else if (event.key === "ArrowDown") position -= 1
+    else if (event.key === "PageUp") position += page
+    else if (event.key === "PageDown") position -= page
+    else if (event.key === "Home") position = this.scrollbackHistory
+    else if (event.key === "End") position = 0
+    else return
+    event.preventDefault()
+    event.stopPropagation()
+    position = Math.max(0, Math.min(position, this.scrollbackHistory))
+    if (position === this.scrollbackPosition) return
+    this.scrollbackPosition = position
+    this.renderScrollbar()
+    this.queueScrollRequest(position)
   }
 
   private scheduleReconnect(): void {

@@ -953,7 +953,7 @@ def test_spawn_shell_process_selects_tmux_attachment_or_polling_bridge(tmp_path,
 
 @pytest.mark.asyncio
 async def test_tmux_scrollback_uses_copy_mode_without_replacing_terminal_stream(monkeypatch):
-    process = SimpleNamespace(_tmux_session_id="demo")
+    process = SimpleNamespace(_tmux_session_id="demo.test")
     history = 900
     position = 0
     mode = ""
@@ -997,6 +997,7 @@ async def test_tmux_scrollback_uses_copy_mode_without_replacing_terminal_stream(
     state = await ui._tmux_scroll_to(process, 0)
     assert state["position"] == 0
     assert any(call[-1] == "cancel" for call in calls)
+    assert all(call[call.index("-t") + 1] == "=demo.test" for call in calls if "-t" in call)
 
     unsupported = await ui._tmux_scrollback_state(SimpleNamespace())
     assert unsupported == {
@@ -1065,6 +1066,74 @@ async def test_tmux_scroll_reuses_copy_mode_at_same_position(monkeypatch):
 
     assert state["position"] == 12
     assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_tmux_scrollback_cleanup_waits_for_last_attachment(monkeypatch):
+    copy_mode = False
+    scroll_requests = []
+    process = SimpleNamespace(_tmux_session_id="shared")
+
+    async def fake_state(process):
+        return {
+            "type": "scrollback",
+            "supported": True,
+            "history": 50,
+            "position": 8 if copy_mode else 0,
+            "copy_mode": copy_mode,
+        }
+
+    async def fake_scroll(process, position):
+        nonlocal copy_mode
+        scroll_requests.append(position)
+        copy_mode = position > 0
+        return await fake_state(process)
+
+    monkeypatch.setattr(ui, "_tmux_scrollback_state", fake_state)
+    monkeypatch.setattr(ui, "_tmux_scroll_to", fake_scroll)
+
+    first = await ui._register_tmux_scrollback_attachment(process, 1)
+    second = await ui._register_tmux_scrollback_attachment(process, 2)
+    copy_mode = True
+
+    await ui._release_tmux_scrollback_attachment(process, 2, second)
+    assert scroll_requests == []
+    assert copy_mode is True
+
+    await ui._release_tmux_scrollback_attachment(process, 1, first)
+    assert scroll_requests == [0]
+    assert copy_mode is False
+
+
+@pytest.mark.asyncio
+async def test_tmux_scrollback_attachment_coordination_error_paths(monkeypatch):
+    assert await ui._register_tmux_scrollback_attachment(SimpleNamespace(), 1) is None
+    await ui._release_tmux_scrollback_attachment(SimpleNamespace(), 1, None)
+
+    process = SimpleNamespace(_tmux_session_id="error-case")
+
+    async def failing_state(process):
+        raise RuntimeError("state failed")
+
+    monkeypatch.setattr(ui, "_tmux_scrollback_state", failing_state)
+    registration = await ui._register_tmux_scrollback_attachment(process, 2)
+    assert registration is not None
+    assert registration[1].initial_copy_mode is None
+    await ui._release_tmux_scrollback_attachment(process, 2, registration)
+    assert "error-case" not in ui._TMUX_SCROLLBACK_ATTACHMENTS
+
+    stale_group = ui._TmuxScrollbackAttachmentGroup()
+    await ui._release_tmux_scrollback_attachment(process, 3, ("missing", stale_group))
+
+    cleanup_group = ui._TmuxScrollbackAttachmentGroup()
+    cleanup_group.initial_copy_mode = False
+    cleanup_group.members.add(4)
+    ui._TMUX_SCROLLBACK_ATTACHMENTS["cleanup-error"] = cleanup_group
+    cleanup_process = SimpleNamespace(_tmux_session_id="cleanup-error")
+    await ui._release_tmux_scrollback_attachment(
+        cleanup_process, 4, ("cleanup-error", cleanup_group)
+    )
+    assert "cleanup-error" not in ui._TMUX_SCROLLBACK_ATTACHMENTS
 
 
 @pytest.mark.asyncio
@@ -1313,6 +1382,86 @@ async def test_native_shell_websocket_exposes_opt_in_tmux_scrollback(tmp_path, m
     }
     assert any(message["position"] == 15 for message in socket.sent_text)
     assert any(message["position"] == 42 for message in socket.sent_text)
+
+
+@pytest.mark.asyncio
+async def test_native_shell_websocket_sends_trailing_scrollback_refresh(tmp_path, monkeypatch):
+    _configure(tmp_path, monkeypatch)
+    history = 0
+
+    class Process:
+        _tmux_session_id = "demo"
+
+        def __init__(self):
+            self.reads = 0
+
+        async def read(self):
+            nonlocal history
+            self.reads += 1
+            if self.reads == 1:
+                history = 12
+                return b"fast output"
+            await asyncio.sleep(2)
+            return b""
+
+        async def write(self, data):
+            return None
+
+        async def resize(self, cols, rows):
+            return None
+
+        async def exit_code(self):
+            return None
+
+        async def close(self):
+            return None
+
+    class Socket:
+        headers = {"sec-websocket-protocol": "lsm-ui"}
+        query_params = {"machine": "local", "session_id": "demo", "scrollback": "1"}
+
+        def __init__(self):
+            self.sent_text = []
+
+        async def accept(self, subprotocol=None):
+            return None
+
+        async def close(self, code=1000, reason=""):
+            return None
+
+        async def send_bytes(self, data):
+            return None
+
+        async def send_text(self, data):
+            self.sent_text.append(json.loads(data))
+
+        async def receive(self):
+            await asyncio.sleep(0.85)
+            return {"type": "websocket.disconnect"}
+
+    async def fake_spawn(*args):
+        return Process()
+
+    async def fake_state(process):
+        return {
+            "type": "scrollback",
+            "supported": True,
+            "history": history,
+            "position": 0,
+            "copy_mode": False,
+        }
+
+    monkeypatch.setattr(ui, "_authorize_websocket", lambda websocket: True)
+    monkeypatch.setattr(ui, "_spawn_shell_process", fake_spawn)
+    monkeypatch.setattr(ui, "_tmux_scrollback_state", fake_state)
+    ui._ACTIVE_UI_TERMINALS.clear()
+    socket = Socket()
+
+    await ui.ui_shell_websocket(socket)
+
+    histories = [message["history"] for message in socket.sent_text]
+    assert histories[0] == 0
+    assert 12 in histories[1:]
 
 
 @pytest.mark.asyncio
