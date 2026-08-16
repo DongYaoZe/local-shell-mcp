@@ -559,6 +559,98 @@ def test_live_workspace_session_switch_uses_existing_canonical_target_channel():
     assert source.events[-1]["data"].get("call_id") != "on-target"
 
 
+def test_live_workspace_repairs_stale_and_duplicate_canonical_mappings():
+    manager = LiveChannelManager()
+    canonical, _ = manager.open(
+        session_key="mcp:canonical",
+        subject="alice",
+        scopes=tuple(ALL_OAUTH_SCOPES),
+        logical_session_id="s_target",
+    )
+
+    with pytest.raises(PermissionError, match="different principal"):
+        manager.open(
+            session_key="mcp:bob",
+            subject="bob",
+            scopes=tuple(ALL_OAUTH_SCOPES),
+            logical_session_id="s_target",
+        )
+
+    bob_source, _ = manager.open(
+        session_key="mcp:bob-source",
+        subject="bob",
+        scopes=tuple(ALL_OAUTH_SCOPES),
+    )
+    assert manager.bind_logical_session("mcp:bob-source", "s_target", "bob") is None
+    assert manager.active_for_session("mcp:bob-source") is bob_source
+
+    stale_source, _ = manager.open(
+        session_key="mcp:stale-source",
+        subject="alice",
+        scopes=tuple(ALL_OAUTH_SCOPES),
+    )
+    manager._logical_session_channels["s_stale"] = "missing-live-id"
+    assert manager.bind_logical_session("mcp:stale-source", "s_stale", "alice") is stale_source
+    assert manager._logical_session_channels["s_stale"] == stale_source.live_id
+
+    duplicate, duplicate_token = manager.open(
+        session_key="mcp:duplicate",
+        subject="alice",
+        scopes=tuple(ALL_OAUTH_SCOPES),
+    )
+    duplicate.logical_session_id = "s_target"
+    duplicate.events.append({"seq": duplicate.seq + 1, "type": "old", "actor": "system", "data": {}})
+
+    consolidated, _ = manager.open(
+        session_key="mcp:duplicate-reconnect",
+        subject="alice",
+        scopes=tuple(ALL_OAUTH_SCOPES),
+        live_id=duplicate.live_id,
+        logical_session_id="s_target",
+    )
+    assert consolidated is canonical
+    assert duplicate.logical_session_id is None
+    assert [event["type"] for event in duplicate.events] == ["session.detached"]
+
+    manager._channels.pop(duplicate.live_id)
+    assert manager.authenticate(duplicate_token) is None
+    assert manager.publish_for_session("mcp:missing", "tool.completed") is None
+
+
+def test_live_workspace_binding_repairs_duplicate_channel_and_detach_skips_unrelated():
+    manager = LiveChannelManager()
+    unrelated, _ = manager.open(
+        session_key="mcp:unrelated",
+        subject="user",
+        scopes=tuple(ALL_OAUTH_SCOPES),
+        logical_session_id="s_unrelated",
+    )
+    target, _ = manager.open(
+        session_key="mcp:target",
+        subject="user",
+        scopes=tuple(ALL_OAUTH_SCOPES),
+        logical_session_id="s_target",
+    )
+    duplicate, _ = manager.open(
+        session_key="mcp:duplicate",
+        subject="user",
+        scopes=tuple(ALL_OAUTH_SCOPES),
+    )
+    duplicate.logical_session_id = "s_target"
+    duplicate.events.append({"seq": duplicate.seq + 1, "type": "old", "actor": "system", "data": {}})
+
+    rebound = manager.bind_logical_session("mcp:duplicate", "s_target", "user")
+    assert rebound is target
+    assert duplicate.logical_session_id is None
+    assert [event["type"] for event in duplicate.events] == ["session.detached"]
+    assert manager.active_for_session("mcp:duplicate") is target
+
+    detached = manager.detach_logical_session("s_target")
+    assert detached == [target]
+    assert unrelated.logical_session_id == "s_unrelated"
+    assert target.logical_session_id is None
+
+
 def test_live_workspace_open_consolidates_duplicate_logical_target():
     manager = LiveChannelManager()
     unattached, _ = manager.open(
