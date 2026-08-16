@@ -37,6 +37,14 @@ SESSION_LIST_LIMIT = 100
 SESSION_LIST_TEXT_LIMIT = 500
 
 
+class SessionToolLeaseStartPersistenceError(RuntimeError):
+    """A tool-start write may have reached durable storage despite reporting failure."""
+
+    def __init__(self, message: str, lease: dict[str, Any]) -> None:
+        super().__init__(message)
+        self.lease = lease
+
+
 @dataclass(slots=True)
 class PlanStep:
     id: str
@@ -1212,9 +1220,15 @@ class SessionRuntimeManager:
                     touch_plan=True,
                 )
             except Exception as exc:
+                ambiguous_lease = {
+                    "session_id": logical.session_id,
+                    "run_id": run.run_id,
+                    "call_id": call_id,
+                }
                 self._sessions[logical.session_id] = before_start
-                raise RuntimeError(
-                    "Failed to persist the tool-call lease; refusing to execute the tool unprotected"
+                raise SessionToolLeaseStartPersistenceError(
+                    "Failed to persist the tool-call lease; refusing to execute the tool unprotected",
+                    ambiguous_lease,
                 ) from exc
             return {
                 "session_id": logical.session_id,

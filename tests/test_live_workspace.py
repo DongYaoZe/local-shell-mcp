@@ -1564,6 +1564,53 @@ async def test_tool_does_not_execute_when_start_lease_persistence_fails(
 
 
 @pytest.mark.asyncio
+async def test_ambiguous_start_persistence_failure_retries_lease_cleanup(
+    tmp_path, monkeypatch
+):
+    _configure(tmp_path, monkeypatch, auth="none")
+    mcp = build_mcp()
+    _, started = await mcp.call_tool(
+        "session_manage", {"action": "start", "objective": "Ambiguous lease write"}
+    )
+    session_id = started["data"]["session_id"]
+    run_id = started["data"]["active_run"]["run_id"]
+    manager = session_runtime_module.get_session_runtime_manager()
+    original_save = manager._save_locked
+    failed_after_write = False
+
+    def persist_then_drop_response(session):  # noqa: ANN001, ANN202
+        nonlocal failed_after_write
+        original_save(session)
+        if (
+            not failed_after_write
+            and session.activity
+            and session.activity[-1]["type"] == "tool.started"
+        ):
+            failed_after_write = True
+            raise OSError("redis response lost after SET")
+
+    monkeypatch.setattr(manager, "_save_locked", persist_then_drop_response)
+    with pytest.raises(Exception, match="refusing to execute"):
+        await mcp.call_tool(
+            "file_write",
+            {
+                "path": "must-not-run.txt",
+                "content": "no",
+                "session_run_id": run_id,
+            },
+        )
+
+    pending = list(tools_module._PENDING_SESSION_LEASE_CLEANUPS)
+    if pending:
+        await asyncio.gather(*pending)
+    assert failed_after_write is True
+    assert not (tmp_path / "must-not-run.txt").exists()
+    restored = SessionRuntimeManager(tmp_path / ".state")
+    restored.get(session_id, subject="local-mcp-client")
+    assert restored._in_flight_count_locked(session_id) == 0
+
+
+@pytest.mark.asyncio
 async def test_live_workspace_keeps_model_and_human_mutations_collaborative(tmp_path, monkeypatch):
     _configure(tmp_path, monkeypatch, auth="none")
     mcp = build_mcp()

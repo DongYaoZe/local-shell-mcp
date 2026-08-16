@@ -77,7 +77,11 @@ from .remote_transfer import (
     revoke_transfer_ticket,
 )
 from .search_ops import grep, tree
-from .session_runtime import SESSION_IN_FLIGHT_LEASE_S, get_session_runtime_manager
+from .session_runtime import (
+    SESSION_IN_FLIGHT_LEASE_S,
+    SessionToolLeaseStartPersistenceError,
+    get_session_runtime_manager,
+)
 from .settings import get_settings, safe_settings_dump
 from .shell_ops import (
     PUBLIC_RUN_SHELL_DEFAULT_TIMEOUT_S,
@@ -815,17 +819,26 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
                     (__tool_name == "plan_manage" and normalized_tool_action == "get")
                     or session_get_tracks_activity
                 )
-                logical_lease = await asyncio.to_thread(
-                    logical_manager.begin_tool_call,
-                    live_session_key,
-                    call_id,
-                    expected_run_id=(
-                        str(session_run_id) if session_run_id is not None else None
-                    ),
-                    subject=principal_subject,
-                    require_run_token=require_run_token,
-                    data=live_arguments,
-                )
+                try:
+                    logical_lease = await asyncio.to_thread(
+                        logical_manager.begin_tool_call,
+                        live_session_key,
+                        call_id,
+                        expected_run_id=(
+                            str(session_run_id) if session_run_id is not None else None
+                        ),
+                        subject=principal_subject,
+                        require_run_token=require_run_token,
+                        data=live_arguments,
+                    )
+                except SessionToolLeaseStartPersistenceError as exc:
+                    _schedule_session_tool_cleanup_retry(
+                        logical_manager,
+                        exc.lease,
+                        tool_name=__tool_name,
+                        call_id=call_id,
+                    )
+                    raise
             logical_activity_finished = False
             live_lifecycle_channel_id: str | None = None
             lease_heartbeat_task = (
