@@ -123,7 +123,7 @@ For a persistent public deployment, run the binary under your operating system's
 3. Replace the executable.
 4. Restart the process manager.
 5. Check `/healthz`.
-6. Ask the client to run `environment_info` before continuing work.
+6. Ask the client to run `environment_get` before continuing work.
 
 ## Safety notes
 

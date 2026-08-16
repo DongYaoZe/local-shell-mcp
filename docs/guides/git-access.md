@@ -1,6 +1,6 @@
 # Git access
 
-`local-shell-mcp` uses the standard Git command-line interface through `run_shell_tool`, `shell_start`, or `job_start`. Dedicated Git MCP wrappers are intentionally not exposed: the CLI is complete, familiar to coding agents, and avoids duplicating every Git subcommand in the tool list.
+`local-shell-mcp` uses the standard Git command-line interface through `run_shell`, `shell_start`, or `job_start`. Dedicated Git MCP wrappers are intentionally not exposed: the CLI is complete, familiar to coding agents, and avoids duplicating every Git subcommand in the tool list.
 
 ## Common workflow
 
@@ -17,10 +17,10 @@ git push origin HEAD
 
 A typical agent sequence is:
 
-1. Inspect with `run_shell_tool(command="git status --short --branch")`.
+1. Inspect with `run_shell(command="git status --short --branch")`.
 2. Read and edit only the relevant files.
 3. Run targeted tests.
-4. Review with `run_shell_tool(command="git diff --check && git diff")`.
+4. Review with `run_shell(command="git diff --check && git diff")`.
 5. Run `secret_scan` before committing or pushing.
 6. Stage, commit, and push using explicit Git CLI commands.
 

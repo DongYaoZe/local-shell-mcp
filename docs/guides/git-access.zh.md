@@ -1,6 +1,6 @@
 # Git 访问
 
-`local-shell-mcp` 通过 `run_shell_tool`、`shell_start` 或 `job_start` 使用标准 Git CLI，不再暴露专用 Git MCP 工具。这样可以覆盖完整 Git 功能，并避免为每个子命令维护重复工具。
+`local-shell-mcp` 通过 `run_shell`、`shell_start` 或 `job_start` 使用标准 Git CLI，不再暴露专用 Git MCP 工具。这样可以覆盖完整 Git 功能，并避免为每个子命令维护重复工具。
 
 ## 常见流程
 
@@ -17,7 +17,7 @@ git push origin HEAD
 
 建议流程：
 
-1. 用 `run_shell_tool` 执行 `git status --short --branch`。
+1. 用 `run_shell` 执行 `git status --short --branch`。
 2. 只读取和修改相关文件。
 3. 运行定向测试。
 4. 用 `git diff --check && git diff` 复查。

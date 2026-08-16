@@ -129,7 +129,7 @@ Recommended rules:
 After copying the setup prompt, start with a read-only task:
 
 ```text
-Use local-shell-mcp. First call environment_info and tree_view on the workspace. Do not modify files yet.
+Use local-shell-mcp. First call environment_get and file_tree on the workspace. Do not modify files yet.
 ```
 
 Then move to a bounded edit:

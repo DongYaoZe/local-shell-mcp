@@ -1023,7 +1023,7 @@ async def test_terminal_session_detaches_live_workspace_before_unattached_tools(
     )
     session_id = started["data"]["session_id"]
     run_id = started["data"]["active_run"]["run_id"]
-    await mcp.call_tool("open_live_workspace", {"cwd": ".", "session_run_id": run_id})
+    await mcp.call_tool("workspace_open", {"cwd": ".", "session_run_id": run_id})
     channel = live_channel_module.get_live_channel_manager().active_for_session("direct")
     assert channel is not None and channel.logical_session_id == session_id
 
@@ -1033,14 +1033,14 @@ async def test_terminal_session_detaches_live_workspace_before_unattached_tools(
     )
 
     assert channel.logical_session_id is None
-    _, listed = await mcp.call_tool("list_files", {"path": "."})
+    _, listed = await mcp.call_tool("file_list", {"path": "."})
     assert listed["ok"] is True
     session = session_runtime_module.get_session_runtime_manager().get(
         session_id, subject="local-mcp-client"
     )
     assert session["recent_activity"][-1]["type"] == terminal_event
     assert not any(
-        event["data"].get("tool") == "list_files"
+        event["data"].get("tool") == "file_list"
         for event in session["recent_activity"]
         if event["type"].startswith("tool.")
     )
