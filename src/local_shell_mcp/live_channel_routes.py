@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import suppress
 from typing import Any
 
 from starlette.exceptions import HTTPException
@@ -243,22 +244,50 @@ async def live_plan_continuation(request: Request) -> Response:
         body = await request.json()
         action = str(body.get("action") or "claim").strip().lower()
         session_manager = get_session_runtime_manager()
-        if not channel.logical_session_id:
+        live_manager = get_live_channel_manager()
+        session_id, binding_generation = live_manager.binding_state(channel)
+        if not session_id:
             return _ok({"claimed": False, "plan": None, "session_id": None})
+        if action not in {"claim", "validate", "report"}:
+            raise HTTPException(status_code=400, detail="action must be claim, validate, or report")
+
+        async def abandon_if_stale(claim_id: str | None) -> None:
+            if live_manager.binding_matches(channel, session_id, binding_generation):
+                return
+            with suppress(Exception):
+                await asyncio.to_thread(
+                    session_manager.abandon_plan_continuation,
+                    session_id,
+                    claim_id,
+                    subject=channel.subject,
+                )
+
+        def require_same_binding() -> None:
+            if not live_manager.binding_matches(channel, session_id, binding_generation):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Live Session binding changed during continuation handling; refresh the Workspace",
+                )
+
         if action == "claim":
             claimed = await asyncio.to_thread(
                 session_manager.claim_plan_continuation,
-                channel.logical_session_id,
+                session_id,
                 subject=channel.subject,
             )
+            if not live_manager.binding_matches(channel, session_id, binding_generation):
+                await abandon_if_stale(
+                    str(claimed.get("claim_id") or "") if claimed is not None else None
+                )
+                require_same_binding()
             if claimed is None:
+                plan = await asyncio.to_thread(session_manager.plan_state, session_id)
+                require_same_binding()
                 return _ok(
                     {
                         "claimed": False,
-                        "plan": await asyncio.to_thread(
-                            session_manager.plan_state, channel.logical_session_id
-                        ),
-                        "session_id": channel.logical_session_id,
+                        "plan": plan,
+                        "session_id": session_id,
                     }
                 )
             return _ok({"claimed": True, **claimed})
@@ -266,32 +295,44 @@ async def live_plan_continuation(request: Request) -> Response:
             claim_id = str(body.get("claim_id") or "").strip()
             if not claim_id:
                 raise HTTPException(status_code=400, detail="claim_id is required")
-            return _ok(
-                await asyncio.to_thread(
+            try:
+                result = await asyncio.to_thread(
                     session_manager.validate_plan_continuation,
-                    channel.logical_session_id,
+                    session_id,
                     claim_id,
                     subject=channel.subject,
                 )
-            )
+            except Exception:
+                if not live_manager.binding_matches(channel, session_id, binding_generation):
+                    await abandon_if_stale(claim_id)
+                    require_same_binding()
+                raise
+            if not live_manager.binding_matches(channel, session_id, binding_generation):
+                await abandon_if_stale(claim_id)
+                require_same_binding()
+            return _ok(result)
         if action == "report":
             accepted = bool(body.get("accepted"))
             error = str(body.get("error") or "").strip() or None
-            claim_id = str(body.get("claim_id") or "").strip() or None
-            return _ok(
-                {
-                    "session_id": channel.logical_session_id,
-                    "plan": await asyncio.to_thread(
+            claim_id = str(body.get("claim_id") or "").strip()
+            if not claim_id:
+                raise HTTPException(status_code=400, detail="claim_id is required")
+            try:
+                plan = await asyncio.to_thread(
                         session_manager.report_plan_continuation,
-                        channel.logical_session_id,
+                        session_id,
                         accepted=accepted,
                         error=error,
                         claim_id=claim_id,
                         subject=channel.subject,
-                    ),
-                }
-            )
-        raise HTTPException(status_code=400, detail="action must be claim, validate, or report")
+                    )
+            except Exception:
+                if not live_manager.binding_matches(channel, session_id, binding_generation):
+                    await abandon_if_stale(claim_id)
+                    require_same_binding()
+                raise
+            require_same_binding()
+            return _ok({"session_id": session_id, "plan": plan})
     except Exception as exc:
         return _error(exc)
 

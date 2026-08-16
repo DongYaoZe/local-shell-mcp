@@ -1275,6 +1275,60 @@ class SessionRuntimeManager:
                 )
             return lease_persistence_error
 
+    def retry_tool_call_cleanup(
+        self,
+        lease: dict[str, Any] | None,
+        *,
+        _state_lock_held: bool = False,
+    ) -> bool:
+        """Retry only the durable removal of a completed tool-call lease.
+
+        Completion activity is intentionally not appended here: callers use this
+        after finish_tool_call reported a persistence error, and replaying the
+        terminal event would create duplicate Activity rows.
+        """
+        if lease is None:
+            return True
+        session_id = str(lease.get("session_id") or "")
+        run_id = str(lease.get("run_id") or "")
+        call_id = str(lease.get("call_id") or "")
+        if not session_id or not call_id:
+            return True
+        with self._lock:
+            self._ensure_loaded_locked()
+            if not _state_lock_held and self._uses_shared_state_backend():
+                with self._shared_session_locks_locked([session_id]):
+                    return self.retry_tool_call_cleanup(
+                        lease, _state_lock_held=True
+                    )
+
+            # A failed completion save can leave local memory ahead of durable
+            # state. Reload the persisted Session explicitly even for the file
+            # backend before retrying the removal.
+            durable = self._load_session_from_store_locked(session_id)
+            if durable is not None:
+                self._restore_local_run_owners_locked(durable)
+                self._sessions[session_id] = durable
+            logical = self._sessions.get(session_id)
+            if logical is None:
+                return True
+            current = logical.in_flight_calls.get(call_id)
+            if current is None:
+                return True
+            if run_id and str(current.get("run_id") or "") not in {"", run_id}:
+                # Never delete a different lease if an impossible call-id reuse
+                # is observed; our completed call is already no longer present.
+                return True
+
+            snapshot = copy.deepcopy(logical)
+            logical.in_flight_calls.pop(call_id, None)
+            try:
+                self._save_locked(logical)
+            except Exception:
+                self._sessions[session_id] = snapshot
+                raise
+            return True
+
     def renew_tool_call(
         self,
         lease: dict[str, Any] | None,
@@ -1884,6 +1938,56 @@ class SessionRuntimeManager:
             return plan.public_state(
                 now, in_flight_calls=self._in_flight_count_locked(logical.session_id)
             )
+
+    def abandon_plan_continuation(
+        self,
+        session_id: str,
+        claim_id: str | None,
+        *,
+        subject: str | None = None,
+        _state_lock_held: bool = False,
+    ) -> bool:
+        """Clear one matching continuation claim when its Workspace binding is lost.
+
+        This is an internal recovery path used before the host is allowed to act
+        on a claim. If validation already reserved an attempt, the conservative
+        attempt count is retained; only the pending/reserved claim is released.
+        """
+        normalized_claim = str(claim_id or "").strip()
+        if not normalized_claim:
+            return False
+        with self._lock:
+            if not _state_lock_held and self._uses_shared_state_backend():
+                with self._shared_session_locks_locked([session_id]):
+                    return self.abandon_plan_continuation(
+                        session_id,
+                        normalized_claim,
+                        subject=subject,
+                        _state_lock_held=True,
+                    )
+            logical = self._require_session_locked(session_id, subject)
+            plan = logical.plan
+            if (
+                plan is None
+                or not plan.continuation_pending
+                or plan.continuation_claim_id != normalized_claim
+            ):
+                return False
+            snapshot = copy.deepcopy(logical)
+            now = time.time()
+            try:
+                plan.continuation_pending = False
+                plan.continuation_pending_since = None
+                plan.continuation_claim_id = None
+                plan.continuation_reserved = False
+                plan.updated_at = now
+                self._save_locked(logical)
+            except Exception as exc:
+                self._restore_snapshot_locked(
+                    snapshot, exc, context="Continuation abandonment"
+                )
+                raise
+            return True
 
 
 _MANAGER = SessionRuntimeManager()

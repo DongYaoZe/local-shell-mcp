@@ -343,6 +343,45 @@ def test_live_workspace_switch_does_not_rebind_channel_shared_by_another_transpo
     assert "s_second" not in manager._logical_session_channels
 
 
+def test_exclusive_model_binding_drops_superseded_transport_mapping():
+    manager = LiveChannelManager()
+    channel, _ = manager.open(
+        session_key="mcp:old-run",
+        subject="user",
+        scopes=tuple(ALL_OAUTH_SCOPES),
+        logical_session_id="s_first",
+    )
+    attached, _ = manager.open(
+        session_key="mcp:new-run",
+        subject="user",
+        scopes=tuple(ALL_OAUTH_SCOPES),
+        live_id=channel.live_id,
+        logical_session_id="s_first",
+    )
+    assert attached is channel
+
+    owner = manager.bind_logical_session(
+        "mcp:new-run",
+        "s_first",
+        "user",
+        exclusive_model_owner=True,
+    )
+
+    assert owner is channel
+    assert manager.active_for_session("mcp:old-run") is None
+    assert manager.active_for_session("mcp:new-run") is channel
+
+    rebound = manager.bind_logical_session(
+        "mcp:new-run",
+        "s_second",
+        "user",
+        exclusive_model_owner=True,
+    )
+    assert rebound is channel
+    assert channel.logical_session_id == "s_second"
+    assert manager.active_for_session("mcp:new-run") is channel
+
+
 def test_live_workspace_app_reattachment_follows_model_session_switch():
     manager = LiveChannelManager()
     channel, _ = manager.open(
@@ -1248,6 +1287,56 @@ async def test_lease_heartbeat_survives_renewal_audit_failure(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_completed_tool_retries_durable_lease_cleanup(tmp_path, monkeypatch):
+    _configure(tmp_path, monkeypatch, auth="none")
+    manager = session_runtime_module.get_session_runtime_manager()
+    started = manager.manage(
+        "direct", "local-mcp-client", action="start", objective="Cleanup retry"
+    )
+    session_id = started["session_id"]
+    run_id = started["active_run"]["run_id"]
+    lease = manager.begin_tool_call(
+        "direct",
+        "call-cleanup",
+        expected_run_id=run_id,
+        subject="local-mcp-client",
+        data={"tool": "write_file"},
+    )
+    assert lease is not None
+    original_save = manager._save_locked
+    failures_left = 2
+
+    def fail_completion_writes(session):  # noqa: ANN001, ANN202
+        nonlocal failures_left
+        if failures_left:
+            failures_left -= 1
+            raise OSError("state backend temporarily unavailable")
+        return original_save(session)
+
+    async def no_wait(_seconds):  # noqa: ANN001, ANN202
+        return None
+
+    monkeypatch.setattr(manager, "_save_locked", fail_completion_writes)
+    monkeypatch.setattr(tools_module.asyncio, "sleep", no_wait)
+    await tools_module._finish_session_tool_activity(
+        manager,
+        lease,
+        "tool.completed",
+        {"call_id": "call-cleanup", "ok": True, "tool": "write_file"},
+        tool_name="write_file",
+        call_id="call-cleanup",
+        stage="completed",
+    )
+    pending = list(tools_module._PENDING_SESSION_LEASE_CLEANUPS)
+    assert pending
+    await asyncio.gather(*pending)
+
+    restored = SessionRuntimeManager(tmp_path / ".state")
+    restored.get(session_id, subject="local-mcp-client")
+    assert restored._in_flight_count_locked(session_id) == 0
+
+
+@pytest.mark.asyncio
 async def test_mcp_run_lease_blocks_stale_same_transport_agent(tmp_path, monkeypatch):
     _configure(tmp_path, monkeypatch, auth="none")
     mcp = build_mcp()
@@ -1392,6 +1481,58 @@ async def test_explicit_resume_binds_live_channel_by_resolved_logical_session(
         event["type"] == "tool.completed" and event["data"].get("tool") == "file_write"
         for event in second_channel.events
     )
+
+
+@pytest.mark.asyncio
+async def test_session_manage_rebind_does_not_split_ephemeral_tool_lifecycle(
+    tmp_path, monkeypatch
+):
+    _configure(tmp_path, monkeypatch, auth="none")
+    mcp = build_mcp()
+    _, first = await mcp.call_tool(
+        "session_manage", {"action": "start", "objective": "First task"}
+    )
+    first_id = first["data"]["session_id"]
+    first_run_id = first["data"]["active_run"]["run_id"]
+    opened = await mcp.call_tool(
+        "open_live_workspace", {"cwd": ".", "session_run_id": first_run_id}
+    )
+    assert opened.structuredContent["session_id"] == first_id
+
+    session_manager = session_runtime_module.get_session_runtime_manager()
+    second = session_manager.manage(
+        "mcp:second-owner",
+        "local-mcp-client",
+        action="start",
+        objective="Second task",
+    )
+    live_manager = live_channel_module.get_live_channel_manager()
+    first_channel = live_manager.active_for_session("direct")
+    assert first_channel is not None
+    second_channel, _ = live_manager.open(
+        session_key="mcp:second-owner",
+        subject="local-mcp-client",
+        scopes=tuple(ALL_OAUTH_SCOPES),
+        logical_session_id=second["session_id"],
+    )
+
+    _, resumed = await mcp.call_tool(
+        "session_manage",
+        {
+            "action": "resume",
+            "session_id": second["session_id"],
+            "takeover": True,
+        },
+    )
+    assert resumed["data"]["session_id"] == second["session_id"]
+    assert live_manager.active_for_session("direct") is second_channel
+
+    for channel in (first_channel, second_channel):
+        assert not any(
+            event["type"].startswith("tool.")
+            and event["data"].get("tool") == "session_manage"
+            for event in channel.events
+        )
 
 
 @pytest.mark.asyncio
@@ -1678,6 +1819,181 @@ def test_human_plan_action_does_not_publish_across_session_rebind(tmp_path, monk
     assert session_manager.plan_state(first["session_id"])["status"] == "blocked"
     assert session_manager.plan_state(second["session_id"])["status"] == "active"
     assert not any(event["type"] == "plan.blocked" for event in channel.events)
+
+
+def test_continuation_validation_is_pinned_to_live_session_binding(tmp_path, monkeypatch):
+    _configure(tmp_path, monkeypatch, auth="oauth")
+    session_manager = session_runtime_module.get_session_runtime_manager()
+    first = session_manager.manage(
+        "mcp:first", "user", action="start", objective="First continuation"
+    )
+    second = session_manager.manage(
+        "mcp:second", "user", action="start", objective="Second continuation"
+    )
+    session_manager.manage_plan(
+        "mcp:first",
+        action="start",
+        objective="First continuation",
+        steps=[{"id": "work", "text": "Work"}],
+    )
+    first_state = session_manager._sessions[first["session_id"]]
+    assert first_state.plan is not None
+    first_state.plan.last_agent_activity -= session_runtime_module.PLAN_EXECUTION_LEASE_S + 1
+    claim = session_manager.claim_plan_continuation(first["session_id"], subject="user")
+    assert claim is not None
+
+    live_manager = live_channel_module.get_live_channel_manager()
+    channel, token = live_manager.open(
+        session_key="mcp:live",
+        subject="user",
+        scopes=tuple(ALL_OAUTH_SCOPES),
+        logical_session_id=first["session_id"],
+    )
+    original_validate = session_manager.validate_plan_continuation
+
+    def validate_then_rebind(session_id, claim_id, **kwargs):  # noqa: ANN001, ANN003, ANN202
+        result = original_validate(session_id, claim_id, **kwargs)
+        assert result["valid"] is True
+        assert live_manager.bind_logical_session(
+            "mcp:live",
+            second["session_id"],
+            "user",
+            exclusive_model_owner=True,
+        ) is channel
+        return result
+
+    monkeypatch.setattr(
+        session_manager, "validate_plan_continuation", validate_then_rebind
+    )
+    app = _build_mcp_http_app(build_mcp())
+    with TestClient(app, base_url="http://testserver") as client:
+        response = client.post(
+            "/api/live/plan/continuation",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"action": "validate", "claim_id": claim["claim_id"]},
+        )
+
+    assert response.status_code == 409
+    assert "binding changed" in response.json()["message"]
+    assert channel.logical_session_id == second["session_id"]
+    abandoned = session_manager.plan_state(first["session_id"])
+    assert abandoned["continuation_pending"] is False
+    assert abandoned["continuation_reserved"] is False
+    assert abandoned["continuation_count"] == 1
+
+
+def test_continuation_claim_is_abandoned_when_live_session_rebinds(tmp_path, monkeypatch):
+    _configure(tmp_path, monkeypatch, auth="oauth")
+    session_manager = session_runtime_module.get_session_runtime_manager()
+    first = session_manager.manage(
+        "mcp:first", "user", action="start", objective="First continuation"
+    )
+    second = session_manager.manage(
+        "mcp:second", "user", action="start", objective="Second continuation"
+    )
+    session_manager.manage_plan(
+        "mcp:first",
+        action="start",
+        objective="First continuation",
+        steps=[{"id": "work", "text": "Work"}],
+    )
+    first_state = session_manager._sessions[first["session_id"]]
+    assert first_state.plan is not None
+    first_state.plan.last_agent_activity -= session_runtime_module.PLAN_EXECUTION_LEASE_S + 1
+    live_manager = live_channel_module.get_live_channel_manager()
+    channel, token = live_manager.open(
+        session_key="mcp:live",
+        subject="user",
+        scopes=tuple(ALL_OAUTH_SCOPES),
+        logical_session_id=first["session_id"],
+    )
+    original_claim = session_manager.claim_plan_continuation
+
+    def claim_then_rebind(session_id, **kwargs):  # noqa: ANN001, ANN003, ANN202
+        result = original_claim(session_id, **kwargs)
+        assert result is not None
+        assert live_manager.bind_logical_session(
+            "mcp:live",
+            second["session_id"],
+            "user",
+            exclusive_model_owner=True,
+        ) is channel
+        return result
+
+    monkeypatch.setattr(session_manager, "claim_plan_continuation", claim_then_rebind)
+    app = _build_mcp_http_app(build_mcp())
+    with TestClient(app, base_url="http://testserver") as client:
+        response = client.post(
+            "/api/live/plan/continuation",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"action": "claim"},
+        )
+
+    assert response.status_code == 409
+    abandoned = session_manager.plan_state(first["session_id"])
+    assert abandoned["continuation_pending"] is False
+    assert abandoned["continuation_count"] == 0
+
+
+def test_failed_continuation_report_releases_old_session_claim_after_rebind(
+    tmp_path, monkeypatch
+):
+    _configure(tmp_path, monkeypatch, auth="oauth")
+    session_manager = session_runtime_module.get_session_runtime_manager()
+    first = session_manager.manage(
+        "mcp:first", "user", action="start", objective="First continuation"
+    )
+    second = session_manager.manage(
+        "mcp:second", "user", action="start", objective="Second continuation"
+    )
+    session_manager.manage_plan(
+        "mcp:first",
+        action="start",
+        objective="First continuation",
+        steps=[{"id": "work", "text": "Work"}],
+    )
+    first_state = session_manager._sessions[first["session_id"]]
+    assert first_state.plan is not None
+    first_state.plan.last_agent_activity -= session_runtime_module.PLAN_EXECUTION_LEASE_S + 1
+    claim = session_manager.claim_plan_continuation(first["session_id"], subject="user")
+    assert claim is not None
+    validated = session_manager.validate_plan_continuation(
+        first["session_id"], claim["claim_id"], subject="user"
+    )
+    assert validated["valid"] is True
+
+    live_manager = live_channel_module.get_live_channel_manager()
+    channel, token = live_manager.open(
+        session_key="mcp:live",
+        subject="user",
+        scopes=tuple(ALL_OAUTH_SCOPES),
+        logical_session_id=first["session_id"],
+    )
+
+    def fail_report_after_rebind(session_id, **kwargs):  # noqa: ANN001, ANN003, ANN202
+        assert session_id == first["session_id"]
+        assert live_manager.bind_logical_session(
+            "mcp:live",
+            second["session_id"],
+            "user",
+            exclusive_model_owner=True,
+        ) is channel
+        raise OSError("report backend unavailable")
+
+    monkeypatch.setattr(session_manager, "report_plan_continuation", fail_report_after_rebind)
+    app = _build_mcp_http_app(build_mcp())
+    with TestClient(app, base_url="http://testserver") as client:
+        response = client.post(
+            "/api/live/plan/continuation",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"action": "report", "claim_id": claim["claim_id"], "accepted": True},
+        )
+
+    assert response.status_code == 409
+    abandoned = session_manager.plan_state(first["session_id"])
+    assert abandoned["continuation_pending"] is False
+    assert abandoned["continuation_reserved"] is False
+    assert abandoned["continuation_count"] == 1
 
 
 def test_live_http_token_authenticates_when_global_auth_is_disabled(tmp_path, monkeypatch):
