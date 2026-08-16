@@ -270,9 +270,11 @@ async def live_plan_continuation(request: Request) -> Response:
                 )
 
         if action == "claim":
+            claim_id = str(body.get("claim_id") or "").strip() or None
             claimed = await asyncio.to_thread(
                 session_manager.claim_plan_continuation,
                 session_id,
+                claim_id=claim_id,
                 subject=channel.subject,
             )
             if not live_manager.binding_matches(channel, session_id, binding_generation):

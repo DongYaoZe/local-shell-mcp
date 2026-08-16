@@ -33,9 +33,17 @@ describe("live workspace utilities", () => {
   test("Live Workspace clears live-only activity when the Logical Session changes", async () => {
     const source = await Bun.file(new URL("./live-workspace.ts", import.meta.url)).text()
     expect(source).toContain("function resetActivityForSessionBoundary(): void")
-    expect(source).toContain("if (changed) resetActivityForSessionBoundary()")
+    expect(source).toContain('continuationClaimId = ""')
+    expect(source).toContain("resetActivityForSessionBoundary()")
     expect(source).toContain("applyLogicalSessionId(payload.session_id)")
     expect(source).toContain("const sessionChanged = !config || config.sessionId !== nextConfig.sessionId")
+  })
+
+  test("continuation claims reuse a client claim id across transient claim failures", async () => {
+    const source = await Bun.file(new URL("./live-workspace.ts", import.meta.url)).text()
+    expect(source).toContain('let continuationClaimId = ""')
+    expect(source).toContain("continuationClaimId || `c_${crypto.randomUUID()")
+    expect(source).toContain('JSON.stringify({ action: "claim", claim_id: requestedClaimId })')
   })
 
   test("continuation dispatch fails closed when revalidation errors", async () => {

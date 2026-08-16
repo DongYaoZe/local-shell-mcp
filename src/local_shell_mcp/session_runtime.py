@@ -21,6 +21,7 @@ PLAN_EXECUTION_LEASE_S = 15 * 60
 PLAN_MAX_CONTINUATIONS = 10
 PLAN_CONTINUATION_PENDING_TTL_S = 5 * 60
 PLAN_CONTINUATION_FAILURE_BACKOFF_S = 5 * 60
+PLAN_CONTINUATION_CLAIM_ID_LIMIT = 128
 PLAN_MAX_STEPS = 100
 PLAN_OBJECTIVE_LIMIT = 4_000
 PLAN_STEP_ID_LIMIT = 128
@@ -33,6 +34,7 @@ PLAN_STEP_STATUSES = frozenset({"pending", "active", "completed", "skipped"})
 SESSION_ACTIVITY_LIMIT = 200
 SESSION_IN_FLIGHT_LEASE_S = 2 * 60 * 60
 SESSION_RUN_HISTORY_LIMIT = 100
+# Soft retention target: unfinished/resumable Sessions are never evicted to meet it.
 SESSION_HISTORY_LIMIT_PER_PRINCIPAL = 100
 SESSION_REPORT_LIST_LIMIT = 50
 SESSION_TEXT_LIMIT = 20_000
@@ -737,7 +739,7 @@ class SessionRuntimeManager:
         *,
         protected_session_ids: set[str] | None = None,
     ) -> None:
-        """Keep retained Session history bounded without requiring manual cleanup."""
+        """Trim old terminal Sessions without deleting resumable work."""
         protected = set(protected_session_ids or ())
         attached = {session_id for session_id, _run_id in self._attachments.values()}
         retained = [item for item in self._sessions.values() if item.subject == subject]
@@ -749,19 +751,12 @@ class SessionRuntimeManager:
         for item in retained:
             if item.session_id in protected or item.session_id in attached:
                 continue
+            if item.status not in {"completed", "cancelled"}:
+                continue
             if self._in_flight_count_locked(item.session_id):
                 continue
-            active = item.active_run()
-            if active is not None and active.status == "active":
-                continue
             candidates.append(item)
-        candidates.sort(
-            key=lambda item: (
-                0 if item.status in {"completed", "cancelled"} else 1,
-                item.updated_at,
-                item.created_at,
-            )
-        )
+        candidates.sort(key=lambda item: (item.updated_at, item.created_at))
 
         for candidate in candidates:
             if excess <= 0:
@@ -777,10 +772,9 @@ class SessionRuntimeManager:
                         attached_id for attached_id, _run_id in self._attachments.values()
                     }:
                         continue
-                    if self._in_flight_count_locked(session_id):
+                    if current.status not in {"completed", "cancelled"}:
                         continue
-                    active = current.active_run()
-                    if active is not None and active.status == "active":
+                    if self._in_flight_count_locked(session_id):
                         continue
                     self._state_store().delete(f"sessions/{session_id}.json")
                     self._sessions.pop(session_id, None)
@@ -1812,6 +1806,7 @@ class SessionRuntimeManager:
         self,
         session_id: str,
         *,
+        claim_id: str | None = None,
         subject: str | None = None,
         _state_lock_held: bool = False,
     ) -> dict[str, Any] | None:
@@ -1820,6 +1815,7 @@ class SessionRuntimeManager:
                 with self._shared_session_locks_locked([session_id]):
                     return self.claim_plan_continuation(
                         session_id,
+                        claim_id=claim_id,
                         subject=subject,
                         _state_lock_held=True,
                     )
@@ -1828,11 +1824,37 @@ class SessionRuntimeManager:
             if plan is None or plan.status != "active":
                 return None
             now = time.time()
+            requested_claim_id = str(claim_id or "").strip() or None
+            if requested_claim_id is not None and len(requested_claim_id) > PLAN_CONTINUATION_CLAIM_ID_LIMIT:
+                raise ValueError(
+                    f"continuation claim_id must be <= {PLAN_CONTINUATION_CLAIM_ID_LIMIT} characters"
+                )
+
+            def claim_state() -> dict[str, Any]:
+                return {
+                    "session_id": logical.session_id,
+                    "plan": plan.public_state(
+                        now, in_flight_calls=self._in_flight_count_locked(logical.session_id)
+                    ),
+                    "recent_events": list(logical.activity)[-20:],
+                    "continuation_count": (
+                        plan.continuation_count
+                        if plan.continuation_reserved
+                        else plan.continuation_count + 1
+                    ),
+                    "claim_id": plan.continuation_claim_id,
+                }
+
             if self._in_flight_count_locked(logical.session_id):
                 return None
             if plan.continuation_pending:
                 pending_since = plan.continuation_pending_since or now
                 if now - pending_since < PLAN_CONTINUATION_PENDING_TTL_S:
+                    if (
+                        requested_claim_id
+                        and plan.continuation_claim_id == requested_claim_id
+                    ):
+                        return claim_state()
                     return None
                 snapshot = copy.deepcopy(logical)
                 try:
@@ -1857,7 +1879,7 @@ class SessionRuntimeManager:
             try:
                 plan.continuation_pending = True
                 plan.continuation_pending_since = now
-                plan.continuation_claim_id = f"c_{secrets.token_hex(8)}"
+                plan.continuation_claim_id = requested_claim_id or f"c_{secrets.token_hex(8)}"
                 plan.continuation_reserved = False
                 plan.updated_at = now
                 self._append_activity_locked(
@@ -1869,15 +1891,7 @@ class SessionRuntimeManager:
             except Exception as exc:
                 self._restore_snapshot_locked(snapshot, exc, context="Continuation claim")
                 raise
-            return {
-                "session_id": logical.session_id,
-                "plan": plan.public_state(
-                    now, in_flight_calls=self._in_flight_count_locked(logical.session_id)
-                ),
-                "recent_events": list(logical.activity)[-20:],
-                "continuation_count": plan.continuation_count + 1,
-                "claim_id": plan.continuation_claim_id,
-            }
+            return claim_state()
 
     def validate_plan_continuation(
         self,

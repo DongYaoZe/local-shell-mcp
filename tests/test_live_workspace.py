@@ -1712,9 +1712,14 @@ def test_live_continuation_failed_before_validation_releases_claim(tmp_path, mon
         claimed = client.post(
             "/api/live/plan/continuation",
             headers=headers,
-            json={"action": "claim"},
+            json={"action": "claim", "claim_id": "c_http_retry"},
         )
         claim_id = claimed.json()["data"]["claim_id"]
+        recovered = client.post(
+            "/api/live/plan/continuation",
+            headers=headers,
+            json={"action": "claim", "claim_id": "c_http_retry"},
+        )
         reported = client.post(
             "/api/live/plan/continuation",
             headers=headers,
@@ -1726,6 +1731,10 @@ def test_live_continuation_failed_before_validation_releases_claim(tmp_path, mon
             },
         )
 
+    assert claim_id == "c_http_retry"
+    assert recovered.status_code == 200
+    assert recovered.json()["data"]["claimed"] is True
+    assert recovered.json()["data"]["claim_id"] == claim_id
     assert reported.status_code == 200
     plan = reported.json()["data"]["plan"]
     assert plan["continuation_pending"] is False

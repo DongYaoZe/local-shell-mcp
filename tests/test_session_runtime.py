@@ -8,6 +8,7 @@ import pytest
 from local_shell_mcp.live_channel import LiveChannelManager
 from local_shell_mcp.oauth import ALL_OAUTH_SCOPES
 from local_shell_mcp.session_runtime import (
+    PLAN_CONTINUATION_CLAIM_ID_LIMIT,
     PLAN_CONTINUATION_FAILURE_BACKOFF_S,
     PLAN_EXECUTION_LEASE_S,
     PLAN_MAX_STEPS,
@@ -477,6 +478,84 @@ def test_unreserved_failed_continuation_report_releases_claim(tmp_path):
     assert failed["continuation_retry_after"] is not None
 
 
+def test_continuation_claim_can_be_recovered_after_response_loss(tmp_path):
+    manager = SessionRuntimeManager(tmp_path / ".state")
+    started = manager.manage("mcp:a", "user", action="start", objective="Task")
+    session_id = started["session_id"]
+    run_id = started["active_run"]["run_id"]
+    manager.manage_plan(
+        "mcp:a",
+        action="start",
+        session_run_id=run_id,
+        objective="Task",
+        steps=[{"id": "work", "text": "Work"}],
+    )
+    logical = manager._sessions[session_id]
+    assert logical.plan is not None
+    logical.plan.last_agent_activity = time.time() - PLAN_EXECUTION_LEASE_S - 1
+
+    with pytest.raises(ValueError, match="claim_id must be"):
+        manager.claim_plan_continuation(
+            session_id,
+            claim_id="x" * (PLAN_CONTINUATION_CLAIM_ID_LIMIT + 1),
+            subject="user",
+        )
+
+    first = manager.claim_plan_continuation(
+        session_id, claim_id="c_retry", subject="user"
+    )
+    assert first is not None
+    assert first["claim_id"] == "c_retry"
+
+    recovered = manager.claim_plan_continuation(
+        session_id, claim_id="c_retry", subject="user"
+    )
+    assert recovered is not None
+    assert recovered["claim_id"] == first["claim_id"]
+    assert recovered["continuation_count"] == first["continuation_count"] == 1
+    assert manager.claim_plan_continuation(
+        session_id, claim_id="c_other", subject="user"
+    ) is None
+
+
+def test_reserved_continuation_claim_recovery_does_not_double_count(tmp_path):
+    manager = SessionRuntimeManager(tmp_path / ".state")
+    started = manager.manage("mcp:a", "user", action="start", objective="Task")
+    session_id = started["session_id"]
+    run_id = started["active_run"]["run_id"]
+    manager.manage_plan(
+        "mcp:a",
+        action="start",
+        session_run_id=run_id,
+        objective="Task",
+        steps=[{"id": "work", "text": "Work"}],
+    )
+    logical = manager._sessions[session_id]
+    assert logical.plan is not None
+    logical.plan.last_agent_activity = time.time() - PLAN_EXECUTION_LEASE_S - 1
+
+    claim = manager.claim_plan_continuation(
+        session_id, claim_id="c_retry", subject="user"
+    )
+    assert claim is not None
+    first_validation = manager.validate_plan_continuation(
+        session_id, "c_retry", subject="user"
+    )
+    assert first_validation["valid"] is True
+    assert first_validation["plan"]["continuation_count"] == 1
+
+    recovered = manager.claim_plan_continuation(
+        session_id, claim_id="c_retry", subject="user"
+    )
+    assert recovered is not None
+    assert recovered["continuation_count"] == 1
+    second_validation = manager.validate_plan_continuation(
+        session_id, "c_retry", subject="user"
+    )
+    assert second_validation["valid"] is True
+    assert second_validation["plan"]["continuation_count"] == 1
+
+
 def test_tool_start_persistence_failure_fails_closed(tmp_path, monkeypatch):
     manager = SessionRuntimeManager(tmp_path / ".state")
     started = manager.manage("mcp:a", "user", action="start", objective="Task")
@@ -604,6 +683,67 @@ def test_shared_backend_refreshes_sessions_across_controller_instances(tmp_path,
         assert first.manage("mcp:list-a", "user", action="list")["sessions"][0][
             "session_id"
         ] == session_id
+    finally:
+        get_settings.cache_clear()
+        clear_memory_state()
+
+
+def test_shared_backend_prunes_only_terminal_history_and_recovers_claims(
+    tmp_path, monkeypatch
+):
+    clear_memory_state()
+    monkeypatch.setenv("LOCAL_SHELL_MCP_WORKSPACE_ROOT", str(tmp_path))
+    monkeypatch.setenv("LOCAL_SHELL_MCP_STATE_DIR", str(tmp_path / ".state"))
+    monkeypatch.setenv("LOCAL_SHELL_MCP_STATE_BACKEND", "redis")
+    monkeypatch.setenv("LOCAL_SHELL_MCP_STATE_BACKEND_URL", "redis://state.test/0")
+    monkeypatch.setenv("LOCAL_SHELL_MCP_STATE_BACKEND_PREFIX", "shared-retention-test")
+    monkeypatch.setattr(
+        "local_shell_mcp.session_runtime.SESSION_HISTORY_LIMIT_PER_PRINCIPAL", 2
+    )
+    get_settings.cache_clear()
+    shared_store = MemoryStateStore("shared-retention-test")
+    monkeypatch.setattr(
+        "local_shell_mcp.session_runtime.get_state_store", lambda: shared_store
+    )
+    try:
+        manager = SessionRuntimeManager()
+        terminal = manager.manage("mcp:a", "user", action="start", objective="Terminal")
+        manager.manage(
+            "mcp:a",
+            "user",
+            action="finish",
+            session_id=terminal["session_id"],
+            session_run_id=terminal["active_run"]["run_id"],
+            require_run_token=True,
+        )
+        resumable = manager.manage("mcp:a", "user", action="start", objective="Resumable")
+        current = manager.manage("mcp:a", "user", action="start", objective="Current")
+
+        with pytest.raises(ValueError, match="Unknown logical session"):
+            manager.get(terminal["session_id"], subject="user")
+        assert manager.get(resumable["session_id"], subject="user")["status"] == "active"
+
+        manager.manage_plan(
+            "mcp:a",
+            action="start",
+            session_run_id=current["active_run"]["run_id"],
+            objective="Current",
+            steps=[{"id": "work", "text": "Work"}],
+        )
+        logical = manager._sessions[current["session_id"]]
+        assert logical.plan is not None
+        logical.plan.last_agent_activity = time.time() - PLAN_EXECUTION_LEASE_S - 1
+        manager._save_locked(logical)
+
+        claimed = manager.claim_plan_continuation(
+            current["session_id"], claim_id="c_shared_retry", subject="user"
+        )
+        recovered = manager.claim_plan_continuation(
+            current["session_id"], claim_id="c_shared_retry", subject="user"
+        )
+        assert claimed is not None
+        assert recovered is not None
+        assert recovered["claim_id"] == claimed["claim_id"] == "c_shared_retry"
     finally:
         get_settings.cache_clear()
         clear_memory_state()
@@ -902,21 +1042,37 @@ def test_new_transport_requires_explicit_resume_before_execution(tmp_path):
         )
 
 
-def test_session_history_auto_prunes_oldest_detached_session(tmp_path):
+def test_session_history_preserves_resumable_sessions_beyond_retention_target(tmp_path):
     manager = SessionRuntimeManager(tmp_path / ".state")
     session_ids: list[str] = []
-    for index in range(SESSION_HISTORY_LIMIT_PER_PRINCIPAL):
+    for index in range(SESSION_HISTORY_LIMIT_PER_PRINCIPAL + 1):
         started = manager.manage(
             "mcp:a", "user", action="start", objective=f"Task {index}"
         )
         session_ids.append(started["session_id"])
 
-    replacement = manager.manage("mcp:a", "user", action="start", objective="Replacement")
-    assert replacement["session_id"] not in session_ids
-    listed = manager.manage("mcp:reader", "user", action="list")["sessions"]
-    assert len(listed) == SESSION_HISTORY_LIMIT_PER_PRINCIPAL
+    assert manager.get(session_ids[0], subject="user")["status"] == "active"
+    assert len(manager._sessions) == SESSION_HISTORY_LIMIT_PER_PRINCIPAL + 1
+
+
+def test_session_history_auto_prunes_oldest_terminal_session(tmp_path):
+    manager = SessionRuntimeManager(tmp_path / ".state")
+    terminal = manager.manage("mcp:a", "user", action="start", objective="Old terminal")
+    manager.manage(
+        "mcp:a",
+        "user",
+        action="finish",
+        session_id=terminal["session_id"],
+        session_run_id=terminal["active_run"]["run_id"],
+        require_run_token=True,
+    )
+
+    for index in range(SESSION_HISTORY_LIMIT_PER_PRINCIPAL):
+        manager.manage("mcp:a", "user", action="start", objective=f"Task {index}")
+
+    assert len(manager._sessions) == SESSION_HISTORY_LIMIT_PER_PRINCIPAL
     with pytest.raises(ValueError, match="Unknown logical session"):
-        manager.get(session_ids[0], subject="user")
+        manager.get(terminal["session_id"], subject="user")
 
 
 def test_session_delete_still_rejects_active_run(tmp_path):

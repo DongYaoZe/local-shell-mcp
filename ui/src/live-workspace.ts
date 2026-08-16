@@ -144,6 +144,7 @@ let coreRefreshQueued = false
 let plan: PlanState | null = null
 let logicalSession: LogicalSessionState | null = null
 let continuationChecking = false
+let continuationClaimId = ""
 type ContinuationDispatch = {
   claimId: string
   validatedAgentActivity: number
@@ -1450,7 +1451,10 @@ function resetActivityForSessionBoundary(): void {
 function applyLogicalSessionId(value: string | null | undefined): boolean {
   const nextSessionId = String(value ?? "")
   const changed = Boolean(config && config.sessionId !== nextSessionId)
-  if (changed) resetActivityForSessionBoundary()
+  if (changed) {
+    continuationClaimId = ""
+    resetActivityForSessionBoundary()
+  }
   if (config) config.sessionId = nextSessionId
   return changed
 }
@@ -1494,12 +1498,15 @@ async function checkPlanContinuation(): Promise<void> {
   if (!config || continuationChecking) return
   continuationChecking = true
   try {
+    const requestedClaimId = continuationClaimId || `c_${crypto.randomUUID().replaceAll("-", "")}`
+    continuationClaimId = requestedClaimId
     const claim = await api<{ claimed: boolean; claim_id?: string | null; plan?: PlanState | null; recent_events?: LiveEvent[]; continuation_count?: number; session_id?: string | null }>("/api/live/plan/continuation", {
       method: "POST",
-      body: JSON.stringify({ action: "claim" }),
+      body: JSON.stringify({ action: "claim", claim_id: requestedClaimId }),
     })
     plan = claim.plan || plan
     if (!claim.claimed || !plan) {
+      continuationClaimId = ""
       if (activeTab === "activity") renderActivity()
       return
     }
@@ -1508,8 +1515,9 @@ async function checkPlanContinuation(): Promise<void> {
     const sessionId = String(claim.session_id || config.sessionId || "")
     if (sessionId) config.sessionId = sessionId
     const attempt = Number(claim.continuation_count || plan.continuation_count + 1)
-    const claimId = String(claim.claim_id || plan.continuation_claim_id || "")
+    const claimId = String(claim.claim_id || requestedClaimId)
     if (!claimId) throw new Error("Continuation claim did not include an identifier")
+    continuationClaimId = claimId
     const checkpoint = {
       sessionId,
       objective: plan.objective,
@@ -1520,6 +1528,7 @@ async function checkPlanContinuation(): Promise<void> {
     }
     let accepted = false
     let error = ""
+    let validated = false
     try {
       await app.updateModelContext({
         content: [{ type: "text", text: `Active local-shell-mcp Goal checkpoint:\n${truncateContext(JSON.stringify(checkpoint, null, 2), 20_000)}` }],
@@ -1531,9 +1540,11 @@ async function checkPlanContinuation(): Promise<void> {
       })
       plan = validation.plan || plan
       if (!validation.valid) {
+        continuationClaimId = ""
         if (activeTab === "activity") renderActivity()
         return
       }
+      validated = true
       const dispatch: ContinuationDispatch = {
         claimId,
         validatedAgentActivity: Number(plan.last_agent_activity),
@@ -1569,7 +1580,9 @@ async function checkPlanContinuation(): Promise<void> {
         body: JSON.stringify({ action: "report", claim_id: claimId, accepted, error: error || null }),
       })
       plan = report.plan
+      continuationClaimId = ""
     } catch (reportError) {
+      if (validated) continuationClaimId = ""
       console.warn("Unable to report plan continuation result", reportError)
     }
     if (accepted) notify(`Goal continuation ${plan?.continuation_count || attempt}/${plan?.max_continuations || ""} sent`, "success")
@@ -1641,6 +1654,7 @@ function activateLiveConfig(nextConfig: LiveConfig): void {
   const channelChanged = !config || config.liveId !== nextConfig.liveId
   const sessionChanged = !config || config.sessionId !== nextConfig.sessionId
   const targetChanged = !config || config.machine !== nextConfig.machine || config.cwd !== nextConfig.cwd
+  if (sessionChanged) continuationClaimId = ""
   if (channelChanged || sessionChanged) {
     resetActivityForSessionBoundary()
     if (channelChanged) cursor = 0
