@@ -587,7 +587,10 @@ class SessionRuntimeManager:
 
     @staticmethod
     def _new_run_id() -> str:
-        return f"r_{secrets.token_hex(5)}"
+        # A run id is also the bearer used to recover an active run after an MCP
+        # transport is replaced. Keep enough entropy that it is safe to treat as
+        # an unguessable capability in addition to checking the authenticated subject.
+        return f"r_{secrets.token_hex(12)}"
 
     @staticmethod
     def _authenticated_subject() -> str | None:
@@ -666,8 +669,11 @@ class SessionRuntimeManager:
 
         current = session.active_run()
         if current is not None and current.status == "active":
-            if current.session_key == session_key and not takeover:
-                self._attachments[session_key] = (session.session_id, current.run_id)
+            if (
+                self._attachments.get(session_key) == (session.session_id, current.run_id)
+                and not takeover
+            ):
+                current.session_key = session_key
                 return current
             if not takeover:
                 raise ValueError(
@@ -1183,6 +1189,67 @@ class SessionRuntimeManager:
             )
         return logical
 
+    def _find_active_run_locked(
+        self,
+        run_id: str,
+        *,
+        subject: str | None,
+        refresh_shared: bool,
+    ) -> LogicalSession:
+        """Resolve the logical session currently owning ``run_id``.
+
+        Transport attachments are intentionally process-local.  A client can therefore
+        present the durable active run id on a replacement MCP transport and rebuild the
+        attachment without creating a new AgentRun.
+        """
+        if refresh_shared and self._uses_shared_state_backend():
+            self._refresh_all_sessions_locked()
+
+        matches = [
+            session
+            for session in self._sessions.values()
+            if session.active_run_id == run_id
+            and (active := session.active_run()) is not None
+            and active.run_id == run_id
+        ]
+        if len(matches) != 1:
+            raise RuntimeError(
+                "The supplied session_run_id does not identify a current logical session run; "
+                "resume the logical session to obtain a new active_run.run_id"
+            )
+
+        logical = matches[0]
+        if subject is not None and logical.subject != subject:
+            raise PermissionError("Logical session belongs to a different principal")
+        if logical.status != "active":
+            raise RuntimeError(f"Logical session is {logical.status}; start or resume another session")
+        run = logical.active_run()
+        if run is None or run.status != "active":
+            raise RuntimeError(
+                "This agent run is no longer active. Resume the logical session before continuing."
+            )
+        return logical
+
+    def _recover_attachment_by_run_id_locked(
+        self,
+        session_key: str,
+        run_id: str,
+        *,
+        subject: str | None,
+        refresh_shared: bool,
+    ) -> LogicalSession:
+        logical = self._find_active_run_locked(
+            run_id, subject=subject, refresh_shared=refresh_shared
+        )
+        run = logical.active_run()
+        if run is None:
+            raise RuntimeError("Logical session has no active agent run")
+        self._attachments[session_key] = (logical.session_id, run.run_id)
+        # ``session_key`` is deliberately not persisted.  It is only a hint for the
+        # currently attached transport; the durable identity is session_id + run_id.
+        run.session_key = session_key
+        return logical
+
     def current_session_id(self, session_key: str, *, subject: str | None = None) -> str | None:
         with self._lock:
             self._ensure_loaded_locked()
@@ -1235,10 +1302,28 @@ class SessionRuntimeManager:
             if session_key not in self._attachments:
                 if expected_run_id is None:
                     return None
-                raise RuntimeError(
-                    "No logical session is attached to this MCP transport; call "
-                    "session_manage(action='resume', session_id=..., takeover=true) "
-                    "before using execution tools"
+                logical = self._find_active_run_locked(
+                    expected_run_id,
+                    subject=subject,
+                    refresh_shared=not _state_lock_held,
+                )
+                if not _state_lock_held and self._uses_shared_state_backend():
+                    with self._shared_session_locks_locked([logical.session_id]):
+                        self._refresh_session_locked(logical.session_id)
+                        return self.begin_tool_call(
+                            session_key,
+                            call_id,
+                            expected_run_id=expected_run_id,
+                            subject=subject,
+                            require_run_token=require_run_token,
+                            data=data,
+                            _state_lock_held=True,
+                        )
+                self._recover_attachment_by_run_id_locked(
+                    session_key,
+                    expected_run_id,
+                    subject=subject,
+                    refresh_shared=False,
                 )
             attachment = self._attachments[session_key]
             if not _state_lock_held and self._uses_shared_state_backend():

@@ -301,18 +301,21 @@ MCP_INSTRUCTIONS = (
     "provide a capability, use mcp_tool_search, then mcp_tool_inspect, then mcp_tool_call; "
     "dynamic MCP tools never appear directly in tools/list. For substantive tool-driven work, "
     "create a durable logical task context first with session_manage(action='start', objective=...). "
-    "While a logical session is attached, pass its active_run.run_id as session_run_id on subsequent "
-    "tool calls; after resume/takeover, switch to the newly returned run id. "
+    "Ordinary tools expose a required nullable session_run_id: pass null before entering a logical session, "
+    "then pass its active_run.run_id on subsequent tool calls; after resume/takeover, switch to the newly "
+    "returned run id. "
     "Keep that session current with session_manage(action='report', ...) at meaningful checkpoints and "
-    "before handing work off. When continuing work from another ChatGPT run or MCP transport, call "
-    "session_manage(action='resume', session_id=..., takeover=true) before using execution tools. "
+    "before handing work off. A replacement MCP transport within the same agent run should keep the same "
+    "session_run_id and reattaches automatically. When a different ChatGPT/agent run takes over, call "
+    "session_manage(action='resume', session_id=..., takeover=true) and use its new run id. "
     "Logical sessions are not bound to machines or working directories. plan_manage is optional Goal mode "
     "owned by the current logical session, not by Live Workspace."
 )
 
 SESSION_RUN_ARGUMENT_DESCRIPTION = (
-    "Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical "
-    "session is attached; use the new value after resume/takeover."
+    "Always provide this field. Use null when no logical session is active; after session_manage start/resume, "
+    "pass the returned active_run.run_id and keep using it across MCP transport reconnects. Use the new value "
+    "after an explicit resume/takeover."
 )
 
 
@@ -594,7 +597,18 @@ def _install_session_run_arguments(mcp: FastMCP) -> None:
             ),
         )
         tool.fn_metadata.arg_model = extended_model
-        tool.parameters = extended_model.model_json_schema()
+        parameters = extended_model.model_json_schema()
+        # Advertise the field as required so model clients keep carrying the run
+        # capability across transport replacement. The validator still accepts an
+        # omitted field as None for backwards compatibility with older MCP clients.
+        session_run_schema = (parameters.get("properties") or {}).get("session_run_id")
+        if isinstance(session_run_schema, dict):
+            session_run_schema.pop("default", None)
+        required = list(parameters.get("required") or [])
+        if "session_run_id" not in required:
+            required.append("session_run_id")
+        parameters["required"] = required
+        tool.parameters = parameters
 
 
 _PENDING_SESSION_LEASE_CLEANUPS: set[asyncio.Task[None]] = set()

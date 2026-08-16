@@ -29,7 +29,7 @@ Open or reuse the interactive Live Workspace for real-time human/agent collabora
 |---|---|---|---|
 | `machine` | `string \| null` | `null` |  |
 | `cwd` | `string` | `"."` |  |
-| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
+| `session_run_id` | `string \| null` | required | Always provide this field. Use null when no logical session is active; after session_manage start/resume, pass the returned active_run.run_id and keep using it across MCP transport reconnects. Use the new value after an explicit resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -44,7 +44,7 @@ Return version, workspace, auth, policy, and environment information locally or 
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
+| `session_run_id` | `string \| null` | required | Always provide this field. Use null when no logical session is active; after session_manage start/resume, pass the returned active_run.run_id and keep using it across MCP transport reconnects. Use the new value after an explicit resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -56,7 +56,7 @@ List installed agent skills without loading their instructions. The MCP tool sur
 
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
-| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
+| `session_run_id` | `string \| null` | required | Always provide this field. Use null when no logical session is active; after session_manage start/resume, pass the returned active_run.run_id and keep using it across MCP transport reconnects. Use the new value after an explicit resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -67,7 +67,7 @@ Load one installed agent skill by the exact name returned from skill_list. Retur
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
 | `name` | `string` | required |  |
-| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
+| `session_run_id` | `string \| null` | required | Always provide this field. Use null when no logical session is active; after session_manage start/resume, pass the returned active_run.run_id and keep using it across MCP transport reconnects. Use the new value after an explicit resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -79,7 +79,7 @@ Read one related text file from an installed Skill.
 |---|---|---|---|
 | `name` | `string` | required |  |
 | `path` | `string` | required |  |
-| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
+| `session_run_id` | `string \| null` | required | Always provide this field. Use null when no logical session is active; after session_manage start/resume, pass the returned active_run.run_id and keep using it across MCP transport reconnects. Use the new value after an explicit resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -92,7 +92,7 @@ Scan local workspace text files for common secrets before commit or push.
 | `cwd` | `string` | `"."` |  |
 | `glob` | `string \| null` | `null` |  |
 | `max_results` | `integer` | `200` |  |
-| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
+| `session_run_id` | `string \| null` | required | Always provide this field. Use null when no logical session is active; after session_manage start/resume, pass the returned active_run.run_id and keep using it across MCP transport reconnects. Use the new value after an explicit resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -139,7 +139,7 @@ Read recent local audit log entries.
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
 | `lines` | `integer` | `100` |  |
-| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
+| `session_run_id` | `string \| null` | required | Always provide this field. Use null when no logical session is active; after session_manage start/resume, pass the returned active_run.run_id and keep using it across MCP transport reconnects. Use the new value after an explicit resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -158,7 +158,7 @@ Run one non-interactive shell command locally or on a remote machine. Use for bu
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
+| `session_run_id` | `string \| null` | required | Always provide this field. Use null when no logical session is active; after session_manage start/resume, pass the returned active_run.run_id and keep using it across MCP transport reconnects. Use the new value after an explicit resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -176,7 +176,7 @@ Write and run a short Python script locally or on a remote machine.
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
+| `session_run_id` | `string \| null` | required | Always provide this field. Use null when no logical session is active; after session_manage start/resume, pass the returned active_run.run_id and keep using it across MCP transport reconnects. Use the new value after an explicit resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -194,7 +194,7 @@ Start a persistent interactive shell locally or on a remote machine.
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
+| `session_run_id` | `string \| null` | required | Always provide this field. Use null when no logical session is active; after session_manage start/resume, pass the returned active_run.run_id and keep using it across MCP transport reconnects. Use the new value after an explicit resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -210,7 +210,7 @@ Send input to a persistent local or remote shell session.
 | `input_text` | `string` | required |  |
 | `enter` | `boolean` | `true` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
+| `session_run_id` | `string \| null` | required | Always provide this field. Use null when no logical session is active; after session_manage start/resume, pass the returned active_run.run_id and keep using it across MCP transport reconnects. Use the new value after an explicit resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -225,7 +225,7 @@ Read recent output from a persistent local or remote shell session.
 | `session_id` | `string` | required |  |
 | `lines` | `integer` | `200` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
+| `session_run_id` | `string \| null` | required | Always provide this field. Use null when no logical session is active; after session_manage start/resume, pass the returned active_run.run_id and keep using it across MCP transport reconnects. Use the new value after an explicit resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -239,7 +239,7 @@ Terminate a persistent local or remote shell session.
 |---|---|---|---|
 | `session_id` | `string` | required |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
+| `session_run_id` | `string \| null` | required | Always provide this field. Use null when no logical session is active; after session_manage start/resume, pass the returned active_run.run_id and keep using it across MCP transport reconnects. Use the new value after an explicit resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -252,7 +252,7 @@ List persistent shell sessions locally or on a remote machine.
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
+| `session_run_id` | `string \| null` | required | Always provide this field. Use null when no logical session is active; after session_manage start/resume, pass the returned active_run.run_id and keep using it across MCP transport reconnects. Use the new value after an explicit resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -270,7 +270,7 @@ Start a tracked long-running job locally or on a remote machine.
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
+| `session_run_id` | `string \| null` | required | Always provide this field. Use null when no logical session is active; after session_manage start/resume, pass the returned active_run.run_id and keep using it across MCP transport reconnects. Use the new value after an explicit resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -284,7 +284,7 @@ List tracked jobs locally or on a remote machine.
 |---|---|---|---|
 | `include_finished` | `boolean` | `true` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
+| `session_run_id` | `string \| null` | required | Always provide this field. Use null when no logical session is active; after session_manage start/resume, pass the returned active_run.run_id and keep using it across MCP transport reconnects. Use the new value after an explicit resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -299,7 +299,7 @@ Read recent output for a tracked local or remote job.
 | `job_id` | `string` | required |  |
 | `lines` | `integer` | `200` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
+| `session_run_id` | `string \| null` | required | Always provide this field. Use null when no logical session is active; after session_manage start/resume, pass the returned active_run.run_id and keep using it across MCP transport reconnects. Use the new value after an explicit resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -313,7 +313,7 @@ Stop a tracked local or remote job.
 |---|---|---|---|
 | `job_id` | `string` | required |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
+| `session_run_id` | `string \| null` | required | Always provide this field. Use null when no logical session is active; after session_manage start/resume, pass the returned active_run.run_id and keep using it across MCP transport reconnects. Use the new value after an explicit resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -329,7 +329,7 @@ Restart a stopped or exited tracked local or remote job.
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
+| `session_run_id` | `string \| null` | required | Always provide this field. Use null when no logical session is active; after session_manage start/resume, pass the returned active_run.run_id and keep using it across MCP transport reconnects. Use the new value after an explicit resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -347,7 +347,7 @@ List files and directories locally or on a remote machine.
 | `recursive` | `boolean` | `false` |  |
 | `max_entries` | `integer` | `500` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
+| `session_run_id` | `string \| null` | required | Always provide this field. Use null when no logical session is active; after session_manage start/resume, pass the returned active_run.run_id and keep using it across MCP transport reconnects. Use the new value after an explicit resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -363,7 +363,7 @@ Return a compact directory tree locally or on a remote machine.
 | `depth` | `integer` | `3` |  |
 | `max_entries` | `integer` | `500` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
+| `session_run_id` | `string \| null` | required | Always provide this field. Use null when no logical session is active; after session_manage start/resume, pass the returned active_run.run_id and keep using it across MCP transport reconnects. Use the new value after an explicit resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -379,7 +379,7 @@ Find paths by glob locally or on a remote machine.
 | `cwd` | `string` | `"."` |  |
 | `max_results` | `integer` | `500` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
+| `session_run_id` | `string \| null` | required | Always provide this field. Use null when no logical session is active; after session_manage start/resume, pass the returned active_run.run_id and keep using it across MCP transport reconnects. Use the new value after an explicit resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -398,7 +398,7 @@ Search file contents locally or on a remote machine.
 | `case_sensitive` | `boolean` | `true` |  |
 | `max_results` | `integer \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
+| `session_run_id` | `string \| null` | required | Always provide this field. Use null when no logical session is active; after session_manage start/resume, pass the returned active_run.run_id and keep using it across MCP transport reconnects. Use the new value after an explicit resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -416,7 +416,7 @@ Read one file or a list of files locally or on a remote machine.
 | `binary_preview` | `string \| null` | `null` |  |
 | `binary_preview_bytes` | `integer` | `256` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
+| `session_run_id` | `string \| null` | required | Always provide this field. Use null when no logical session is active; after session_manage start/resume, pass the returned active_run.run_id and keep using it across MCP transport reconnects. Use the new value after an explicit resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -430,7 +430,7 @@ View a PNG, JPEG, GIF, or WebP file as native MCP image content locally or on a 
 |---|---|---|---|
 | `path` | `string` | required |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
+| `session_run_id` | `string \| null` | required | Always provide this field. Use null when no logical session is active; after session_manage start/resume, pass the returned active_run.run_id and keep using it across MCP transport reconnects. Use the new value after an explicit resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -448,7 +448,7 @@ Write a UTF-8 text file locally or on a remote machine.
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
+| `session_run_id` | `string \| null` | required | Always provide this field. Use null when no logical session is active; after session_manage start/resume, pass the returned active_run.run_id and keep using it across MCP transport reconnects. Use the new value after an explicit resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -465,7 +465,7 @@ Apply one or more exact-text edits to one local or remote file. Each edits entry
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
+| `session_run_id` | `string \| null` | required | Always provide this field. Use null when no logical session is active; after session_manage start/resume, pass the returned active_run.run_id and keep using it across MCP transport reconnects. Use the new value after an explicit resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -482,7 +482,7 @@ Delete a local or remote file or directory. recursive=false deletes files or emp
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
+| `session_run_id` | `string \| null` | required | Always provide this field. Use null when no logical session is active; after session_manage start/resume, pass the returned active_run.run_id and keep using it across MCP transport reconnects. Use the new value after an explicit resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -499,7 +499,7 @@ Check and apply a unified diff or an apply_patch envelope locally or remotely.
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
+| `session_run_id` | `string \| null` | required | Always provide this field. Use null when no logical session is active; after session_manage start/resume, pass the returned active_run.run_id and keep using it across MCP transport reconnects. Use the new value after an explicit resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -519,7 +519,7 @@ Start a tracked job that copies a file or directory between the controller and r
 | `chunk_size` | `integer \| null` | `null` |  |
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
+| `session_run_id` | `string \| null` | required | Always provide this field. Use null when no logical session is active; after session_manage start/resume, pass the returned active_run.run_id and keep using it across MCP transport reconnects. Use the new value after an explicit resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -536,7 +536,7 @@ Create a temporary browser-accessible URL for a local file. By default the respo
 | `filename` | `string \| null` | `null` |  |
 | `max_downloads` | `integer \| null` | `null` |  |
 | `inline` | `boolean` | `false` |  |
-| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
+| `session_run_id` | `string \| null` | required | Always provide this field. Use null when no logical session is active; after session_manage start/resume, pass the returned active_run.run_id and keep using it across MCP transport reconnects. Use the new value after an explicit resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -547,7 +547,7 @@ List generated local file download URLs.
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
 | `include_expired` | `boolean` | `false` |  |
-| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
+| `session_run_id` | `string \| null` | required | Always provide this field. Use null when no logical session is active; after session_manage start/resume, pass the returned active_run.run_id and keep using it across MCP transport reconnects. Use the new value after an explicit resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -558,7 +558,7 @@ Revoke a generated local file download URL.
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
 | `token` | `string` | required |  |
-| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
+| `session_run_id` | `string \| null` | required | Always provide this field. Use null when no logical session is active; after session_manage start/resume, pass the returned active_run.run_id and keep using it across MCP transport reconnects. Use the new value after an explicit resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -584,7 +584,7 @@ Register, list, get, enable, disable, refresh, remove, or update the isolated en
 | `refresh` | `boolean` | `true` |  |
 | `key` | `string \| null` | `null` |  |
 | `value` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
+| `session_run_id` | `string \| null` | required | Always provide this field. Use null when no logical session is active; after session_manage start/resume, pass the returned active_run.run_id and keep using it across MCP transport reconnects. Use the new value after an explicit resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -597,7 +597,7 @@ Search cached lightweight tool summaries from enabled dynamic MCP servers. Dynam
 | `query` | `string` | `""` |  |
 | `server` | `string \| null` | `null` |  |
 | `limit` | `integer` | `20` |  |
-| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
+| `session_run_id` | `string \| null` | required | Always provide this field. Use null when no logical session is active; after session_manage start/resume, pass the returned active_run.run_id and keep using it across MCP transport reconnects. Use the new value after an explicit resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -608,7 +608,7 @@ Return the full cached schema for one dynamic MCP tool named <server>:<tool>. Re
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
 | `name` | `string` | required |  |
-| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
+| `session_run_id` | `string \| null` | required | Always provide this field. Use null when no logical session is active; after session_manage start/resume, pass the returned active_run.run_id and keep using it across MCP transport reconnects. Use the new value after an explicit resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -621,7 +621,7 @@ Call one cached dynamic MCP tool named <server>:<tool>. Discover it with mcp_too
 | `name` | `string` | required |  |
 | `arguments` | `object \| null` | `null` |  |
 | `timeout_s` | `integer \| null` | `null` |  |
-| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
+| `session_run_id` | `string \| null` | required | Always provide this field. Use null when no logical session is active; after session_manage start/resume, pass the returned active_run.run_id and keep using it across MCP transport reconnects. Use the new value after an explicit resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -645,7 +645,7 @@ Start, list, close, or clean up persistent high-level browser sessions locally o
 | `storage_state_path` | `string \| null` | `null` |  |
 | `save_storage_state_path` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
+| `session_run_id` | `string \| null` | required | Always provide this field. Use null when no logical session is active; after session_manage start/resume, pass the returned active_run.run_id and keep using it across MCP transport reconnects. Use the new value after an explicit resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -665,7 +665,7 @@ Capture a persistent browser page: title, URL, bounded visible text, interactive
 | `max_text_chars` | `integer` | `100000` |  |
 | `max_elements` | `integer` | `100` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
+| `session_run_id` | `string \| null` | required | Always provide this field. Use null when no logical session is active; after session_manage start/resume, pass the returned active_run.run_id and keep using it across MCP transport reconnects. Use the new value after an explicit resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -682,7 +682,7 @@ Run structured actions in a persistent browser session. Supports navigate, new_p
 | `page_id` | `string \| null` | `null` |  |
 | `timeout_ms` | `integer` | `30000` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
+| `session_run_id` | `string \| null` | required | Always provide this field. Use null when no logical session is active; after session_manage start/resume, pass the returned active_run.run_id and keep using it across MCP transport reconnects. Use the new value after an explicit resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -698,7 +698,7 @@ Run a full Python Playwright script locally or on a remote machine.
 | `cwd` | `string` | `"."` |  |
 | `timeout_s` | `integer` | `60` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
+| `session_run_id` | `string \| null` | required | Always provide this field. Use null when no logical session is active; after session_manage start/resume, pass the returned active_run.run_id and keep using it across MCP transport reconnects. Use the new value after an explicit resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -718,7 +718,7 @@ Manage remote workers with action=invite, list, revoke, or rename. invite accept
 | `ttl_s` | `integer \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
 | `new_name` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
+| `session_run_id` | `string \| null` | required | Always provide this field. Use null when no logical session is active; after session_manage start/resume, pass the returned active_run.run_id and keep using it across MCP transport reconnects. Use the new value after an explicit resume/takeover. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 

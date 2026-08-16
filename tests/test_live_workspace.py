@@ -1091,6 +1091,9 @@ async def test_mcp_app_resource_and_render_result_hide_live_token(tmp_path, monk
     assert "live_id" not in render_tool.inputSchema["properties"]
     assert render_tool.meta["securitySchemes"][0]["scopes"] == list(ALL_OAUTH_SCOPES)
     assert render_tool.outputSchema["title"] == "LiveChannelResult"
+    assert "session_run_id" in render_tool.inputSchema["properties"]
+    assert "session_run_id" in render_tool.inputSchema["required"]
+    assert "default" not in render_tool.inputSchema["properties"]["session_run_id"]
     assert render_tool.annotations.readOnlyHint is True
     assert render_tool.annotations.destructiveHint is False
     assert render_tool.annotations.idempotentHint is True
@@ -1643,7 +1646,7 @@ async def test_session_get_refreshes_attached_plan_agent_activity(tmp_path, monk
 
 
 @pytest.mark.asyncio
-async def test_explicit_resume_binds_live_channel_by_resolved_logical_session(
+async def test_run_id_recovery_binds_live_channel_by_resolved_logical_session(
     tmp_path, monkeypatch
 ):
     _configure(tmp_path, monkeypatch, auth="none")
@@ -1672,35 +1675,16 @@ async def test_explicit_resume_binds_live_channel_by_resolved_logical_session(
     assert live_manager.claim_recovery_session("direct", "local-mcp-client") is None
 
     mcp = build_mcp()
-    with pytest.raises(Exception, match="No logical session is attached"):
-        await mcp.call_tool(
-            "file_write",
-            {
-                "path": "must-not-write.txt",
-                "content": "no",
-                "session_run_id": first["active_run"]["run_id"],
-            },
-        )
-
-    _, resumed = await mcp.call_tool(
-        "session_manage",
-        {
-            "action": "resume",
-            "session_id": first["session_id"],
-            "takeover": True,
-        },
-    )
-    resumed_run_id = resumed["data"]["active_run"]["run_id"]
     await mcp.call_tool(
         "file_write",
         {
             "path": "recovered.txt",
             "content": "ok",
-            "session_run_id": resumed_run_id,
+            "session_run_id": first["active_run"]["run_id"],
         },
     )
 
-    assert not (tmp_path / "must-not-write.txt").exists()
+    assert (tmp_path / "recovered.txt").read_text(encoding="utf-8") == "ok"
     assert live_manager.active_for_session("direct") is first_channel
     assert any(
         event["type"] == "tool.completed" and event["data"].get("tool") == "file_write"

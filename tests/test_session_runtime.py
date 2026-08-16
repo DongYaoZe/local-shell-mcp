@@ -842,6 +842,47 @@ def test_shared_backend_refresh_preserves_local_run_owner(tmp_path, monkeypatch)
         clear_memory_state()
 
 
+def test_shared_backend_recovers_active_run_on_new_transport(tmp_path, monkeypatch):
+    clear_memory_state()
+    monkeypatch.setenv("LOCAL_SHELL_MCP_WORKSPACE_ROOT", str(tmp_path))
+    monkeypatch.setenv("LOCAL_SHELL_MCP_STATE_DIR", str(tmp_path / ".state"))
+    monkeypatch.setenv("LOCAL_SHELL_MCP_STATE_BACKEND", "redis")
+    monkeypatch.setenv("LOCAL_SHELL_MCP_STATE_BACKEND_URL", "redis://state.test/0")
+    monkeypatch.setenv("LOCAL_SHELL_MCP_STATE_BACKEND_PREFIX", "session-reattach-test")
+    get_settings.cache_clear()
+    shared_store = MemoryStateStore("session-reattach-test")
+    monkeypatch.setattr(
+        "local_shell_mcp.session_runtime.get_state_store", lambda: shared_store
+    )
+    try:
+        # Load the second controller before the Session exists. Recovery must refresh
+        # shared state rather than depending on its stale in-memory session cache.
+        second = SessionRuntimeManager()
+        assert second.manage("mcp:list", "user", action="list")["sessions"] == []
+
+        first = SessionRuntimeManager()
+        started = first.manage(
+            "mcp:first", "user", action="start", objective="Shared transport recovery"
+        )
+        session_id = started["session_id"]
+        run_id = started["active_run"]["run_id"]
+
+        lease = second.begin_tool_call(
+            "mcp:replacement",
+            "call-1",
+            expected_run_id=run_id,
+            subject="user",
+        )
+        assert lease is not None
+        assert lease["session_id"] == session_id
+        assert lease["run_id"] == run_id
+        assert second.current_session_id("mcp:replacement", subject="user") == session_id
+        second.finish_tool_call(lease, "tool.completed")
+    finally:
+        get_settings.cache_clear()
+        clear_memory_state()
+
+
 def test_shared_backend_serializes_session_mutations_across_controllers(tmp_path, monkeypatch):
     clear_memory_state()
     monkeypatch.setenv("LOCAL_SHELL_MCP_WORKSPACE_ROOT", str(tmp_path))
@@ -993,22 +1034,41 @@ def test_current_attachment_is_discarded_when_principal_changes(tmp_path):
     assert "mcp:a" not in manager._attachments
 
 
-def test_new_transport_requires_explicit_resume_before_execution(tmp_path):
+def test_new_transport_recovers_active_run_without_explicit_resume(tmp_path):
     state_dir = tmp_path / ".state"
     first = SessionRuntimeManager(state_dir)
     started = first.manage("mcp:a", "user", action="start", objective="Task")
     session_id = started["session_id"]
     first_run_id = started["active_run"]["run_id"]
 
+    # A replacement transport, including one created after a server-process restart,
+    # can recover the same AgentRun from the durable run capability.
     restarted = SessionRuntimeManager(state_dir)
-    with pytest.raises(RuntimeError, match="No logical session is attached"):
-        restarted.begin_tool_call(
-            "mcp:recovered",
-            "call-1",
+    lease = restarted.begin_tool_call(
+        "mcp:recovered",
+        "call-1",
+        expected_run_id=first_run_id,
+        subject="user",
+    )
+    assert lease is not None
+    assert lease["session_id"] == session_id
+    assert lease["run_id"] == first_run_id
+    assert restarted.current_session_id("mcp:recovered", subject="user") == session_id
+    assert restarted.get(session_id, subject="user")["active_run"]["run_id"] == first_run_id
+    assert restarted.finish_tool_call(lease, "tool.completed") is None
+
+    # Possession of a run id never bypasses principal isolation.
+    stranger = SessionRuntimeManager(state_dir)
+    with pytest.raises(PermissionError, match="different principal"):
+        stranger.begin_tool_call(
+            "mcp:stranger",
+            "call-stranger",
             expected_run_id=first_run_id,
-            subject="user",
+            subject="other-user",
         )
 
+    # An explicit takeover is still a fencing boundary: it creates a new run and
+    # the old capability must never reattach afterwards.
     resumed = restarted.manage(
         "mcp:recovered",
         "user",
@@ -1018,28 +1078,59 @@ def test_new_transport_requires_explicit_resume_before_execution(tmp_path):
     )
     resumed_run_id = resumed["active_run"]["run_id"]
     assert resumed_run_id != first_run_id
-    lease = restarted.begin_tool_call(
-        "mcp:recovered", "call-2", expected_run_id=resumed_run_id, subject="user"
-    )
-    assert lease is not None
-    assert restarted.current_session_id("mcp:recovered", subject="user") == session_id
-    assert restarted.finish_tool_call(lease, "tool.completed") is None
 
     another = SessionRuntimeManager(state_dir)
-    with pytest.raises(RuntimeError, match="No logical session is attached"):
+    with pytest.raises(RuntimeError, match="does not identify a current logical session run"):
         another.begin_tool_call(
             "mcp:stale",
-            "call-3",
+            "call-2",
             expected_run_id=first_run_id,
             subject="user",
         )
-    with pytest.raises(RuntimeError, match="No logical session is attached"):
-        another.begin_tool_call(
-            "mcp:unattached-current",
-            "call-4",
-            expected_run_id=resumed_run_id,
-            subject="user",
+    current_lease = another.begin_tool_call(
+        "mcp:unattached-current",
+        "call-3",
+        expected_run_id=resumed_run_id,
+        subject="user",
+    )
+    assert current_lease is not None
+    assert current_lease["session_id"] == session_id
+    assert another.finish_tool_call(current_lease, "tool.completed") is None
+
+    # Explicit null remains the ordinary no-Session mode when there is no transport
+    # attachment. This keeps v3-style direct clients working without a Session.
+    assert (
+        SessionRuntimeManager(state_dir).begin_tool_call(
+            "mcp:no-session", "call-4", expected_run_id=None, subject="user"
         )
+        is None
+    )
+
+
+def test_run_id_recovery_selects_exact_session_for_same_principal(tmp_path):
+    state_dir = tmp_path / ".state"
+    manager = SessionRuntimeManager(state_dir)
+    first = manager.manage("mcp:first", "user", action="start", objective="First")
+    second = manager.manage("mcp:second", "user", action="start", objective="Second")
+
+    recovered = SessionRuntimeManager(state_dir)
+    first_lease = recovered.begin_tool_call(
+        "mcp:new-first",
+        "call-first",
+        expected_run_id=first["active_run"]["run_id"],
+        subject="user",
+    )
+    second_lease = recovered.begin_tool_call(
+        "mcp:new-second",
+        "call-second",
+        expected_run_id=second["active_run"]["run_id"],
+        subject="user",
+    )
+
+    assert first_lease is not None and first_lease["session_id"] == first["session_id"]
+    assert second_lease is not None and second_lease["session_id"] == second["session_id"]
+    recovered.finish_tool_call(first_lease, "tool.completed")
+    recovered.finish_tool_call(second_lease, "tool.completed")
 
 
 def test_session_history_preserves_resumable_sessions_beyond_retention_target(tmp_path):
