@@ -13,6 +13,7 @@ from mcp.server.fastmcp import FastMCP
 from mcp.types import CallToolResult
 from starlette.requests import Request
 
+import local_shell_mcp.auth as auth_module
 import local_shell_mcp.live_channel as live_channel_module
 import local_shell_mcp.live_channel_routes as live_routes
 import local_shell_mcp.session_runtime as session_runtime_module
@@ -24,6 +25,7 @@ from local_shell_mcp.live_channel import (
     LIVE_RESOURCE_TEMPLATE_URI,
     LIVE_RESOURCE_URI,
     LIVE_RESOURCE_VERSIONED_URI,
+    MCP_SESSION_AFFINITY_HEADER,
     LiveChannelManager,
 )
 from local_shell_mcp.main import _build_mcp_http_app
@@ -174,6 +176,29 @@ def test_mcp_session_key_supports_http_nonweak_and_weak_sessions():
     http = Mcp(RequestContext(WeakSession(), {"mcp-session-id": "transport-1"}))
     assert live_channel_module.mcp_session_key(http) == "mcp-http:transport-1"
 
+    affinity_a = Mcp(
+        RequestContext(
+            WeakSession(),
+            {
+                "mcp-session-id": "transport-a",
+                MCP_SESSION_AFFINITY_HEADER: "stable-dsh-session",
+            },
+        )
+    )
+    affinity_b = Mcp(
+        RequestContext(
+            WeakSession(),
+            {
+                "mcp-session-id": "transport-b",
+                MCP_SESSION_AFFINITY_HEADER: "stable-dsh-session",
+            },
+        )
+    )
+    assert live_channel_module.mcp_session_key(affinity_a).startswith("mcp-affinity:")
+    assert live_channel_module.mcp_session_key(affinity_a) == live_channel_module.mcp_session_key(
+        affinity_b
+    )
+
     nonweak = Mcp(RequestContext(NonWeakSession()))
     first_nonweak = live_channel_module.mcp_session_key(nonweak)
     assert first_nonweak.startswith("mcp-session:")
@@ -183,6 +208,49 @@ def test_mcp_session_key_supports_http_nonweak_and_weak_sessions():
     first_weak = live_channel_module.mcp_session_key(weak)
     assert first_weak.startswith("mcp-session:")
     assert live_channel_module.mcp_session_key(weak) == first_weak
+
+
+def test_mcp_session_affinity_is_scoped_to_authenticated_principal(monkeypatch):
+    class Session:
+        pass
+
+    class FakeMcp:
+        def get_context(self):
+            return type(
+                "Context",
+                (),
+                {
+                    "request_context": type(
+                        "RequestContext",
+                        (),
+                        {
+                            "session": Session(),
+                            "request": type(
+                                "Request",
+                                (),
+                                {"headers": {MCP_SESSION_AFFINITY_HEADER: "shared-affinity"}},
+                            )(),
+                        },
+                    )()
+                },
+            )()
+
+    monkeypatch.setattr(
+        auth_module,
+        "current_principal",
+        lambda: Principal(email="a@example.test", subject="principal-a", claims={}),
+    )
+    principal_a = live_channel_module.mcp_session_key(FakeMcp())
+    monkeypatch.setattr(
+        auth_module,
+        "current_principal",
+        lambda: Principal(email="b@example.test", subject="principal-b", claims={}),
+    )
+    principal_b = live_channel_module.mcp_session_key(FakeMcp())
+
+    assert principal_a.startswith("mcp-affinity:")
+    assert principal_b.startswith("mcp-affinity:")
+    assert principal_a != principal_b
 
 
 def test_app_reattach_does_not_shorten_shared_channel_expiry():
@@ -489,6 +557,98 @@ def test_live_workspace_session_switch_uses_existing_canonical_target_channel():
     )
     assert target.events[-1]["data"]["call_id"] == "on-target"
     assert source.events[-1]["data"].get("call_id") != "on-target"
+
+
+def test_live_workspace_repairs_stale_and_duplicate_canonical_mappings():
+    manager = LiveChannelManager()
+    canonical, _ = manager.open(
+        session_key="mcp:canonical",
+        subject="alice",
+        scopes=tuple(ALL_OAUTH_SCOPES),
+        logical_session_id="s_target",
+    )
+
+    with pytest.raises(PermissionError, match="different principal"):
+        manager.open(
+            session_key="mcp:bob",
+            subject="bob",
+            scopes=tuple(ALL_OAUTH_SCOPES),
+            logical_session_id="s_target",
+        )
+
+    bob_source, _ = manager.open(
+        session_key="mcp:bob-source",
+        subject="bob",
+        scopes=tuple(ALL_OAUTH_SCOPES),
+    )
+    assert manager.bind_logical_session("mcp:bob-source", "s_target", "bob") is None
+    assert manager.active_for_session("mcp:bob-source") is bob_source
+
+    stale_source, _ = manager.open(
+        session_key="mcp:stale-source",
+        subject="alice",
+        scopes=tuple(ALL_OAUTH_SCOPES),
+    )
+    manager._logical_session_channels["s_stale"] = "missing-live-id"
+    assert manager.bind_logical_session("mcp:stale-source", "s_stale", "alice") is stale_source
+    assert manager._logical_session_channels["s_stale"] == stale_source.live_id
+
+    duplicate, duplicate_token = manager.open(
+        session_key="mcp:duplicate",
+        subject="alice",
+        scopes=tuple(ALL_OAUTH_SCOPES),
+    )
+    duplicate.logical_session_id = "s_target"
+    duplicate.events.append({"seq": duplicate.seq + 1, "type": "old", "actor": "system", "data": {}})
+
+    consolidated, _ = manager.open(
+        session_key="mcp:duplicate-reconnect",
+        subject="alice",
+        scopes=tuple(ALL_OAUTH_SCOPES),
+        live_id=duplicate.live_id,
+        logical_session_id="s_target",
+    )
+    assert consolidated is canonical
+    assert duplicate.logical_session_id is None
+    assert [event["type"] for event in duplicate.events] == ["session.detached"]
+
+    manager._channels.pop(duplicate.live_id)
+    assert manager.authenticate(duplicate_token) is None
+    assert manager.publish_for_session("mcp:missing", "tool.completed") is None
+
+
+def test_live_workspace_binding_repairs_duplicate_channel_and_detach_skips_unrelated():
+    manager = LiveChannelManager()
+    unrelated, _ = manager.open(
+        session_key="mcp:unrelated",
+        subject="user",
+        scopes=tuple(ALL_OAUTH_SCOPES),
+        logical_session_id="s_unrelated",
+    )
+    target, _ = manager.open(
+        session_key="mcp:target",
+        subject="user",
+        scopes=tuple(ALL_OAUTH_SCOPES),
+        logical_session_id="s_target",
+    )
+    duplicate, _ = manager.open(
+        session_key="mcp:duplicate",
+        subject="user",
+        scopes=tuple(ALL_OAUTH_SCOPES),
+    )
+    duplicate.logical_session_id = "s_target"
+    duplicate.events.append({"seq": duplicate.seq + 1, "type": "old", "actor": "system", "data": {}})
+
+    rebound = manager.bind_logical_session("mcp:duplicate", "s_target", "user")
+    assert rebound is target
+    assert duplicate.logical_session_id is None
+    assert [event["type"] for event in duplicate.events] == ["session.detached"]
+    assert manager.active_for_session("mcp:duplicate") is target
+
+    detached = manager.detach_logical_session("s_target")
+    assert detached == [target]
+    assert unrelated.logical_session_id == "s_unrelated"
+    assert target.logical_session_id is None
 
 
 def test_live_workspace_open_consolidates_duplicate_logical_target():
@@ -888,6 +1048,26 @@ def test_mcp_session_key_uses_request_session_identity():
 
     assert live_channel_module.mcp_session_key(FakeMcp(Session(), {"mcp-session-id": "abc123"})) == (
         "mcp-http:abc123"
+    )
+    affinity_key = live_channel_module.mcp_session_key(
+        FakeMcp(
+            Session(),
+            {
+                "mcp-session-id": "transport-1",
+                MCP_SESSION_AFFINITY_HEADER: "dsh-session-a",
+            },
+        )
+    )
+    assert affinity_key.startswith("mcp-affinity:")
+    assert "dsh-session-a" not in affinity_key
+    assert affinity_key == live_channel_module.mcp_session_key(
+        FakeMcp(
+            Session(),
+            {
+                "mcp-session-id": "transport-2",
+                MCP_SESSION_AFFINITY_HEADER: "dsh-session-a",
+            },
+        )
     )
     first_session = Session()
     second_session = Session()

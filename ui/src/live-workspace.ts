@@ -123,6 +123,18 @@ const app = new App(
   { availableDisplayModes: ["pip", "fullscreen"] },
 )
 
+type DshBootstrap = {
+  sessionId: string
+  configEndpoint: string
+}
+
+type DshWindow = Window & {
+  __LSM_DSH_BOOTSTRAP__?: DshBootstrap
+}
+
+const dshBootstrap = (window as DshWindow).__LSM_DSH_BOOTSTRAP__ || null
+const isDshHost = dshBootstrap !== null
+
 const root = document.createElement("div")
 root.id = "live-workspace-root"
 document.body.append(root)
@@ -134,7 +146,7 @@ let pollGeneration = 0
 let connected = false
 let connectionMessage = "Waiting for Live Workspace…"
 let activeTab = "activity"
-let displayMode: DisplayMode = "pip"
+let displayMode: DisplayMode = isDshHost ? "fullscreen" : "pip"
 let bootstrap: JsonRecord | null = null
 let dashboard: Dashboard | null = null
 let machines: Machine[] = []
@@ -162,6 +174,13 @@ let shuttingDown = false
 let passiveRefreshTimer: number | null = null
 let planContinuationTimer: number | null = null
 let countdownRenderTimer: number | null = null
+let dshModelContext = ""
+let dshPromptSequence = 0
+const dshPromptWaiters = new Map<string, {
+  resolve: (value: JsonRecord) => void
+  reject: (error: Error) => void
+  timer: number
+}>()
 
 let terminal: Terminal | null = null
 let fitAddon: FitAddon | null = null
@@ -244,6 +263,78 @@ function qs<T extends Element>(selector: string): T | null {
   return root.querySelector<T>(selector)
 }
 
+function currentHostContext(): JsonRecord {
+  if (isDshHost) {
+    return { displayMode: "fullscreen", availableDisplayModes: [] }
+  }
+  return (app.getHostContext() || {}) as JsonRecord
+}
+
+function onDshPromptResult(event: MessageEvent): void {
+  if (!isDshHost || event.source !== window.parent || event.origin !== window.location.origin) return
+  const data = event.data as JsonRecord | null
+  if (!data || data.type !== "local-shell-mcp:dsh:prompt-result") return
+  const requestId = String(data.requestId || "")
+  const waiter = dshPromptWaiters.get(requestId)
+  if (!waiter) return
+  dshPromptWaiters.delete(requestId)
+  window.clearTimeout(waiter.timer)
+  if (data.ok === true) waiter.resolve(data)
+  else waiter.reject(new Error(String(data.message || "DSH rejected the Live Workspace message")))
+}
+
+function sendDshPrompt(text: string, signal?: AbortSignal): Promise<JsonRecord> {
+  if (!dshBootstrap) return Promise.reject(new Error("DSH Live Workspace bridge is unavailable"))
+  if (signal?.aborted) return Promise.reject(new DOMException("The operation was aborted", "AbortError"))
+  const requestId = `${Date.now().toString(36)}-${(++dshPromptSequence).toString(36)}`
+  return new Promise((resolve, reject) => {
+    const timer = window.setTimeout(() => {
+      if (!dshPromptWaiters.delete(requestId)) return
+      reject(new Error("DSH did not acknowledge the Live Workspace message"))
+    }, 30_000)
+    const waiter = { resolve, reject, timer }
+    dshPromptWaiters.set(requestId, waiter)
+    signal?.addEventListener("abort", () => {
+      if (dshPromptWaiters.get(requestId) !== waiter) return
+      dshPromptWaiters.delete(requestId)
+      window.clearTimeout(timer)
+      reject(new DOMException("The operation was aborted", "AbortError"))
+    }, { once: true })
+    window.parent.postMessage({
+      type: "local-shell-mcp:dsh:prompt",
+      requestId,
+      sessionId: dshBootstrap.sessionId,
+      text,
+    }, window.location.origin)
+  })
+}
+
+async function updateHostModelContext(
+  payload: Parameters<typeof app.updateModelContext>[0],
+): Promise<unknown> {
+  if (!isDshHost) return await app.updateModelContext(payload)
+  dshModelContext = payload.content
+    ?.filter((item) => item.type === "text")
+    .map((item) => item.text)
+    .join("\n\n") || ""
+  return {}
+}
+
+async function sendHostMessage(
+  payload: Parameters<typeof app.sendMessage>[0],
+  options?: Parameters<typeof app.sendMessage>[1],
+): Promise<unknown> {
+  if (!isDshHost) return await app.sendMessage(payload, options)
+  const messageText = payload.content
+    .filter((item) => item.type === "text")
+    .map((item) => item.text)
+    .join("\n\n")
+  const text = dshModelContext ? `${dshModelContext}\n\n${messageText}` : messageText
+  dshModelContext = ""
+  await sendDshPrompt(text, options?.signal)
+  return { isError: false }
+}
+
 function notify(message: string, tone: "info" | "success" | "warning" | "danger" = "info"): void {
   const host = qs<HTMLElement>("[data-role=toasts]")
   if (!host) return
@@ -295,16 +386,24 @@ function updateChrome(): void {
   })
   const expandButton = qs<HTMLButtonElement>("[data-action=expand]")
   if (expandButton) {
-    const fullscreen = displayMode === "fullscreen"
-    const targetMode = toggleWorkspaceDisplayMode(displayMode)
-    const available = app.getHostContext()?.availableDisplayModes || []
-    const supported = available.includes(targetMode)
-    expandButton.classList.toggle("active", fullscreen)
-    expandButton.disabled = !supported
-    expandButton.title = supported
-      ? fullscreen ? "Return to floating window" : "Fullscreen"
-      : fullscreen ? "Floating window unavailable in this host" : "Fullscreen unavailable in this host"
-    expandButton.setAttribute("aria-label", expandButton.title)
+    if (isDshHost) {
+      expandButton.hidden = true
+      expandButton.disabled = true
+      expandButton.style.display = "none"
+      expandButton.setAttribute("aria-hidden", "true")
+    } else {
+      expandButton.style.removeProperty("display")
+      const fullscreen = displayMode === "fullscreen"
+      const targetMode = toggleWorkspaceDisplayMode(displayMode)
+      const available = (currentHostContext().availableDisplayModes as string[] | undefined) || []
+      const supported = available.includes(targetMode)
+      expandButton.classList.toggle("active", fullscreen)
+      expandButton.disabled = !supported
+      expandButton.title = supported
+        ? fullscreen ? "Return to floating window" : "Fullscreen"
+        : fullscreen ? "Floating window unavailable in this host" : "Fullscreen unavailable in this host"
+      expandButton.setAttribute("aria-label", expandButton.title)
+    }
   }
 
   const running = currentRunningEvent()
@@ -435,6 +534,7 @@ async function handleAction(action: string, target: HTMLElement): Promise<void> 
 }
 
 async function requestDisplayMode(mode: "fullscreen" | "pip"): Promise<void> {
+  if (isDshHost) return
   try {
     const result = await app.requestDisplayMode({ mode })
     if (result.mode === "pip" || result.mode === "fullscreen") displayMode = result.mode
@@ -762,11 +862,11 @@ async function toggleActivityDetail(eventKey: string, callId: string): Promise<v
 
 async function askAboutLatestActivity(): Promise<void> {
   const recent = durableSessionEvents().slice(-20)
-  await app.updateModelContext({
+  await updateHostModelContext({
     content: [{ type: "text", text: `Live Workspace recent operational activity:\n${recent.map((event) => `${formatClock(event.ts)} ${eventTitle(event)} — ${eventDetail(event)}`).join("\n")}` }],
     structuredContent: { liveWorkspaceEvents: recent },
   })
-  await app.sendMessage({ role: "user", content: [{ type: "text", text: "Review the recent Live Workspace activity and tell me what matters, especially any failure, blocker, or next action." }] })
+  await sendHostMessage({ role: "user", content: [{ type: "text", text: "Review the recent Live Workspace activity and tell me what matters, especially any failure, blocker, or next action." }] })
 }
 
 function renderTerminal(): void {
@@ -947,7 +1047,7 @@ function renderFiles(): void {
       <div class="view-toolbar files-toolbar"><div class="path-controls"><label>Machine<select data-role="file-machine">${machineOptions(fileMachine)}</select></label><button class="button" data-action="file-up">Up</button><input data-role="file-path" value="${escapeHtml(filePath)}" aria-label="Path"/></div><div class="toolbar-actions"><button class="button" data-action="file-new">New file</button><button class="button" data-action="file-new-dir">New folder</button><button class="button" data-action="refresh">${icon("refresh")}Refresh</button></div></div>
       <div class="files-grid">
         <section class="panel file-list-panel"><div class="panel-head"><strong>${escapeHtml(fileMachine)}:${escapeHtml(filePath)}</strong><span>${fileEntries.length} entries</span></div><div class="file-list">${fileEntries.length ? fileEntries.map(fileRow).join("") : '<div class="empty-state">Directory is empty.</div>'}</div></section>
-        <section class="panel preview-panel"><div class="panel-head"><div><strong>${escapeHtml(selected?.name || "Preview")}</strong><span>${selected ? `${escapeHtml(selected.type)} · ${formatBytes(selected.size)}` : "Choose a file"}</span></div><div class="preview-actions">${selected?.type === "file" ? `<button class="text-button" data-action="file-context">Send context</button><button class="text-button" data-action="file-ask">Ask ChatGPT</button><button class="text-button" data-action="file-edit">Edit</button><button class="text-button danger" data-action="file-delete">Delete</button>` : ""}</div></div><div class="file-preview" data-role="file-preview">${renderFilePreview()}</div></section>
+        <section class="panel preview-panel"><div class="panel-head"><div><strong>${escapeHtml(selected?.name || "Preview")}</strong><span>${selected ? `${escapeHtml(selected.type)} · ${formatBytes(selected.size)}` : "Choose a file"}</span></div><div class="preview-actions">${selected?.type === "file" ? `${isDshHost ? "" : '<button class="text-button" data-action="file-context">Send context</button>'}<button class="text-button" data-action="file-ask">${isDshHost ? "Ask DSH" : "Ask ChatGPT"}</button><button class="text-button" data-action="file-edit">Edit</button><button class="text-button danger" data-action="file-delete">Delete</button>` : ""}</div></div><div class="file-preview" data-role="file-preview">${renderFilePreview()}</div></section>
       </div>
     </section>`
   wireFileControls()
@@ -1088,16 +1188,16 @@ async function shareSelectedFile(ask: boolean): Promise<void> {
   const content = await api<JsonRecord>(`/api/ui/files/content?machine=${encodeURIComponent(requestMachine)}&path=${encodeURIComponent(requestPath)}`)
   if (fileMachine !== requestMachine || selectedFile !== requestPath) return
   const text = truncateContext(String(content.content || ""))
-  await app.updateModelContext({ content: [{ type: "text", text: `Selected file ${requestMachine}:${requestPath}:\n\n${text}` }], structuredContent: { selectedFile: { machine: requestMachine, path: requestPath, sha256: content.sha256 } } })
+  await updateHostModelContext({ content: [{ type: "text", text: `Selected file ${requestMachine}:${requestPath}:\n\n${text}` }], structuredContent: { selectedFile: { machine: requestMachine, path: requestPath, sha256: content.sha256 } } })
   notify("Selected file added to model context", "success")
-  if (ask) await app.sendMessage({ role: "user", content: [{ type: "text", text: `Inspect the selected file ${requestPath} in Live Workspace. Explain anything important and suggest or make the next appropriate change.` }] })
+  if (ask) await sendHostMessage({ role: "user", content: [{ type: "text", text: `Inspect the selected file ${requestPath} in Live Workspace. Explain anything important and suggest or make the next appropriate change.` }] })
 }
 
 function renderDiff(): void {
   const status = gitSnapshot ? String(gitSnapshot.status.stdout || gitSnapshot.status.stderr || "") : ""
   const diff = gitSnapshot ? String(gitSnapshot.diff.stdout || gitSnapshot.diff.stderr || "") : ""
   mainNode().innerHTML = `
-    <section class="view diff-view"><div class="view-toolbar"><div><h2>Working tree diff</h2><p>${escapeHtml(gitSnapshot?.machine || diffMachine)}:${escapeHtml(gitSnapshot?.cwd || diffCwd)} · unstaged and staged changes</p></div><div class="toolbar-actions"><button class="button" data-action="diff-context">Send context</button><button class="button" data-action="diff-ask">${icon("chat")}Ask for review</button><button class="button" data-action="refresh">${icon("refresh")}Refresh</button></div></div>
+    <section class="view diff-view"><div class="view-toolbar"><div><h2>Working tree diff</h2><p>${escapeHtml(gitSnapshot?.machine || diffMachine)}:${escapeHtml(gitSnapshot?.cwd || diffCwd)} · unstaged and staged changes</p></div><div class="toolbar-actions">${isDshHost ? "" : '<button class="button" data-action="diff-context">Send context</button>'}<button class="button" data-action="diff-ask">${icon("chat")}Ask for review</button><button class="button" data-action="refresh">${icon("refresh")}Refresh</button></div></div>
       <div class="diff-layout"><section class="panel status-panel"><div class="panel-head"><strong>Git status</strong><span>${escapeHtml(gitSnapshot?.cwd || diffCwd)}</span></div><pre>${escapeHtml(status || "Clean")}</pre></section><section class="panel diff-panel"><div class="panel-head"><strong>Changes</strong><span>${diff ? `${diff.split("\n").length} lines` : "clean"}</span></div><div class="diff-code">${gitSnapshot ? renderDiffHtml(diff) : '<div class="loading small"><span></span>Loading diff…</div>'}</div></section></div>
     </section>`
 }
@@ -1117,9 +1217,9 @@ async function shareDiff(ask: boolean): Promise<void> {
   if (!gitSnapshot) await refreshDiff()
   const status = String(gitSnapshot?.status.stdout || "")
   const diff = truncateContext(String(gitSnapshot?.diff.stdout || ""), 28_000)
-  await app.updateModelContext({ content: [{ type: "text", text: `Live Workspace git status (${gitSnapshot?.machine || diffMachine}):\n${status}\n\nDiff:\n${diff}` }], structuredContent: { git: { machine: gitSnapshot?.machine || diffMachine, cwd: gitSnapshot?.cwd || diffCwd, status } } })
+  await updateHostModelContext({ content: [{ type: "text", text: `Live Workspace git status (${gitSnapshot?.machine || diffMachine}):\n${status}\n\nDiff:\n${diff}` }], structuredContent: { git: { machine: gitSnapshot?.machine || diffMachine, cwd: gitSnapshot?.cwd || diffCwd, status } } })
   notify("Diff added to model context", "success")
-  if (ask) await app.sendMessage({ role: "user", content: [{ type: "text", text: "Review the current Live Workspace git diff. Identify correctness risks, regressions, missing tests, and concrete improvements. Make fixes when appropriate." }] })
+  if (ask) await sendHostMessage({ role: "user", content: [{ type: "text", text: "Review the current Live Workspace git diff. Identify correctness risks, regressions, missing tests, and concrete improvements. Make fixes when appropriate." }] })
 }
 
 function renderJobs(): void {
@@ -1308,8 +1408,8 @@ async function askAboutAudit(id: string): Promise<void> {
   if (!entry) return
   let detail: unknown = entry
   try { detail = await api(`/api/ui/audit/detail?id=${encodeURIComponent(id)}`) } catch { /* preview is enough */ }
-  await app.updateModelContext({ content: [{ type: "text", text: `Selected local-shell-mcp audit entry:\n${truncateContext(JSON.stringify(detail, null, 2), 20_000)}` }], structuredContent: { auditEntryId: id } })
-  await app.sendMessage({ role: "user", content: [{ type: "text", text: "Explain the selected Live Workspace audit entry, whether it indicates a problem, and what I should do next." }] })
+  await updateHostModelContext({ content: [{ type: "text", text: `Selected local-shell-mcp audit entry:\n${truncateContext(JSON.stringify(detail, null, 2), 20_000)}` }], structuredContent: { auditEntryId: id } })
+  await sendHostMessage({ role: "user", content: [{ type: "text", text: "Explain the selected Live Workspace audit entry, whether it indicates a problem, and what I should do next." }] })
 }
 
 async function refreshJobs(): Promise<void> {
@@ -1530,7 +1630,7 @@ async function checkPlanContinuation(): Promise<void> {
     let error = ""
     let validated = false
     try {
-      await app.updateModelContext({
+      await updateHostModelContext({
         content: [{ type: "text", text: `Active local-shell-mcp Goal checkpoint:\n${truncateContext(JSON.stringify(checkpoint, null, 2), 20_000)}` }],
         structuredContent: { localShellMcpSessionId: sessionId, localShellMcpPlan: plan, localShellMcpRecentActivity: recent },
       })
@@ -1553,11 +1653,11 @@ async function checkPlanContinuation(): Promise<void> {
       }
       continuationDispatch = dispatch
       const dispatchWatcher = watchContinuationDispatch(dispatch)
-      const resumeInstruction = sessionId
+      const resumeInstruction = !isDshHost && sessionId
         ? `First call session_manage(action="resume", session_id="${sessionId}", takeover=true) so this agent run inherits the durable task context. `
         : ""
       try {
-        const response = await app.sendMessage({
+        const response = await sendHostMessage({
           role: "user",
           content: [{ type: "text", text: `${resumeInstruction}Continue working on the active plan from its current state. Do not repeat completed steps. Keep working autonomously and keep the Session progress and Plan synchronized with execution: report meaningful checkpoints with session_manage(action="report", ...); use plan_manage(action="update") whenever step status or the execution plan changes; when every step is completed or skipped, call plan_manage(action="finish") before ending the turn; if you genuinely cannot continue without user input or an external condition, call plan_manage(action="block", note=...) and report the blocker before ending the turn.` }],
         }, { signal: dispatch.controller.signal })
@@ -1619,7 +1719,12 @@ async function runConnectionLoop(generation: number): Promise<void> {
       if (isLiveCredentialError(error)) {
         const stale = config
         try {
-          await refreshLiveCredentials({ machine: stale.machine, cwd: stale.cwd, live_id: stale.liveId }, true)
+          await refreshLiveCredentials({
+            machine: stale.machine,
+            cwd: stale.cwd,
+            live_id: stale.liveId,
+            ...(stale.sessionId ? { session_id: stale.sessionId } : {}),
+          }, true)
           return
         } catch (credentialError) {
           error = credentialError
@@ -1673,7 +1778,49 @@ function activateLiveConfig(nextConfig: LiveConfig): void {
 
 const credentialRefreshes = new Map<string, Promise<void>>()
 
+async function requestDshLiveConfig(structured: JsonRecord, allowCreate: boolean): Promise<LiveConfig> {
+  if (!dshBootstrap) throw new Error("DSH Live Workspace bridge is unavailable")
+  const machine = String(structured.machine || "local")
+  const cwd = String(structured.cwd || ".")
+  const liveId = String(structured.live_id || "")
+  const sessionId = String(structured.session_id || config?.sessionId || "")
+  const invoke = async (id: string): Promise<LiveConfig> => {
+    const url = new URL(dshBootstrap.configEndpoint, window.location.origin)
+    url.searchParams.set("session", dshBootstrap.sessionId)
+    url.searchParams.set("machine", machine)
+    url.searchParams.set("cwd", cwd)
+    if (id) url.searchParams.set("live_id", id)
+    if (sessionId) url.searchParams.set("session_id", sessionId)
+    const response = await fetch(url, { credentials: "same-origin", cache: "no-store" })
+    const payload = await response.json() as { ok?: boolean; data?: JsonRecord; message?: string }
+    if (!response.ok || payload.ok === false || !payload.data) {
+      throw new Error(String(payload.message || `DSH Live Workspace bridge returned HTTP ${response.status}`))
+    }
+    const data = payload.data
+    const resolved: LiveConfig = {
+      token: String(data.token || ""),
+      apiBase: String(data.apiBase || ""),
+      uiPath: String(data.uiPath || "/ui"),
+      liveId: String(data.liveId || ""),
+      sessionId: String(data.sessionId || ""),
+      machine: String(data.machine || machine),
+      cwd: String(data.cwd || cwd),
+    }
+    if (!resolved.token || !resolved.apiBase) {
+      throw new Error("DSH omitted Live Workspace credentials")
+    }
+    return resolved
+  }
+  try {
+    return await invoke(liveId)
+  } catch (error) {
+    if (!allowCreate || !liveId) throw error
+    return await invoke("")
+  }
+}
+
 async function requestLiveConfig(structured: JsonRecord, allowCreate: boolean): Promise<LiveConfig> {
+  if (isDshHost) return await requestDshLiveConfig(structured, allowCreate)
   const machine = String(structured.machine || "local")
   const cwd = String(structured.cwd || ".")
   const liveId = String(structured.live_id || "")
@@ -1793,6 +1940,12 @@ async function configureFromToolResult(result: unknown): Promise<void> {
 }
 
 async function enterPreferredDisplayMode(): Promise<void> {
+  if (isDshHost) {
+    displayMode = "fullscreen"
+    document.documentElement.dataset.displayMode = displayMode
+    updateChrome()
+    return
+  }
   const context = app.getHostContext()
   const available = context?.availableDisplayModes || []
   if (available.includes("pip")) {
@@ -1887,6 +2040,12 @@ function stopLiveWorkspace(): void {
   connected = false
   destroyTerminal()
   window.removeEventListener("openai:set_globals", onOpenAiGlobalsChanged)
+  window.removeEventListener("message", onDshPromptResult)
+  for (const [requestId, waiter] of dshPromptWaiters) {
+    dshPromptWaiters.delete(requestId)
+    window.clearTimeout(waiter.timer)
+    waiter.reject(new Error("Live Workspace closed before DSH accepted the message"))
+  }
   if (passiveRefreshTimer !== null) {
     window.clearInterval(passiveRefreshTimer)
     passiveRefreshTimer = null
@@ -1906,12 +2065,20 @@ app.onteardown = async () => {
   return {}
 }
 
-window.addEventListener("openai:set_globals", onOpenAiGlobalsChanged)
+if (isDshHost) window.addEventListener("message", onDshPromptResult)
+else window.addEventListener("openai:set_globals", onOpenAiGlobalsChanged)
 
 shell()
 
 void (async () => {
   try {
+    if (isDshHost) {
+      bridgeReady = true
+      applyHostContext(currentHostContext())
+      await enterPreferredDisplayMode()
+      if (!shuttingDown) await recoverCredentialsForever({})
+      return
+    }
     await app.connect()
     if (shuttingDown) return
     bridgeReady = true
@@ -1948,5 +2115,5 @@ countdownRenderTimer = window.setInterval(() => {
 
 window.addEventListener("beforeunload", () => {
   stopLiveWorkspace()
-  void app.close()
+  if (!isDshHost) void app.close()
 })

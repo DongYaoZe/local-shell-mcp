@@ -54,6 +54,7 @@ Docker、VS Code 扩展、二进制、Python 和 stdio 是运行时；ChatGPT �
 | 第一次部署给 ChatGPT 使用 | [快速开始](getting-started/quickstart.md) | Docker Compose、OAuth 和 `/mcp` 基础路径 |
 | 选择运行时层 | [运行时选择](guides/deployment.md) | 把 Docker、VS Code、二进制、Python 和 stdio 与客户端接入分开说明 |
 | 把 ChatGPT 作为客户端接入 | [ChatGPT 连接器](getting-started/chatgpt-connector.md) | 端点、OAuth、首次安全提示和工具发现 |
+| 把 LSM 接入 DeepSeek Harness | [DeepSeek Harness 插件](clients/deepseek-harness.md) | 直接把本仓库作为 DSH bundle 安装，同时保留完整 LSM 工具面和 Remote Worker 能力 |
 | 从 VS Code 启动运行时 | [VS Code 扩展运行时](installation/vscode-extension.md) | 编辑器启动、设置和主机安全边界 |
 | 学习如何使用工具集 | [使用模式](guides/usage-patterns.md) | 提示词模板和工具选择建议 |
 | 理解所有工具 | [工具参考](reference/tools.md) | 每个工具的用途、参数、返回值、组合方式和注意事项 |

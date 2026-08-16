@@ -38,6 +38,7 @@ def _versioned_live_resource_uri() -> str:
 LIVE_RESOURCE_VERSIONED_URI = _versioned_live_resource_uri()
 LIVE_RESOURCE_MIME = "text/html;profile=mcp-app"
 LIVE_API_PREFIX = "/api/live"
+MCP_SESSION_AFFINITY_HEADER = "x-local-shell-mcp-session-affinity"
 LIVE_TOKEN_TTL_S = 12 * 60 * 60
 LIVE_EVENT_LIMIT = 2_000
 LIVE_EVENT_BATCH = 300
@@ -686,6 +687,23 @@ def mcp_session_key(mcp: Any) -> str:
     request = getattr(request_context, "request", None)
     headers = getattr(request, "headers", None)
     if headers is not None:
+        affinity = headers.get(MCP_SESSION_AFFINITY_HEADER)
+        if affinity:
+            # The affinity value is client-controlled, so scope it to the
+            # authenticated principal before it becomes an attachment key.
+            # Import lazily to keep auth's error-path import of live_channel acyclic.
+            from .auth import current_principal
+
+            principal = current_principal()
+            principal_namespace = (
+                (principal.subject or principal.email)
+                if principal is not None
+                else "anonymous"
+            ) or "anonymous"
+            digest = hashlib.sha256(
+                f"{principal_namespace}\0{affinity}".encode()
+            ).hexdigest()
+            return f"mcp-affinity:{digest}"
         session_id = headers.get("mcp-session-id")
         if session_id:
             return f"mcp-http:{session_id}"
