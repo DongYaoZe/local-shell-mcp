@@ -29,6 +29,15 @@ export class TerminalsController extends BaseController {
   private manualClose = false
   private loading = false
   private refreshQueued = false
+  private loadedMachine: string | null = null
+  private scrollbackSupported = false
+  private scrollbackHistory = 0
+  private scrollbackPosition = 0
+  private scrollRequestTimer: number | null = null
+  private scrollbackSyncTimer: number | null = null
+  private pendingScrollPosition: number | null = null
+  private scrollRequestInFlight: number | null = null
+  private scrollRequestSequence = 0
   private history: string[] = []
   private historyIndex = 0
   private lastSearch = ""
@@ -39,15 +48,16 @@ export class TerminalsController extends BaseController {
     this.machine = this.context.machines().some((item) => item.name === "local") ? "local" : this.context.machines()[0]?.name || "local"
     this.root.innerHTML = `<section class="native-page terminals-page">
       <div class="native-toolbar terminal-toolbar">
-        <div class="toolbar-group"><label>Machine<select data-role="terminal-machine"></select></label><span class="connection-pill" data-role="connection"><i></i><strong>No session</strong></span><span class="terminal-dimensions" data-role="dimensions">—</span></div>
+        <div class="toolbar-group"><label>Machine<select data-role="terminal-machine"></select></label><span class="connection-pill connecting" data-role="connection"><i></i><strong>Loading…</strong></span><span class="terminal-dimensions" data-role="dimensions">—</span></div>
         <div class="toolbar-actions">${button("New", "new-session", { icon: "+", primary: true })}${button("Kill", "kill-session", { danger: true, disabled: true })}${button("Reconnect", "reconnect", { icon: "↻" })}${button("Previous", "previous-session", { disabled: true })}${button("Next", "next-session", { disabled: true })}</div>
       </div>
       <div class="terminal-layout" data-role="terminal-workspace">
-        <aside class="native-panel terminal-sessions"><header><div><h3>Sessions</h3><p data-role="session-summary">Loading…</p></div>${button("Refresh", "refresh-sessions", { icon: "↻" })}</header><div class="session-list" data-role="sessions"></div></aside>
-        <section class="native-panel terminal-stage-panel"><header><div><h3 data-role="terminal-title">Persistent terminal</h3><p data-role="terminal-subtitle">Select or create a session</p></div><div class="terminal-stage-actions">${button("Copy", "copy")}${button("Paste", "paste")}${button("Find", "search")}${button("Clear", "clear")}${button("Fullscreen", "fullscreen")}<div class="terminal-search" data-role="search-box" hidden><input data-role="search-input" placeholder="Find in terminal"/><button type="button" data-action="search-prev">Previous</button><button type="button" data-action="search-next">Next</button><button type="button" data-action="search-close">Close</button></div></div></header><div class="persistent-terminal" data-role="terminal"></div><div class="terminal-overlay" data-role="terminal-overlay">Select or create a persistent session.</div><nav class="terminal-touchbar"><button type="button" data-sequence="\u001b">Esc</button><button type="button" data-sequence="\t">Tab</button><button type="button" data-sequence="\u001b[D">←</button><button type="button" data-sequence="\u001b[A">↑</button><button type="button" data-sequence="\u001b[B">↓</button><button type="button" data-sequence="\u001b[C">→</button><button type="button" data-sequence="\r">Enter</button><button type="button" data-sequence="\u0003">Ctrl-C</button></nav><form class="command-dock" data-role="command-form"><span>$</span><input data-role="command-input" autocomplete="off" placeholder="Send a command to the attached session"/><button class="native-button primary" type="submit">Send</button></form></section>
+        <aside class="native-panel terminal-sessions"><header><div><h3>Sessions</h3><p data-role="session-summary">Loading…</p></div></header><div class="session-list" data-role="sessions"></div></aside>
+        <section class="native-panel terminal-stage-panel"><header><div><h3 data-role="terminal-title">Persistent terminal</h3><p data-role="terminal-subtitle">Loading terminals…</p></div><div class="terminal-stage-actions">${button("Copy", "copy")}${button("Paste", "paste")}${button("Find", "search")}${button("Clear", "clear")}${button("Fullscreen", "fullscreen")}<div class="terminal-search" data-role="search-box" hidden><input data-role="search-input" placeholder="Find in terminal"/><button type="button" data-action="search-prev">Previous</button><button type="button" data-action="search-next">Next</button><button type="button" data-action="search-close">Close</button></div></div></header><div class="persistent-terminal" data-role="terminal"></div><div class="terminal-scrollbar unsupported" data-role="scrollbar" role="scrollbar" tabindex="0" aria-label="Terminal scrollback" aria-valuemin="0" aria-valuemax="0" aria-valuenow="0"><div class="terminal-scrollbar-spacer"></div></div><div class="terminal-overlay" data-role="terminal-overlay">Loading terminals…</div><nav class="terminal-touchbar"><button type="button" data-sequence="\u001b">Esc</button><button type="button" data-sequence="\t">Tab</button><button type="button" data-sequence="\u001b[D">←</button><button type="button" data-sequence="\u001b[A">↑</button><button type="button" data-sequence="\u001b[B">↓</button><button type="button" data-sequence="\u001b[C">→</button><button type="button" data-sequence="\r">Enter</button><button type="button" data-sequence="\u0003">Ctrl-C</button></nav><form class="command-dock" data-role="command-form"><span>$</span><input data-role="command-input" autocomplete="off" placeholder="Send a command to the attached session"/><button class="native-button primary" type="submit">Send</button></form></section>
       </div>
     </section>`
     this.renderMachineSelect()
+    this.showLoadingState()
     this.initializeTerminal()
     this.listen(root, "click", (event) => this.onClick(event))
     this.listen(root, "change", (event) => this.onChange(event))
@@ -71,7 +81,7 @@ export class TerminalsController extends BaseController {
       cursorBlink: true,
       cursorStyle: "bar",
       fontFamily: '"JetBrains Mono", "Cascadia Code", "SFMono-Regular", Consolas, monospace',
-      fontSize: 13,
+      fontSize: 14,
       lineHeight: 1.12,
       scrollback: 12_000,
       smoothScrollDuration: 70,
@@ -114,6 +124,12 @@ export class TerminalsController extends BaseController {
     })
     this.resizeObserver = new ResizeObserver(() => window.requestAnimationFrame(() => this.fit()))
     this.resizeObserver.observe(host)
+    this.listen(host, "wheel", (event) => this.onTerminalWheel(event as WheelEvent), { capture: true, passive: false })
+    const scrollbar = this.root.querySelector<HTMLElement>("[data-role=scrollbar]")
+    if (scrollbar) {
+      this.listen(scrollbar, "scroll", () => this.onScrollbarScroll())
+      this.listen(scrollbar, "keydown", (event) => this.onScrollbarKeyDown(event as KeyboardEvent))
+    }
     window.requestAnimationFrame(() => this.fit())
   }
 
@@ -125,13 +141,15 @@ export class TerminalsController extends BaseController {
     this.loading = true
     const machines = this.context.machines()
     if (!machines.some((machine) => machine.name === this.machine)) {
-      this.disconnect(true)
+      this.disconnect(false)
       this.machine = machines.some((machine) => machine.name === "local") ? "local" : machines[0]?.name || "local"
       this.sessions = []
       this.selectedSessionId = null
+      this.loadedMachine = null
       this.terminalWrites?.clear()
       this.terminalWrites?.setHeld(false)
       this.terminal?.clear()
+      this.showLoadingState()
     }
     this.renderMachineSelect()
     const requestedMachine = this.machine
@@ -139,6 +157,7 @@ export class TerminalsController extends BaseController {
       const payload = await this.context.api.get<TerminalPayload>(`/terminals${queryString({ machine: requestedMachine })}`)
       if (this.destroyed || requestedMachine !== this.machine || payload.machine !== requestedMachine) return
       this.sessions = payload.sessions
+      this.loadedMachine = requestedMachine
       const previous = this.selectedSessionId
       if (!previous || !this.sessions.some((session) => session.session_id === previous)) this.selectedSessionId = this.sessions[0]?.session_id || null
       this.renderSessions()
@@ -147,6 +166,7 @@ export class TerminalsController extends BaseController {
     } catch (error) {
       if (this.destroyed || requestedMachine !== this.machine) return
       this.context.notify(`Terminals: ${error instanceof Error ? error.message : String(error)}`, "error")
+      if (this.loadedMachine !== requestedMachine) this.showLoadError(error)
     } finally {
       this.loading = false
       if (this.refreshQueued && !this.destroyed) {
@@ -154,6 +174,31 @@ export class TerminalsController extends BaseController {
         void this.refresh()
       }
     }
+  }
+
+  private showLoadingState(): void {
+    const list = this.root.querySelector<HTMLElement>("[data-role=sessions]")
+    const summary = this.root.querySelector<HTMLElement>("[data-role=session-summary]")
+    const title = this.root.querySelector<HTMLElement>("[data-role=terminal-title]")
+    const subtitle = this.root.querySelector<HTMLElement>("[data-role=terminal-subtitle]")
+    if (list) list.innerHTML = '<div class="native-loading">Loading terminals…</div>'
+    if (summary) summary.textContent = "Loading…"
+    if (title) title.textContent = "Persistent terminal"
+    if (subtitle) subtitle.textContent = "Loading terminals…"
+    for (const action of ["kill-session", "previous-session", "next-session", "reconnect", "copy", "paste", "search", "clear"]) {
+      const control = this.root.querySelector<HTMLButtonElement>(`[data-action=${action}]`)
+      if (control) control.disabled = true
+    }
+    this.setConnection("connecting", "Loading…")
+  }
+
+  private showLoadError(error: unknown): void {
+    const detail = error instanceof Error ? error.message : String(error)
+    const list = this.root.querySelector<HTMLElement>("[data-role=sessions]")
+    const summary = this.root.querySelector<HTMLElement>("[data-role=session-summary]")
+    if (list) list.innerHTML = `<div class="native-error">${escapeHtml(detail || "Unable to load terminals")}</div>`
+    if (summary) summary.textContent = "Load failed"
+    this.setConnection("error", "Load failed")
   }
 
   private renderSessions(): void {
@@ -230,6 +275,7 @@ export class TerminalsController extends BaseController {
     url.searchParams.set("session_id", sessionId)
     url.searchParams.set("cols", String(this.terminal.cols))
     url.searchParams.set("rows", String(this.terminal.rows))
+    url.searchParams.set("scrollback", "1")
     const socket = new WebSocket(url, this.protocols())
     socket.binaryType = "arraybuffer"
     this.socket = socket
@@ -242,6 +288,7 @@ export class TerminalsController extends BaseController {
     }
     socket.onmessage = async (event) => {
       if (this.socket !== socket || !this.terminal) return
+      if (typeof event.data === "string" && this.handleSocketControl(event.data)) return
       const data = event.data instanceof ArrayBuffer
         ? new Uint8Array(event.data)
         : event.data instanceof Blob
@@ -273,6 +320,124 @@ export class TerminalsController extends BaseController {
     this.terminalWrites?.write(data)
   }
 
+  private handleSocketControl(value: string): boolean {
+    let payload: Record<string, unknown>
+    try {
+      payload = JSON.parse(value) as Record<string, unknown>
+    } catch {
+      return false
+    }
+    const requestId = typeof payload.request_id === "number" && Number.isFinite(payload.request_id) ? Math.floor(payload.request_id) : null
+    if (payload.type === "scrollback-ack") {
+      if (requestId !== null && requestId === this.scrollRequestInFlight) {
+        this.scrollRequestInFlight = null
+        if (this.pendingScrollPosition !== null) this.scheduleScrollRequest(0)
+      }
+      return true
+    }
+    if (payload.type !== "scrollback") return false
+    const supported = payload.supported === true
+    const history = typeof payload.history === "number" && Number.isFinite(payload.history) ? Math.max(0, Math.floor(payload.history)) : 0
+    const position = typeof payload.position === "number" && Number.isFinite(payload.position) ? Math.max(0, Math.floor(payload.position)) : 0
+    this.scrollbackSupported = supported
+    this.scrollbackHistory = history
+    const pending = this.pendingScrollPosition
+    this.scrollbackPosition = pending === null ? Math.min(position, history) : Math.min(pending, history)
+    if (requestId !== null && requestId === this.scrollRequestInFlight) {
+      this.scrollRequestInFlight = null
+      if (this.pendingScrollPosition !== null) this.scheduleScrollRequest(0)
+    }
+    this.renderScrollbar()
+    return true
+  }
+
+  private renderScrollbar(): void {
+    const scrollbar = this.root.querySelector<HTMLElement>("[data-role=scrollbar]")
+    if (!scrollbar) return
+    const stage = this.root.querySelector<HTMLElement>(".terminal-stage-panel")
+    stage?.classList.toggle("tmux-scrollback", this.scrollbackSupported)
+    scrollbar.classList.toggle("unsupported", !this.scrollbackSupported)
+    scrollbar.classList.toggle("empty", this.scrollbackHistory <= 0)
+    scrollbar.style.setProperty("--scrollback-history", `${this.scrollbackHistory}px`)
+    scrollbar.setAttribute("aria-valuemax", String(this.scrollbackHistory))
+    scrollbar.setAttribute("aria-valuenow", String(this.scrollbackPosition))
+    scrollbar.setAttribute("aria-valuetext", this.scrollbackPosition > 0 ? `${this.scrollbackPosition} lines from bottom` : "Bottom")
+    const target = Math.max(0, this.scrollbackHistory - this.scrollbackPosition)
+    if (Math.abs(scrollbar.scrollTop - target) > 0.5) scrollbar.scrollTop = target
+  }
+
+  private queueScrollRequest(position: number): void {
+    if (!this.scrollbackSupported || this.socket?.readyState !== WebSocket.OPEN) return
+    this.pendingScrollPosition = Math.max(0, Math.min(position, this.scrollbackHistory))
+    if (this.scrollRequestInFlight !== null) return
+    this.scheduleScrollRequest(40)
+  }
+
+  private scheduleScrollRequest(delay: number): void {
+    if (this.scrollRequestTimer !== null || this.scrollRequestInFlight !== null) return
+    this.scrollRequestTimer = window.setTimeout(() => {
+      this.scrollRequestTimer = null
+      const socket = this.socket
+      if (!socket || socket.readyState !== WebSocket.OPEN) {
+        this.pendingScrollPosition = null
+        return
+      }
+      if (this.pendingScrollPosition === null) return
+      const requestId = ++this.scrollRequestSequence
+      const payload = { type: "scrollback", position: this.pendingScrollPosition, request_id: requestId }
+      this.pendingScrollPosition = null
+      this.scrollRequestInFlight = requestId
+      socket.send(JSON.stringify(payload))
+    }, delay)
+  }
+
+  private onScrollbarScroll(): void {
+    if (!this.scrollbackSupported) return
+    const scrollbar = this.root.querySelector<HTMLElement>("[data-role=scrollbar]")
+    if (!scrollbar) return
+    const position = Math.max(0, Math.min(this.scrollbackHistory - Math.round(scrollbar.scrollTop), this.scrollbackHistory))
+    if (position === this.scrollbackPosition) return
+    this.scrollbackPosition = position
+    scrollbar.setAttribute("aria-valuenow", String(position))
+    scrollbar.setAttribute("aria-valuetext", position > 0 ? `${position} lines from bottom` : "Bottom")
+    this.queueScrollRequest(position)
+  }
+
+  private onTerminalWheel(event: WheelEvent): void {
+    const terminal = this.terminal
+    if (!this.scrollbackSupported || !terminal || event.deltaY === 0) return
+    if (terminal.modes.mouseTrackingMode !== "none") {
+      this.queueScrollbackSync()
+      return
+    }
+    event.preventDefault()
+    event.stopPropagation()
+    const magnitude = Math.max(1, Math.min(24, Math.ceil(Math.abs(event.deltaY) / 24)))
+    const scrollbar = this.root.querySelector<HTMLElement>("[data-role=scrollbar]")
+    if (!scrollbar) return
+    scrollbar.scrollTop += event.deltaY < 0 ? -magnitude : magnitude
+  }
+
+  private onScrollbarKeyDown(event: KeyboardEvent): void {
+    if (!this.scrollbackSupported) return
+    const page = Math.max(1, this.terminal?.rows ?? 24)
+    let position = this.scrollbackPosition
+    if (event.key === "ArrowUp") position += 1
+    else if (event.key === "ArrowDown") position -= 1
+    else if (event.key === "PageUp") position += page
+    else if (event.key === "PageDown") position -= page
+    else if (event.key === "Home") position = this.scrollbackHistory
+    else if (event.key === "End") position = 0
+    else return
+    event.preventDefault()
+    event.stopPropagation()
+    position = Math.max(0, Math.min(position, this.scrollbackHistory))
+    if (position === this.scrollbackPosition) return
+    this.scrollbackPosition = position
+    this.renderScrollbar()
+    this.queueScrollRequest(position)
+  }
+
   private scheduleReconnect(): void {
     if (this.manualClose || !this.selectedSessionId) return
     if (this.reconnectTimer !== null) window.clearTimeout(this.reconnectTimer)
@@ -286,9 +451,19 @@ export class TerminalsController extends BaseController {
     this.manualClose = manual
     if (this.reconnectTimer !== null) window.clearTimeout(this.reconnectTimer)
     this.reconnectTimer = null
+    if (this.scrollRequestTimer !== null) window.clearTimeout(this.scrollRequestTimer)
+    this.scrollRequestTimer = null
+    if (this.scrollbackSyncTimer !== null) window.clearTimeout(this.scrollbackSyncTimer)
+    this.scrollbackSyncTimer = null
+    this.pendingScrollPosition = null
+    this.scrollRequestInFlight = null
     const socket = this.socket
     this.socket = null
     socket?.close()
+    this.scrollbackSupported = false
+    this.scrollbackHistory = 0
+    this.scrollbackPosition = 0
+    this.renderScrollbar()
     if (manual) this.setConnection("idle", this.selectedSessionId ? "Disconnected" : "No session")
   }
 
@@ -306,6 +481,17 @@ export class TerminalsController extends BaseController {
 
   private sendRaw(value: string): void {
     if (this.socket?.readyState === WebSocket.OPEN) this.socket.send(encoder.encode(value))
+  }
+
+  private queueScrollbackSync(): void {
+    if (!this.scrollbackSupported || this.socket?.readyState !== WebSocket.OPEN) return
+    if (this.scrollbackSyncTimer !== null) return
+    const socket = this.socket
+    this.scrollbackSyncTimer = window.setTimeout(() => {
+      this.scrollbackSyncTimer = null
+      if (this.socket !== socket || socket.readyState !== WebSocket.OPEN) return
+      socket.send(JSON.stringify({ type: "scrollback-sync" }))
+    }, 0)
   }
 
   private async createSession(): Promise<void> {
@@ -428,14 +614,15 @@ export class TerminalsController extends BaseController {
 
   private switchMachine(machine: string): void {
     if (!machine || machine === this.machine) return
-    this.disconnect(true)
+    this.disconnect(false)
     this.machine = machine
     this.sessions = []
     this.selectedSessionId = null
+    this.loadedMachine = null
     this.terminalWrites?.clear()
     this.terminalWrites?.setHeld(false)
     this.terminal?.clear()
-    this.renderSessions()
+    this.showLoadingState()
     void this.refresh()
   }
 
@@ -456,7 +643,6 @@ export class TerminalsController extends BaseController {
     if (!action) return
     if (action === "new-session") void this.createSession()
     else if (action === "kill-session") void this.killSession()
-    else if (action === "refresh-sessions") void this.refresh()
     else if (action === "reconnect") this.connect()
     else if (action === "previous-session") this.switchSession(-1)
     else if (action === "next-session") this.switchSession(1)

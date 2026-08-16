@@ -107,3 +107,33 @@ async def test_native_shell_creation_is_serialized(tmp_path, monkeypatch):
 
     spawned[0].returncode = 0
     await ops.kill_shell("duplicate")
+
+
+def test_managed_process_kwargs_uses_create_no_window_on_windows(monkeypatch):
+    from local_shell_mcp import process_utils
+
+    monkeypatch.setattr(process_utils.sys, "platform", "win32")
+    monkeypatch.setattr(process_utils.subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
+
+    assert process_utils.managed_process_kwargs() == {"creationflags": 0x08000000}
+
+
+@pytest.mark.asyncio
+async def test_run_shell_spawn_uses_managed_process_kwargs(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOCAL_SHELL_MCP_WORKSPACE_ROOT", str(tmp_path))
+    get_settings.cache_clear()
+    captured = {}
+
+    class FakeProcess:
+        returncode = 0
+
+    async def fake_create_subprocess_exec(*args, **kwargs):  # noqa: ANN002, ANN003
+        captured.update(kwargs)
+        return FakeProcess()
+
+    monkeypatch.setattr(ops.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+    monkeypatch.setattr(ops, "managed_process_kwargs", lambda: {"creationflags": 0x08000000})
+
+    await ops._spawn_process("echo hidden", str(tmp_path))  # noqa: SLF001
+
+    assert captured["creationflags"] == 0x08000000

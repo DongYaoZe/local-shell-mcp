@@ -477,7 +477,7 @@ When `machine` is supplied, the call additionally requires `remote:use` and runs
 
 ### `remote_transfer`
 
-Start a tracked job that copies a file or directory between the controller and remote machines. Remote uploads use resumable raw-binary chunks; use job_list, job_tail, job_stop, and job_retry to manage the transfer.
+Start a tracked job that copies a file or directory between the controller and remote machines. Remote uploads use resumable raw-binary chunks; use job_list, job_tail, job_stop, and job_retry to manage the transfer. Worker-to-worker transfers never stage the payload on controller disk: `auto` can use an opt-in peer-direct path, an S3-compatible presigned object path, or a bounded-memory controller relay fallback.
 
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
@@ -492,7 +492,7 @@ Start a tracked job that copies a file or directory between the controller and r
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
-At least one of `source_machine` and `destination_machine` must be supplied. Omitted endpoints refer to the controller workspace; the source may be either a file or a directory.
+At least one of `source_machine` and `destination_machine` must be supplied. Omitted endpoints refer to the controller workspace; the source may be either a file or a directory. With `disable_local=true`, both endpoints must be remote workers.
 
 ### `create_file_link`
 

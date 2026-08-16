@@ -21,7 +21,7 @@ export class TodosController extends BaseController {
 
   mount(root: HTMLElement): void {
     this.root = root
-    this.root.innerHTML = `<section class="native-page todos-page"><div class="todo-summary" data-role="todo-summary"></div><div class="native-toolbar"><div><strong>Todos</strong><span class="toolbar-detail">Persistent operational work shared with MCP</span></div><div class="toolbar-actions">${button("Add", "add", { icon: "+", primary: true })}${button("Edit", "edit", { disabled: true })}${button("Next status", "status", { disabled: true })}${button("Next priority", "priority", { disabled: true })}${button("Delete", "delete", { danger: true, disabled: true })}${button("Refresh", "refresh", { icon: "↻" })}</div></div><section class="native-panel todo-list-panel"><header><div><h3 data-role="todo-title">All todos</h3><p data-role="todo-count">Loading…</p></div><div class="todo-filters"><button type="button" data-todo-filter="all">All</button><button type="button" data-todo-filter="open">Open</button><button type="button" data-todo-filter="completed">Done</button></div></header><div class="todo-list-native" data-role="todo-list"><div class="native-loading">Loading todos…</div></div></section></section>`
+    this.root.innerHTML = `<section class="native-page todos-page"><div class="todo-summary" data-role="todo-summary"></div><div class="native-toolbar"><div><strong>Todos</strong><span class="toolbar-detail">Persistent operational work shared with MCP</span></div><div class="toolbar-actions">${button("Add", "add", { icon: "+", primary: true })}${button("Edit", "edit", { disabled: true })}${button("Next status", "status", { disabled: true })}${button("Next priority", "priority", { disabled: true })}${button("Delete", "delete", { danger: true, disabled: true })}</div></div><section class="native-panel todo-list-panel"><header><div><h3 data-role="todo-title">All todos</h3><p data-role="todo-count">Loading…</p></div><div class="todo-filters"><button type="button" data-todo-filter="all">All</button><button type="button" data-todo-filter="open">Open</button><button type="button" data-todo-filter="completed">Done</button></div></header><div class="todo-list-native" data-role="todo-list"><div class="native-loading">Loading todos…</div></div></section></section>`
     this.listen(root, "click", (event) => this.onClick(event))
     void this.refresh()
   }
@@ -172,7 +172,6 @@ export class TodosController extends BaseController {
     else if (action === "status") this.cycleStatus()
     else if (action === "priority") this.cyclePriority()
     else if (action === "delete") void this.delete()
-    else if (action === "refresh") void this.refresh()
   }
 }
 

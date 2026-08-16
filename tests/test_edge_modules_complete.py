@@ -193,6 +193,7 @@ def test_auth_scopes_hosts_tokens_and_metadata(tmp_path, monkeypatch):
     get_settings.cache_clear()
     for path in (
         "/healthz",
+        "/join.ps1",
         "/remote/transfer/x",
         "/.well-known/x",
         "/oauth/x",

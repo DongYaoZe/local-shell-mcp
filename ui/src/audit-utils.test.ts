@@ -32,6 +32,13 @@ describe("audit selection", () => {
     const next = [entry("c", 3), entry("a", 2), entry("b", 1)]
     expect(selectionAfterRefresh(previous, 1, next)).toBe(2)
   })
+
+  test("can preserve the first selected record when the list is reordered", () => {
+    const previous = [entry("newest", 3), entry("middle", 2), entry("oldest", 1)]
+    const next = [entry("oldest", 1), entry("middle", 2), entry("newest", 3)]
+
+    expect(selectionAfterRefresh(previous, 0, next, false)).toBe(2)
+  })
 })
 
 describe("audit formatting", () => {

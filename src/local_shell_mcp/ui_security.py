@@ -10,6 +10,7 @@ from pathlib import Path
 from starlette.requests import HTTPConnection
 
 from .settings import get_settings
+from .state_store import get_state_store, state_lock
 
 UI_LOCAL_TOKEN_HEADER = "x-local-shell-mcp-ui-token"
 UI_LOCAL_TOKEN_ENV = "LOCAL_SHELL_MCP_UI_LOCAL_TOKEN"
@@ -37,6 +38,20 @@ def get_or_create_ui_local_token() -> str:
     inherited = os.getenv(UI_LOCAL_TOKEN_ENV, "").strip()
     if len(inherited) >= 32:
         return inherited
+
+    settings = get_settings()
+    if settings.state_backend != "file":
+        key = "ui/local-token"
+        store = get_state_store()
+        with state_lock(key):
+            raw = store.read_bytes(key)
+            if raw is not None:
+                existing = raw.decode("utf-8", errors="ignore").strip()
+                if len(existing) >= 32:
+                    return existing
+            token = secrets.token_urlsafe(48)
+            store.write_bytes(key, token.encode("utf-8"))
+            return token
 
     path = _token_path()
     path.parent.mkdir(parents=True, exist_ok=True)
