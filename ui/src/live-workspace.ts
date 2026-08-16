@@ -389,8 +389,10 @@ function updateChrome(): void {
     if (isDshHost) {
       expandButton.hidden = true
       expandButton.disabled = true
+      expandButton.style.display = "none"
       expandButton.setAttribute("aria-hidden", "true")
     } else {
+      expandButton.style.removeProperty("display")
       const fullscreen = displayMode === "fullscreen"
       const targetMode = toggleWorkspaceDisplayMode(displayMode)
       const available = (currentHostContext().availableDisplayModes as string[] | undefined) || []
