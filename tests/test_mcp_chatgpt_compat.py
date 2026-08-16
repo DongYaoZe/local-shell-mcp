@@ -437,11 +437,22 @@ def test_cached_open_live_workspace_recipient_executes_over_http(tmp_path, monke
         )
         assert acknowledged.status_code in {200, 202}
 
+        listed = client.post(
+            "/mcp",
+            json={"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
+            headers=_mcp_headers(**session_headers),
+        )
+        assert listed.status_code == 200
+        listed_payload = _mcp_response_json(listed)
+        listed_names = {tool["name"] for tool in listed_payload["result"]["tools"]}
+        assert "workspace_open" in listed_names
+        assert "open_live_workspace" not in listed_names
+
         called = client.post(
             "/mcp",
             json={
                 "jsonrpc": "2.0",
-                "id": 2,
+                "id": 3,
                 "method": "tools/call",
                 "params": {
                     "name": "open_live_workspace",
@@ -456,7 +467,9 @@ def test_cached_open_live_workspace_recipient_executes_over_http(tmp_path, monke
     assert "error" not in payload
     assert payload["result"]["isError"] is False
     assert payload["result"]["structuredContent"]["live_id"]
-    assert payload["result"]["_meta"]["local-shell-mcp/live"]["token"]
+    live_token = payload["result"]["_meta"]["local-shell-mcp/live"]["token"]
+    assert live_token
+    assert live_token not in (tmp_path / "audit.jsonl").read_text(encoding="utf-8")
 
 
 def test_mcp_requires_auth_for_initialize_and_delete_by_default(tmp_path, monkeypatch):

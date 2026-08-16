@@ -13,7 +13,6 @@ from pathlib import Path
 from typing import Any, cast
 from urllib.parse import urlparse
 
-from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import CallToolResult, Icon, ImageContent, TextContent, ToolAnnotations
 from pathspec.gitignore import GitIgnoreSpec
@@ -23,6 +22,7 @@ from . import __version__
 from .audit import audit, audit_call_context, audit_result_ok
 from .auth import current_principal, principal_scopes, require_current_scopes
 from .browser_sessions import get_browser_session_manager
+from .deprecated_tools import DeprecatedToolFastMCP as FastMCP
 from .downloads import create_share_link, list_share_links, revoke_share_link
 from .dynamic_mcp import DynamicMCPManager
 from .errors import (
@@ -3419,13 +3419,7 @@ def _register_live_workspace_tools(
         cwd: str = ".",
     ) -> LiveChannelResult:
         """Compatibility alias for workspace_open used by cached ChatGPT tool recipients. Open or reuse the same interactive Live Workspace; new clients should call workspace_open."""
-        return await build_live_channel_result(
-            machine=machine,
-            cwd=cwd,
-            live_id=None,
-            session_id=None,
-            app_reattach=False,
-        )
+        return await workspace_open(machine=machine, cwd=cwd)
 
     @mcp.tool(
         structured_output=True,

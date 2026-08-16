@@ -154,3 +154,17 @@ async def test_registered_compatibility_alias_wins_over_tombstone() -> None:
     _content, structured = await mcp.call_tool("open_live_workspace", {})
 
     assert structured == {"opened": True}
+    assert "open_live_workspace" not in {tool.name for tool in await mcp.list_tools()}
+
+
+async def test_other_registered_deprecated_names_remain_tombstones() -> None:
+    mcp = DeprecatedToolFastMCP("test")
+
+    @mcp.tool(name="search")
+    async def accidentally_registered_deprecated_tool() -> dict[str, bool]:
+        return {"called": True}
+
+    result = await mcp.call_tool("search", {})
+
+    assert result["data"]["status"] == "stale_tool_snapshot"
+    assert result["data"]["replacement"] == "file_grep"

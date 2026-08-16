@@ -7,6 +7,7 @@ from mcp.server import fastmcp as fastmcp_module
 from mcp.server.fastmcp import FastMCP as _FastMCP
 
 DEPRECATED_TOOL_HELP_URL = "https://github.com/fwerkor/local-shell-mcp/issues/70"
+HIDDEN_COMPATIBILITY_TOOL_NAMES = frozenset({"open_live_workspace"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,12 +146,17 @@ def _deprecated_tool_result(name: str, tool: DeprecatedTool) -> dict[str, Any]:
 class DeprecatedToolFastMCP(_FastMCP):
     """FastMCP variant that keeps removed tool names as non-enumerated tombstones."""
 
+    async def list_tools(self) -> list[Any]:
+        tools = await super().list_tools()
+        return [tool for tool in tools if tool.name not in HIDDEN_COMPATIBILITY_TOOL_NAMES]
+
     async def call_tool(self, name: str, arguments: dict[str, Any]) -> Any:
         deprecated = DEPRECATED_TOOLS.get(name)
-        # A deliberately registered compatibility alias must remain executable.
-        # Tombstones only cover removed names that are absent from the real tool
-        # manager; HTTP tools/call dispatches through that manager directly.
-        if deprecated is not None and name not in self._tool_manager._tools:  # noqa: SLF001
+        registered_hidden_alias = (
+            name in HIDDEN_COMPATIBILITY_TOOL_NAMES
+            and name in self._tool_manager._tools  # noqa: SLF001
+        )
+        if deprecated is not None and not registered_hidden_alias:
             return _deprecated_tool_result(name, deprecated)
         return await super().call_tool(name, arguments)
 

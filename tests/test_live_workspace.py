@@ -1083,8 +1083,9 @@ async def test_mcp_app_resource_and_render_result_hide_live_token(tmp_path, monk
 
     tools = {tool.name: tool for tool in await mcp.list_tools()}
     render_tool = tools["workspace_open"]
-    compatibility_tool = tools["open_live_workspace"]
+    compatibility_tool = mcp._tool_manager._tools["open_live_workspace"]  # noqa: SLF001
     reconnect_tool = tools["live_workspace_reconnect"]
+    assert "open_live_workspace" not in tools
     assert render_tool.meta["ui"]["resourceUri"] == LIVE_RESOURCE_VERSIONED_URI
     assert render_tool.meta["ui/resourceUri"] == LIVE_RESOURCE_VERSIONED_URI
     assert render_tool.meta["openai/outputTemplate"] == LIVE_RESOURCE_VERSIONED_URI
@@ -1099,9 +1100,9 @@ async def test_mcp_app_resource_and_render_result_hide_live_token(tmp_path, monk
     assert render_tool.annotations.destructiveHint is False
     assert render_tool.annotations.idempotentHint is True
     assert compatibility_tool.meta == render_tool.meta
-    assert compatibility_tool.inputSchema["properties"] == render_tool.inputSchema["properties"]
-    assert compatibility_tool.inputSchema["required"] == render_tool.inputSchema["required"]
-    assert compatibility_tool.outputSchema == render_tool.outputSchema
+    assert compatibility_tool.parameters["properties"] == render_tool.inputSchema["properties"]
+    assert compatibility_tool.parameters["required"] == render_tool.inputSchema["required"]
+    assert compatibility_tool.output_schema == render_tool.outputSchema
     assert reconnect_tool.meta["ui"] == {"visibility": ["app"]}
     assert "ui/resourceUri" not in reconnect_tool.meta
     assert "openai/outputTemplate" not in reconnect_tool.meta
@@ -2442,6 +2443,7 @@ def test_live_workspace_is_hidden_when_ui_is_disabled(tmp_path, monkeypatch):
 
     tools, resources = asyncio.run(inspect_surface())
     assert "workspace_open" not in tools
+    assert "open_live_workspace" not in tools
     assert LIVE_RESOURCE_URI not in resources
 
     app = _build_mcp_http_app(mcp)

@@ -5,7 +5,6 @@ from local_shell_mcp.tools import build_mcp
 
 CORE_TOOL_NAMES = {
     "workspace_open",
-    "open_live_workspace",
     "environment_get",
     "skill_list",
     "skill_load",
@@ -61,6 +60,7 @@ REMOTE_DEPENDENT_TOOL_NAMES = {
 REMOVED_TOOL_NAMES = {
     "search",
     "fetch",
+    "open_live_workspace",
     "environment_info",
     "skills_list",
     "skill_read_file",
@@ -149,7 +149,6 @@ async def test_machine_capable_tools_use_optional_machine_arguments(tmp_path, mo
     tools = {tool.name: tool for tool in await build_mcp().list_tools()}
     machine_capable = {
         "workspace_open",
-        "open_live_workspace",
         "environment_get",
         "run_shell",
         "run_python",
