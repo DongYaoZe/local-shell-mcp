@@ -212,7 +212,9 @@ def test_redis_state_store_round_trip_and_lock(monkeypatch):
     assert store.list_keys("jobs/") == ["jobs/one", "jobs/two"]
     with store.lock("jobs"):
         assert store.read_bytes("jobs/two") == b"2"
-        time.sleep(0.02)
+        deadline = time.monotonic() + 1
+        while client.next_lock.reacquired < 1 and time.monotonic() < deadline:
+            time.sleep(0.005)
     assert client.last_lock_args == ("test-prefix:locks:jobs", 30.0, 5, False)
     assert client.next_lock.reacquired >= 1
     assert client.next_lock.released is True
@@ -228,7 +230,9 @@ def test_redis_state_store_round_trip_and_lock(monkeypatch):
 
     client.next_lock = FakeLock(reacquire_failures=1)
     with store.lock("flaky-renewal"):
-        time.sleep(0.02)
+        deadline = time.monotonic() + 1
+        while client.next_lock.reacquired < 2 and time.monotonic() < deadline:
+            time.sleep(0.005)
     assert client.next_lock.reacquired >= 2
     assert client.next_lock.released is True
 
