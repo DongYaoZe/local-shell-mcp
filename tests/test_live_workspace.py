@@ -1495,7 +1495,7 @@ async def test_session_manage_rebind_does_not_split_ephemeral_tool_lifecycle(
     first_id = first["data"]["session_id"]
     first_run_id = first["data"]["active_run"]["run_id"]
     opened = await mcp.call_tool(
-        "open_live_workspace", {"cwd": ".", "session_run_id": first_run_id}
+        "workspace_open", {"cwd": ".", "session_run_id": first_run_id}
     )
     assert opened.structuredContent["session_id"] == first_id
 

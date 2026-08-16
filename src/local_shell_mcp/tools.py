@@ -629,6 +629,13 @@ def _schedule_session_tool_cleanup_retry(
     tool_name: str,
     call_id: str,
 ) -> None:
+    # Keep retry state alive for this controller, but do not infer completion
+    # after a controller loss. If the shared state backend is completely
+    # unavailable when the tool finishes, there is no durable fact a replacement
+    # controller can use to distinguish "completed, then crashed" from "crashed
+    # while the external operation was still running". In that failure mode the
+    # persisted in-flight lease intentionally falls back to its bounded stale
+    # timeout rather than permitting an unsafe early takeover.
     task = asyncio.create_task(
         _retry_session_tool_cleanup(
             manager,

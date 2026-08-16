@@ -9,6 +9,9 @@ from typing import Protocol
 
 from .settings import get_settings
 
+_REDIS_LOCK_TTL_S = 30.0
+_REDIS_LOCK_RENEW_INTERVAL_S = 10.0
+
 
 class StateStore(Protocol):
     def read_bytes(self, key: str) -> bytes | None: ...
@@ -160,13 +163,43 @@ class RedisStateStore:
 
     @contextlib.contextmanager
     def lock(self, key: str) -> Iterator[None]:
-        lock = self._client.lock(self._key(f"locks:{key}"), timeout=30, blocking_timeout=5)
+        # Session transactions can legitimately outlive the initial Redis lock
+        # TTL (for example, a retained-history scan before Session creation).
+        # Keep the same lock token visible to the renewal thread and refresh the
+        # TTL until the protected transaction has actually finished.
+        lock = self._client.lock(
+            self._key(f"locks:{key}"),
+            timeout=_REDIS_LOCK_TTL_S,
+            blocking_timeout=5,
+            thread_local=False,
+        )
         acquired = lock.acquire(blocking=True)
         if not acquired:
             raise TimeoutError(f"timed out acquiring state lock: {key}")
+        stop_renewal = threading.Event()
+
+        def renew() -> None:
+            while not stop_renewal.wait(_REDIS_LOCK_RENEW_INTERVAL_S):
+                try:
+                    lock.reacquire()
+                except Exception:
+                    # Redis operations inside the protected transaction will
+                    # surface backend failures. Do not let a telemetry thread
+                    # terminate the caller or accidentally release another
+                    # owner's lock token.
+                    return
+
+        renewal = threading.Thread(
+            target=renew,
+            name="lsm-redis-state-lock-renewal",
+            daemon=True,
+        )
+        renewal.start()
         try:
             yield
         finally:
+            stop_renewal.set()
+            renewal.join(timeout=max(1.0, _REDIS_LOCK_RENEW_INTERVAL_S * 2))
             with contextlib.suppress(Exception):
                 lock.release()
 

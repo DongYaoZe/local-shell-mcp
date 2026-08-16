@@ -6,6 +6,7 @@ import hashlib
 import http.client
 import json
 import sys
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -21,6 +22,7 @@ import local_shell_mcp.jobs as jobs_module
 import local_shell_mcp.oauth as oauth_module
 import local_shell_mcp.peer_transfer as peer_transfer_module
 import local_shell_mcp.remote as remote_module
+import local_shell_mcp.state_store as state_store_module
 import local_shell_mcp.tools as tools
 import local_shell_mcp.ui_security as ui_security
 from local_shell_mcp.dynamic_mcp import DynamicMCPManager
@@ -151,6 +153,7 @@ def test_redis_state_store_round_trip_and_lock(monkeypatch):
         def __init__(self, acquired: bool = True):
             self.acquired = acquired
             self.released = False
+            self.reacquired = 0
 
         def acquire(self, *, blocking: bool):
             assert blocking is True
@@ -158,6 +161,10 @@ def test_redis_state_store_round_trip_and_lock(monkeypatch):
 
         def release(self):
             self.released = True
+
+        def reacquire(self):
+            self.reacquired += 1
+            return True
 
     class FakeClient:
         def __init__(self):
@@ -178,8 +185,8 @@ def test_redis_state_store_round_trip_and_lock(monkeypatch):
             prefix = match.removesuffix("*")
             return [key.encode("utf-8") for key in self.values if key.startswith(prefix)]
 
-        def lock(self, key, *, timeout, blocking_timeout):
-            self.last_lock_args = (key, timeout, blocking_timeout)
+        def lock(self, key, *, timeout, blocking_timeout, thread_local):
+            self.last_lock_args = (key, timeout, blocking_timeout, thread_local)
             return self.next_lock
 
     client = FakeClient()
@@ -191,6 +198,7 @@ def test_redis_state_store_round_trip_and_lock(monkeypatch):
             return client
 
     monkeypatch.setitem(sys.modules, "redis", SimpleNamespace(Redis=FakeRedis))
+    monkeypatch.setattr(state_store_module, "_REDIS_LOCK_RENEW_INTERVAL_S", 0.005)
     store = RedisStateStore("redis://state.test/0", ":test-prefix:")
 
     assert store.read_bytes("missing") is None
@@ -200,7 +208,9 @@ def test_redis_state_store_round_trip_and_lock(monkeypatch):
     assert store.list_keys("jobs/") == ["jobs/one", "jobs/two"]
     with store.lock("jobs"):
         assert store.read_bytes("jobs/two") == b"2"
-    assert client.last_lock_args == ("test-prefix:locks:jobs", 30, 5)
+        time.sleep(0.02)
+    assert client.last_lock_args == ("test-prefix:locks:jobs", 30.0, 5, False)
+    assert client.next_lock.reacquired >= 1
     assert client.next_lock.released is True
     store.delete("jobs/one")
     assert store.read_bytes("jobs/one") is None
