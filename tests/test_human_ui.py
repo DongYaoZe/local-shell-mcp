@@ -82,11 +82,16 @@ def test_webui_visual_regressions_are_packaged():
     assert ".files-layout{" in css
     assert ".file-parent-panel" in css
     assert ".terminal-touchbar{" in css
+    assert ".terminal-scrollbar{" in css
+    assert ".terminal-scrollbar-spacer{" in css
+    assert "overflow-y:scroll" in css
+    assert 'data-role="scrollbar"' in script
     assert ".audit-layout{" in css
     assert "Call result" in script
     assert "Call input" in script
     assert "/ws/shell" in script
     assert "Persistent terminal" in script
+    assert "Loading terminals" in script
     assert "row-menu" not in script
 
 
