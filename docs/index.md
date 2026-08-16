@@ -31,7 +31,7 @@ Attach NAT, firewall, or HPC machines through outbound worker connections withou
 
 ## What it provides
 
-`local-shell-mcp` exposes a controlled local or container workspace to ChatGPT and other MCP clients. It provides shell, persistent shell, filesystem, search, patch, Git, Playwright, audit, todo, tokenized file-link, and remote-worker tools through a ChatGPT-compatible MCP server with OAuth support.
+`local-shell-mcp` exposes a controlled local or container workspace to ChatGPT and other MCP clients. It provides shell, persistent shell, filesystem, search, patch, Git, Playwright, audit, durable logical sessions with optional Goal plans, tokenized file-link, and remote-worker tools through a ChatGPT-compatible MCP server with OAuth support.
 
 Use it when the AI needs to inspect a repository, run tests, edit files, operate Git, collect browser evidence, produce downloadable artifacts, or control a remote machine that can only connect outbound to the control server.
 
@@ -54,6 +54,7 @@ The intended isolation boundary is the container or VM running the service.
 | First public ChatGPT deployment | [Quickstart](getting-started/quickstart.md) | Docker Compose path with OAuth and `/mcp` setup |
 | Choosing the runtime layer | [Runtime choices](guides/deployment.md) | Explains Docker, VS Code, binary, Python, and stdio as separate runtime options |
 | Adding ChatGPT as a client | [ChatGPT connector](getting-started/chatgpt-connector.md) | Endpoint, OAuth, first safe prompt, tool discovery |
+| Adding LSM to DeepSeek Harness | [DeepSeek Harness plugin](clients/deepseek-harness.md) | Install this repository as a DSH bundle while keeping the complete LSM tool and remote-worker surface |
 | Running from VS Code | [VS Code extension runtime](installation/vscode-extension.md) | Editor-launched runtime and host-safety notes |
 | Learning how to operate the toolset | [Usage patterns](guides/usage-patterns.md) | Prompt templates and tool-choice guidance |
 | Understanding every tool | [Tools reference](reference/tools.md) | Detailed purpose, inputs, returns, combinations, and notes for every tool |
@@ -65,12 +66,13 @@ The intended isolation boundary is the container or VM running the service.
 
 | Family | Examples | Use for |
 |---|---|---|
-| Shell and Python | `run_shell_tool`, `run_python_tool`, `shell_start` | Builds, tests, scripts, long-running processes |
-| Files and search | `tree_view`, `grep_search`, `read_file`, `apply_patch` | Repository inspection and precise edits |
-| Git | `run_shell_tool`, `run_shell_tool`, `run_shell_tool`, `run_shell_tool` | Reviewable source-control workflows |
+| Shell and Python | `run_shell`, `run_python`, `shell_start` | Builds, tests, scripts, long-running processes |
+| Files and search | `file_tree`, `file_grep`, `file_read`, `file_patch` | Repository inspection and precise edits |
+| Git | `run_shell`, `run_shell`, `run_shell`, `run_shell` | Reviewable source-control workflows |
+| Sessions and goals | `session_manage`, `plan_manage` | Durable task handoff, progress reports, optional Goal mode |
 | Browser | `browser_session`, `browser_snapshot`, `browser_act`, `browser_run_script` | Persistent interaction, UI checks, screenshots, rendered docs, page text |
-| File links | `create_file_link`, `revoke_file_link` | Downloading generated artifacts from chat |
-| Remote workers | `remote_manage`, `run_shell_tool`, `remote_transfer` | Machines behind NAT, firewalls, or cluster login flows |
+| File links | `link_create`, `link_revoke` | Downloading generated artifacts from chat |
+| Remote workers | `remote_manage`, `run_shell`, `remote_transfer` | Machines behind NAT, firewalls, or cluster login flows |
 
 ## Typical workflows
 
@@ -87,7 +89,7 @@ The intended isolation boundary is the container or VM running the service.
 
 1. Create a one-time remote worker invite.
 2. Paste the generated command on the remote host.
-3. Use normal tools with `machine`; run Git through `run_shell_tool` and transfer paths with `remote_transfer`.
+3. Use normal tools with `machine`; run Git through `run_shell` and transfer paths with `remote_transfer`.
 4. Revoke the worker after the task.
 
 ### Artifact generation

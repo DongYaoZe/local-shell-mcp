@@ -6,6 +6,7 @@ import hashlib
 import http.client
 import json
 import sys
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -21,7 +22,7 @@ import local_shell_mcp.jobs as jobs_module
 import local_shell_mcp.oauth as oauth_module
 import local_shell_mcp.peer_transfer as peer_transfer_module
 import local_shell_mcp.remote as remote_module
-import local_shell_mcp.todo_ops as todo_module
+import local_shell_mcp.state_store as state_store_module
 import local_shell_mcp.tools as tools
 import local_shell_mcp.ui_security as ui_security
 from local_shell_mcp.dynamic_mcp import DynamicMCPManager
@@ -149,9 +150,11 @@ def test_file_and_memory_state_store_round_trip(tmp_path):
 
 def test_redis_state_store_round_trip_and_lock(monkeypatch):
     class FakeLock:
-        def __init__(self, acquired: bool = True):
+        def __init__(self, acquired: bool = True, reacquire_failures: int = 0):
             self.acquired = acquired
             self.released = False
+            self.reacquired = 0
+            self.reacquire_failures = reacquire_failures
 
         def acquire(self, *, blocking: bool):
             assert blocking is True
@@ -159,6 +162,13 @@ def test_redis_state_store_round_trip_and_lock(monkeypatch):
 
         def release(self):
             self.released = True
+
+        def reacquire(self):
+            self.reacquired += 1
+            if self.reacquire_failures:
+                self.reacquire_failures -= 1
+                raise OSError("temporary redis outage")
+            return True
 
     class FakeClient:
         def __init__(self):
@@ -179,8 +189,8 @@ def test_redis_state_store_round_trip_and_lock(monkeypatch):
             prefix = match.removesuffix("*")
             return [key.encode("utf-8") for key in self.values if key.startswith(prefix)]
 
-        def lock(self, key, *, timeout, blocking_timeout):
-            self.last_lock_args = (key, timeout, blocking_timeout)
+        def lock(self, key, *, timeout, blocking_timeout, thread_local):
+            self.last_lock_args = (key, timeout, blocking_timeout, thread_local)
             return self.next_lock
 
     client = FakeClient()
@@ -192,6 +202,7 @@ def test_redis_state_store_round_trip_and_lock(monkeypatch):
             return client
 
     monkeypatch.setitem(sys.modules, "redis", SimpleNamespace(Redis=FakeRedis))
+    monkeypatch.setattr(state_store_module, "_REDIS_LOCK_RENEW_INTERVAL_S", 0.005)
     store = RedisStateStore("redis://state.test/0", ":test-prefix:")
 
     assert store.read_bytes("missing") is None
@@ -201,8 +212,30 @@ def test_redis_state_store_round_trip_and_lock(monkeypatch):
     assert store.list_keys("jobs/") == ["jobs/one", "jobs/two"]
     with store.lock("jobs"):
         assert store.read_bytes("jobs/two") == b"2"
-    assert client.last_lock_args == ("test-prefix:locks:jobs", 30, 5)
+        deadline = time.monotonic() + 1
+        while client.next_lock.reacquired < 1 and time.monotonic() < deadline:
+            time.sleep(0.005)
+    assert client.last_lock_args == ("test-prefix:locks:jobs", 30.0, 5, False)
+    assert client.next_lock.reacquired >= 1
     assert client.next_lock.released is True
+
+    client.next_lock = FakeLock(reacquire_failures=1)
+    with (
+        pytest.raises(OSError, match="temporary redis outage"),
+        store.lock("guarded-write"),
+    ):
+        store.write_bytes("jobs/guarded", b"must-not-write")
+    assert store.read_bytes("jobs/guarded") is None
+    assert client.next_lock.released is True
+
+    client.next_lock = FakeLock(reacquire_failures=1)
+    with store.lock("flaky-renewal"):
+        deadline = time.monotonic() + 1
+        while client.next_lock.reacquired < 2 and time.monotonic() < deadline:
+            time.sleep(0.005)
+    assert client.next_lock.reacquired >= 2
+    assert client.next_lock.released is True
+
     store.delete("jobs/one")
     assert store.read_bytes("jobs/one") is None
 
@@ -423,21 +456,6 @@ async def test_remote_only_job_controls_reject_local_shell_jobs(tmp_path, monkey
         with pytest.raises(ValueError, match="local shell jobs are unavailable"):
             await operation()
 
-
-def test_stateless_todo_limits_use_state_backend(tmp_path, monkeypatch):
-    _configure_stateless(tmp_path, monkeypatch, max_todos="1")
-    with pytest.raises(ValueError, match="max is 1"):
-        todo_module.todo_write([{"content": "one"}, {"content": "two"}])
-
-    get_state_store().write_bytes("todos.json", b"x" * (get_settings().max_todo_bytes + 1))
-    with pytest.raises(ValueError, match="todo bytes"):
-        todo_module.todo_read()
-
-    monkeypatch.setenv("LOCAL_SHELL_MCP_MAX_TODO_BYTES", "20")
-    get_settings.cache_clear()
-    get_state_store().delete("todos.json")
-    with pytest.raises(ValueError, match="todo bytes"):
-        todo_module.todo_write([{"content": "too large"}])
 
 
 @pytest.mark.asyncio

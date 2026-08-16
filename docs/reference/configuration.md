@@ -56,12 +56,10 @@ For local-only testing, `auth_bypass_localhost` is enabled by default. Do not ex
 | `max_tree_entries` | `LOCAL_SHELL_MCP_MAX_TREE_ENTRIES` | `5000` |  |
 | `max_skills` | `LOCAL_SHELL_MCP_MAX_SKILLS` | `256` | Maximum Skill directories returned by one registry scan. |
 | `max_skill_related_files` | `LOCAL_SHELL_MCP_MAX_SKILL_RELATED_FILES` | `1000` | Maximum related files returned for one Skill. |
-| `max_skill_scan_entries` | `LOCAL_SHELL_MCP_MAX_SKILL_SCAN_ENTRIES` | `5000` | Maximum filesystem entries examined by one `skills_list` registry scan or one direct Skill load. |
+| `max_skill_scan_entries` | `LOCAL_SHELL_MCP_MAX_SKILL_SCAN_ENTRIES` | `5000` | Maximum filesystem entries examined by one `skill_list` registry scan or one direct Skill load. |
 | `max_skill_path_bytes` | `LOCAL_SHELL_MCP_MAX_SKILL_PATH_BYTES` | `200000` | Maximum UTF-8 bytes used by returned related-file paths. |
 | `max_read_many_files` | `LOCAL_SHELL_MCP_MAX_READ_MANY_FILES` | `100` |  |
 | `max_read_many_total_bytes` | `LOCAL_SHELL_MCP_MAX_READ_MANY_TOTAL_BYTES` | `5000000` |  |
-| `max_todos` | `LOCAL_SHELL_MCP_MAX_TODOS` | `1000` |  |
-| `max_todo_bytes` | `LOCAL_SHELL_MCP_MAX_TODO_BYTES` | `1000000` |  |
 | `max_http_request_bytes` | `LOCAL_SHELL_MCP_MAX_HTTP_REQUEST_BYTES` | `16000000` | Maximum buffered HTTP request body across MCP, REST, OAuth, UI, and remote-worker endpoints. |
 | `max_job_log_bytes` | `LOCAL_SHELL_MCP_MAX_JOB_LOG_BYTES` | `10000000` | Maximum retained output bytes for each long-running job attempt. |
 | `max_jobs` | `LOCAL_SHELL_MCP_MAX_JOBS` | `1000` | Maximum retained long-running job records; active jobs are never pruned. |

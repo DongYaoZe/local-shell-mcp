@@ -78,15 +78,15 @@ Follow the [ChatGPT connector guide](chatgpt-connector.md) to finish OAuth and t
 Ask the model:
 
 ```text
-Use local-shell-mcp. First call environment_info, then list the workspace root. Do not modify files yet.
+Use local-shell-mcp. First call environment_get, then list the workspace root. Do not modify files yet.
 ```
 
 Expected read-only tools:
 
-- `environment_info`
-- `list_files`
-- `tree_view`
-- `read_file`
+- `environment_get`
+- `file_list`
+- `file_tree`
+- `file_read`
 
 ## 6. Start with a bounded coding task
 

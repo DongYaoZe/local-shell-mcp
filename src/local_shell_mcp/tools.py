@@ -17,7 +17,7 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import CallToolResult, ImageContent, TextContent, ToolAnnotations
 from pathspec.gitignore import GitIgnoreSpec
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, create_model
 
 from . import __version__
 from .audit import audit, audit_call_context, audit_result_ok
@@ -77,6 +77,11 @@ from .remote_transfer import (
     revoke_transfer_ticket,
 )
 from .search_ops import grep, tree
+from .session_runtime import (
+    SESSION_IN_FLIGHT_LEASE_S,
+    SessionToolLeaseStartPersistenceError,
+    get_session_runtime_manager,
+)
 from .settings import get_settings, safe_settings_dump
 from .shell_ops import (
     PUBLIC_RUN_SHELL_DEFAULT_TIMEOUT_S,
@@ -100,7 +105,6 @@ from .skill_ops import (
 )
 from .state_store import get_state_store
 from .tmux_helper import persistent_shell_backend_info
-from .todo_ops import todo_read, todo_write
 from .transfer_ops import (
     DEFAULT_TRANSFER_CHUNK_BYTES,
     normalize_chunk_size,
@@ -143,6 +147,7 @@ class LiveChannelResult(BaseModel):
 
     ok: bool = True
     live_id: str
+    session_id: str | None = None
     api_base: str
     ui_path: str
     machine: str
@@ -286,17 +291,31 @@ def _oauth_security_scheme(scopes: list[str] | tuple[str, ...]) -> dict[str, Any
     return {"type": "oauth2", "scopes": list(ALL_OAUTH_SCOPES)}
 
 
-OAUTH_SECURITY_SCHEMES = [_oauth_security_scheme(ALL_OAUTH_SCOPES)]
-NOAUTH_SECURITY_SCHEMES = [{"type": "noauth"}]
 PUBLIC_TOOL_TIMEOUT_S = PUBLIC_TOOL_WATCHDOG_TIMEOUT_S
 MCP_INSTRUCTIONS = (
-    "When a task may benefit from an installed Agent Skill, call skills_list first "
+    "When a task may benefit from an installed Agent Skill, call skill_list first "
     "to discover the exact Skill name and description. Before following a Skill's "
-    "workflow, call skill_load with that exact name. Call skill_read_file only when "
+    "workflow, call skill_load with that exact name. Call skill_read only when "
     "a related file returned by skill_load is needed. Skills use this fixed tool "
     "surface; do not expect per-Skill MCP tools. When a registered external MCP may "
     "provide a capability, use mcp_tool_search, then mcp_tool_inspect, then mcp_tool_call; "
-    "dynamic MCP tools never appear directly in tools/list."
+    "dynamic MCP tools never appear directly in tools/list. For substantive tool-driven work, "
+    "create a durable logical task context first with session_manage(action='start', objective=...). "
+    "Ordinary tools expose a required nullable session_run_id: pass null before entering a logical session, "
+    "then pass its active_run.run_id on subsequent tool calls; after resume/takeover, switch to the newly "
+    "returned run id. "
+    "Keep that session current with session_manage(action='report', ...) at meaningful checkpoints and "
+    "before handing work off. A replacement MCP transport within the same agent run should keep the same "
+    "session_run_id and reattaches automatically. When a different ChatGPT/agent run takes over, call "
+    "session_manage(action='resume', session_id=..., takeover=true) and use its new run id. "
+    "Logical sessions are not bound to machines or working directories. plan_manage is optional Goal mode "
+    "owned by the current logical session, not by Live Workspace."
+)
+
+SESSION_RUN_ARGUMENT_DESCRIPTION = (
+    "Always provide this field. Use null when no logical session is active; after session_manage start/resume, "
+    "pass the returned active_run.run_id and keep using it across MCP transport reconnects. Use the new value "
+    "after an explicit resume/takeover."
 )
 
 
@@ -306,15 +325,14 @@ class PublicToolTimeoutError(TimeoutError):
 
 NON_CANCELLABLE_TOOL_NAMES = frozenset(
     {
-        "create_file_link",
-        "revoke_file_link",
-        "view_image",
-        "write_file",
-        "edit_file",
-        "delete_file_or_dir",
-        "apply_patch",
+        "link_create",
+        "link_revoke",
+        "image_view",
+        "file_write",
+        "file_edit",
+        "file_delete",
+        "file_patch",
         "remote_transfer",
-        "todo_write_tool",
         "mcp_tool_call",
     }
 )
@@ -329,9 +347,6 @@ def _security_meta(schemes: list[dict[str, Any]]) -> dict[str, Any]:
 def _oauth_meta(scopes: list[str]) -> dict[str, Any]:
     return _security_meta([_oauth_security_scheme(scopes)])
 
-
-def _public_read_meta() -> dict[str, Any]:
-    return _security_meta([*NOAUTH_SECURITY_SCHEMES, _oauth_security_scheme(ALL_OAUTH_SCOPES)])
 
 
 def _live_workspace_api_base() -> str:
@@ -429,7 +444,7 @@ def _serialize_audit_value(value: Any) -> Any:
 
 def _safe_audit_result(tool_name: str, value: Any) -> Any:
     serialized = _serialize_audit_value(value)
-    if tool_name not in {"open_live_workspace", "live_workspace_reconnect"} or not isinstance(
+    if tool_name not in {"workspace_open", "live_workspace_reconnect"} or not isinstance(
         serialized, dict
     ):
         return serialized
@@ -507,8 +522,6 @@ def _live_event_arguments(tool_name: str, arguments: dict[str, Any]) -> dict[str
             data[key] = value
         elif isinstance(value, list):
             data[key] = [str(item)[:160] for item in value[:8]]
-    if tool_name == "search" and "cwd" not in data:
-        data["cwd"] = "."
     command = arguments.get("command")
     if isinstance(command, str) and command:
         data["command"] = command[:500]
@@ -564,21 +577,213 @@ def _audit_tool_purpose(
     return details
 
 
-def _timeout_payload_for_tool(tool_name: str, exc: Exception) -> dict | str:
-    if tool_name == "search":
-        return json.dumps({"results": []}, ensure_ascii=False)
-    if tool_name == "fetch":
-        return json.dumps(
-            {
-                "id": "",
-                "title": "",
-                "text": str(exc),
-                "url": "file:///workspace/",
-                "metadata": {"source": "workspace", "error": type(exc).__name__},
-            },
-            ensure_ascii=False,
-        )
+def _timeout_payload_for_tool(_tool_name: str, exc: Exception) -> CallToolResult:
     return _handled_error(exc)
+
+
+def _install_session_run_arguments(mcp: FastMCP) -> None:
+    """Expose a run lease on every tool without duplicating it in each function signature."""
+
+    for name, tool in mcp._tool_manager._tools.items():  # noqa: SLF001
+        if name in {"session_manage", "plan_manage", "live_workspace_reconnect"}:
+            continue
+        argument_model = tool.fn_metadata.arg_model
+        extended_model = create_model(
+            f"{argument_model.__name__}WithSessionRun",
+            __base__=argument_model,
+            session_run_id=(
+                str | None,
+                Field(default=None, description=SESSION_RUN_ARGUMENT_DESCRIPTION),
+            ),
+        )
+        tool.fn_metadata.arg_model = extended_model
+        parameters = extended_model.model_json_schema()
+        # Advertise the field as required so model clients keep carrying the run
+        # capability across transport replacement. The validator still accepts an
+        # omitted field as None for backwards compatibility with older MCP clients.
+        session_run_schema = (parameters.get("properties") or {}).get("session_run_id")
+        if isinstance(session_run_schema, dict):
+            session_run_schema.pop("default", None)
+        required = list(parameters.get("required") or [])
+        if "session_run_id" not in required:
+            required.append("session_run_id")
+        parameters["required"] = required
+        tool.parameters = parameters
+
+
+_PENDING_SESSION_LEASE_CLEANUPS: set[asyncio.Task[None]] = set()
+_SESSION_LEASE_CLEANUP_TASKS: dict[tuple[int, str], asyncio.Task[None]] = {}
+_SESSION_LEASE_CLEANUP_QUEUES: dict[
+    tuple[int, str], dict[str, tuple[dict[str, Any], str, float]]
+] = {}
+_SESSION_LEASE_CLEANUP_MAX_PENDING_PER_SESSION = 128
+
+
+async def _retry_session_tool_cleanups(
+    manager: Any,
+    *,
+    queue_key: tuple[int, str],
+) -> None:
+    delay_s = 0.25
+    try:
+        while True:
+            queue = _SESSION_LEASE_CLEANUP_QUEUES.get(queue_key)
+            if not queue:
+                return
+            now = time.monotonic()
+            for call_id, (lease, tool_name, deadline) in list(queue.items()):
+                if now >= deadline:
+                    queue.pop(call_id, None)
+                    continue
+                try:
+                    cleaned = await asyncio.to_thread(manager.retry_tool_call_cleanup, lease)
+                except Exception as exc:  # noqa: BLE001 - retry while the lease can still block takeover.
+                    with suppress(Exception):
+                        audit(
+                            "session_lease_cleanup_retry_failed",
+                            tool=tool_name,
+                            call_id=call_id,
+                            error=f"{type(exc).__name__}: {exc}",
+                        )
+                else:
+                    if cleaned:
+                        queue.pop(call_id, None)
+            if not queue:
+                return
+            await asyncio.sleep(delay_s)
+            delay_s = min(30.0, delay_s * 2)
+    finally:
+        _SESSION_LEASE_CLEANUP_QUEUES.pop(queue_key, None)
+        _SESSION_LEASE_CLEANUP_TASKS.pop(queue_key, None)
+
+
+def _schedule_session_tool_cleanup_retry(
+    manager: Any,
+    lease: dict[str, Any],
+    *,
+    tool_name: str,
+    call_id: str,
+) -> None:
+    # Keep retry state alive for this controller, but do not infer completion
+    # after a controller loss. If the shared state backend is completely
+    # unavailable when the tool finishes, there is no durable fact a replacement
+    # controller can use to distinguish "completed, then crashed" from "crashed
+    # while the external operation was still running". In that failure mode the
+    # persisted in-flight lease intentionally falls back to its bounded stale
+    # timeout rather than permitting an unsafe early takeover.
+    session_id = str(lease.get("session_id") or "")
+    if not session_id:
+        return
+    queue_key = (id(manager), session_id)
+    queue = _SESSION_LEASE_CLEANUP_QUEUES.setdefault(queue_key, {})
+    if call_id not in queue and len(queue) >= _SESSION_LEASE_CLEANUP_MAX_PENDING_PER_SESSION:
+        # Cleanup is an optimization: durable leases already have a stale
+        # timeout. Bound queued retries during a prolonged state-backend outage.
+        return
+    if call_id not in queue:
+        queue[call_id] = (
+            lease,
+            tool_name,
+            time.monotonic() + SESSION_IN_FLIGHT_LEASE_S,
+        )
+    existing = _SESSION_LEASE_CLEANUP_TASKS.get(queue_key)
+    if existing is not None and not existing.done():
+        return
+    task = asyncio.create_task(_retry_session_tool_cleanups(manager, queue_key=queue_key))
+    _SESSION_LEASE_CLEANUP_TASKS[queue_key] = task
+    _PENDING_SESSION_LEASE_CLEANUPS.add(task)
+    task.add_done_callback(_PENDING_SESSION_LEASE_CLEANUPS.discard)
+
+
+async def _finish_session_tool_activity(
+    manager: Any,
+    lease: dict[str, Any] | None,
+    event_type: str,
+    data: dict[str, Any],
+    *,
+    tool_name: str,
+    call_id: str,
+    stage: str,
+) -> None:
+    try:
+        persistence_error = await asyncio.to_thread(
+            manager.finish_tool_call, lease, event_type, data=data
+        )
+    except Exception as exc:  # noqa: BLE001 - activity failures must not mask tool results.
+        persistence_error = f"{type(exc).__name__}: {exc}"
+    if persistence_error:
+        # Completion persistence must never mask the original tool result, but
+        # leaving the durable in-flight lease behind can block takeover for the
+        # full stale window. Keep retrying only the lease removal in background.
+        with suppress(Exception):
+            audit(
+                "session_activity_persistence_failed",
+                tool=tool_name,
+                call_id=call_id,
+                stage=stage,
+                error=persistence_error,
+            )
+        if lease is not None:
+            _schedule_session_tool_cleanup_retry(
+                manager,
+                lease,
+                tool_name=tool_name,
+                call_id=call_id,
+            )
+
+
+async def _await_non_cancellable(awaitable):  # noqa: ANN001, ANN202
+    """Keep an already-started side effect running until it actually settles.
+
+    asyncio cancellation does not stop worker threads created by to_thread().
+    Shielding the tool coroutine ensures its durable Session lease is held until
+    the underlying side effect has really completed, even if the MCP request is
+    cancelled or disconnected in the meantime.
+    """
+
+    task = asyncio.create_task(awaitable)
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                continue
+            except Exception:
+                break
+        if task.done() and not task.cancelled():
+            with suppress(Exception):
+                task.result()
+        raise
+
+
+async def _renew_session_tool_lease(
+    manager: Any,
+    lease: dict[str, Any],
+    *,
+    tool_name: str,
+    call_id: str,
+) -> None:
+    interval_s = max(60.0, SESSION_IN_FLIGHT_LEASE_S / 3)
+    while True:
+        await asyncio.sleep(interval_s)
+        try:
+            renewed = await asyncio.to_thread(manager.renew_tool_call, lease)
+        except Exception as exc:  # noqa: BLE001 - a later heartbeat may recover.
+            # Renewal telemetry must never terminate the heartbeat loop. The
+            # audit sink can fail for the same transient storage outage that
+            # caused the renewal attempt to fail.
+            with suppress(Exception):
+                audit(
+                    "session_lease_renewal_failed",
+                    tool=tool_name,
+                    call_id=call_id,
+                    error=f"{type(exc).__name__}: {exc}",
+                )
+            continue
+        if not renewed:
+            return
 
 
 def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
@@ -602,11 +807,17 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
             **kwargs,
         ):
             require_current_scopes(__required_scopes)
+            session_run_id = kwargs.get("session_run_id")
+            invoke_kwargs = dict(kwargs)
+            if __tool_name not in {"session_manage", "plan_manage"}:
+                invoke_kwargs.pop("session_run_id", None)
             try:
-                bound = __signature.bind_partial(*args, **kwargs)
+                bound = __signature.bind_partial(*args, **invoke_kwargs)
                 call_arguments = dict(bound.arguments)
             except TypeError:
-                call_arguments = dict(kwargs)
+                call_arguments = dict(invoke_kwargs)
+            if session_run_id is not None:
+                call_arguments["session_run_id"] = session_run_id
             local_access_error = _disabled_local_access_error(__tool_name, call_arguments)
             if any(call_arguments.get(name) for name in REMOTE_MACHINE_ARGUMENTS):
                 require_current_scopes(("remote:use",))
@@ -626,36 +837,161 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
             started_at = time.monotonic()
             live_session_key = mcp_session_key(mcp)
             live_manager = get_live_channel_manager()
-            if __tool_name not in {"open_live_workspace", "live_workspace_reconnect"}:
-                principal = current_principal()
-                live_subject = (
-                    principal.subject or principal.email or "mcp-client"
-                    if principal is not None
-                    else "local-mcp-client"
-                )
-                live_manager.claim_recovery_session(live_session_key, live_subject)
+            logical_manager = get_session_runtime_manager()
+            principal_subject = _current_principal_subject()
             live_arguments = _live_event_arguments(__tool_name, safe_call_arguments)
-            live_manager.publish_for_session(
-                live_session_key,
-                "tool.started",
-                data={"call_id": call_id, **live_arguments},
+            logical_lease = None
+            normalized_tool_action = str(call_arguments.get("action") or "").strip().lower()
+            session_get_tracks_activity = False
+            if __tool_name == "session_manage" and normalized_tool_action == "get":
+                current_session_id = await asyncio.to_thread(
+                    logical_manager.current_session_id,
+                    live_session_key,
+                    subject=principal_subject,
+                )
+                requested_session_id = str(call_arguments.get("session_id") or "").strip()
+                session_get_tracks_activity = bool(
+                    current_session_id
+                    and (not requested_session_id or requested_session_id == current_session_id)
+                )
+            if (
+                __tool_name not in {"session_manage", "live_workspace_reconnect"}
+                or session_get_tracks_activity
+            ):
+                require_run_token = not (
+                    (__tool_name == "plan_manage" and normalized_tool_action == "get")
+                    or session_get_tracks_activity
+                )
+                try:
+                    logical_lease = await asyncio.to_thread(
+                        logical_manager.begin_tool_call,
+                        live_session_key,
+                        call_id,
+                        expected_run_id=(
+                            str(session_run_id) if session_run_id is not None else None
+                        ),
+                        subject=principal_subject,
+                        require_run_token=require_run_token,
+                        data=live_arguments,
+                    )
+                except SessionToolLeaseStartPersistenceError as exc:
+                    _schedule_session_tool_cleanup_retry(
+                        logical_manager,
+                        exc.lease,
+                        tool_name=__tool_name,
+                        call_id=call_id,
+                    )
+                    raise
+            logical_activity_finished = False
+            live_lifecycle_channel_id: str | None = None
+            lease_heartbeat_task = (
+                asyncio.create_task(
+                    _renew_session_tool_lease(
+                        logical_manager,
+                        logical_lease,
+                        tool_name=__tool_name,
+                        call_id=call_id,
+                    )
+                )
+                if logical_lease is not None
+                else None
             )
-            audit(
-                "mcp_tool_call_start",
-                call_id=call_id,
-                tool=__tool_name,
-                arguments=arguments,
-                **audit_context,
-            )
+            try:
+                if logical_lease and logical_lease.get("persistence_error"):
+                    audit(
+                        "session_activity_persistence_failed",
+                        tool=__tool_name,
+                        call_id=call_id,
+                        stage="started",
+                        error=str(logical_lease["persistence_error"]),
+                    )
+                if __tool_name not in {"workspace_open", "live_workspace_reconnect"}:
+                    live_subject = _current_principal_subject()
+                    attached_live = None
+                    if logical_lease and logical_lease.get("session_id"):
+                        attached_live = live_manager.bind_logical_session(
+                            live_session_key,
+                            str(logical_lease["session_id"]),
+                            live_subject,
+                            exclusive_model_owner=True,
+                        )
+                    if attached_live is None:
+                        live_manager.claim_recovery_session(live_session_key, live_subject)
+                # Session lifecycle controls can rebind or detach the transport's
+                # channel while they execute. Their semantic session.* events are
+                # already durable, so keep them out of the ephemeral running-tool
+                # stream. For every other tool, pin start/end events to the same
+                # captured channel even if the transport is rebound concurrently.
+                if __tool_name != "session_manage":
+                    lifecycle_channel = live_manager.active_for_session(live_session_key)
+                    if lifecycle_channel is not None:
+                        live_lifecycle_channel_id = lifecycle_channel.live_id
+                        live_manager.publish_channel(
+                            live_lifecycle_channel_id,
+                            "tool.started",
+                            actor="agent",
+                            data={"call_id": call_id, **live_arguments},
+                        )
+                audit(
+                    "mcp_tool_call_start",
+                    call_id=call_id,
+                    tool=__tool_name,
+                    arguments=arguments,
+                    **audit_context,
+                )
+            except BaseException as setup_exc:
+                if lease_heartbeat_task is not None:
+                    lease_heartbeat_task.cancel()
+                    with suppress(asyncio.CancelledError, Exception):
+                        await lease_heartbeat_task
+                if live_lifecycle_channel_id is not None:
+                    live_manager.publish_channel(
+                        live_lifecycle_channel_id,
+                        "tool.cancelled"
+                        if isinstance(setup_exc, asyncio.CancelledError)
+                        else "tool.failed",
+                        actor="agent",
+                        data={
+                            "call_id": call_id,
+                            "ok": False,
+                            "duration_ms": round((time.monotonic() - started_at) * 1000),
+                            "error": (str(setup_exc) or type(setup_exc).__name__)[:500],
+                            "error_type": type(setup_exc).__name__,
+                            **live_arguments,
+                        },
+                    )
+                if logical_lease is not None:
+                    setup_data = {
+                        "call_id": call_id,
+                        "ok": False,
+                        "duration_ms": round((time.monotonic() - started_at) * 1000),
+                        "error": (str(setup_exc) or type(setup_exc).__name__)[:500],
+                        "error_type": type(setup_exc).__name__,
+                        **live_arguments,
+                    }
+                    await _finish_session_tool_activity(
+                        logical_manager,
+                        logical_lease,
+                        "tool.cancelled"
+                        if isinstance(setup_exc, asyncio.CancelledError)
+                        else "tool.failed",
+                        setup_data,
+                        tool_name=__tool_name,
+                        call_id=call_id,
+                        stage="setup",
+                    )
+                raise
             try:
                 with audit_call_context(call_id) as call_state:
                     if local_access_error is not None:
                         result = _handled_error(RuntimeError(local_access_error))
                     elif __tool_name in NON_CANCELLABLE_TOOL_NAMES:
-                        result = await __original(*args, **kwargs)
+                        result = await _await_non_cancellable(
+                            __original(*args, **invoke_kwargs)
+                        )
                     else:
                         result = await asyncio.wait_for(
-                            __original(*args, **kwargs), timeout=PUBLIC_TOOL_TIMEOUT_S
+                            __original(*args, **invoke_kwargs), timeout=PUBLIC_TOOL_TIMEOUT_S
                         )
                 serialized_result = _safe_audit_result(__tool_name, result)
                 call_ok = audit_result_ok(result) and not bool(call_state["failed"])
@@ -674,17 +1010,30 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
                     **failure_context,
                     **audit_context,
                 )
-                live_manager.publish_for_session(
-                    live_session_key,
+                completion_data = {
+                    "call_id": call_id,
+                    "ok": call_ok,
+                    "duration_ms": round((time.monotonic() - started_at) * 1000),
+                    **live_arguments,
+                    **_live_result_summary(result),
+                }
+                if live_lifecycle_channel_id is not None:
+                    live_manager.publish_channel(
+                        live_lifecycle_channel_id,
+                        "tool.completed" if call_ok else "tool.failed",
+                        actor="agent",
+                        data=completion_data,
+                    )
+                await _finish_session_tool_activity(
+                    logical_manager,
+                    logical_lease,
                     "tool.completed" if call_ok else "tool.failed",
-                    data={
-                        "call_id": call_id,
-                        "ok": call_ok,
-                        "duration_ms": round((time.monotonic() - started_at) * 1000),
-                        **live_arguments,
-                        **_live_result_summary(result),
-                    },
+                    completion_data,
+                    tool_name=__tool_name,
+                    call_id=call_id,
+                    stage="completed",
                 )
+                logical_activity_finished = True
                 return result
             except TimeoutError:
                 exc = PublicToolTimeoutError(
@@ -709,17 +1058,30 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
                     result=_serialize_audit_value(result),
                     **audit_context,
                 )
-                live_manager.publish_for_session(
-                    live_session_key,
+                failure_data = {
+                    "call_id": call_id,
+                    "ok": False,
+                    "duration_ms": round((time.monotonic() - started_at) * 1000),
+                    "error_type": type(exc).__name__,
+                    **live_arguments,
+                }
+                if live_lifecycle_channel_id is not None:
+                    live_manager.publish_channel(
+                        live_lifecycle_channel_id,
+                        "tool.failed",
+                        actor="agent",
+                        data=failure_data,
+                    )
+                await _finish_session_tool_activity(
+                    logical_manager,
+                    logical_lease,
                     "tool.failed",
-                    data={
-                        "call_id": call_id,
-                        "ok": False,
-                        "duration_ms": round((time.monotonic() - started_at) * 1000),
-                        "error_type": type(exc).__name__,
-                        **live_arguments,
-                    },
+                    failure_data,
+                    tool_name=__tool_name,
+                    call_id=call_id,
+                    stage="timeout",
                 )
+                logical_activity_finished = True
                 return result
             except Exception as exc:
                 audit(
@@ -732,19 +1094,61 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
                     error_type=type(exc).__name__,
                     **audit_context,
                 )
-                live_manager.publish_for_session(
-                    live_session_key,
+                failure_data = {
+                    "call_id": call_id,
+                    "ok": False,
+                    "duration_ms": round((time.monotonic() - started_at) * 1000),
+                    "error": (str(exc) or type(exc).__name__)[:500],
+                    "error_type": type(exc).__name__,
+                    **live_arguments,
+                }
+                if live_lifecycle_channel_id is not None:
+                    live_manager.publish_channel(
+                        live_lifecycle_channel_id,
+                        "tool.failed",
+                        actor="agent",
+                        data=failure_data,
+                    )
+                await _finish_session_tool_activity(
+                    logical_manager,
+                    logical_lease,
                     "tool.failed",
-                    data={
+                    failure_data,
+                    tool_name=__tool_name,
+                    call_id=call_id,
+                    stage="failed",
+                )
+                logical_activity_finished = True
+                raise
+            finally:
+                if lease_heartbeat_task is not None:
+                    lease_heartbeat_task.cancel()
+                    with suppress(asyncio.CancelledError, Exception):
+                        await lease_heartbeat_task
+                if not logical_activity_finished and logical_lease is not None:
+                    cancellation_data = {
                         "call_id": call_id,
                         "ok": False,
                         "duration_ms": round((time.monotonic() - started_at) * 1000),
-                        "error": (str(exc) or type(exc).__name__)[:500],
-                        "error_type": type(exc).__name__,
+                        "cancelled": True,
                         **live_arguments,
-                    },
-                )
-                raise
+                    }
+                    if live_lifecycle_channel_id is not None:
+                        live_manager.publish_channel(
+                            live_lifecycle_channel_id,
+                            "tool.cancelled",
+                            actor="agent",
+                            data=cancellation_data,
+                        )
+                    await _finish_session_tool_activity(
+                        logical_manager,
+                        logical_lease,
+                        "tool.cancelled",
+                        cancellation_data,
+                        tool_name=__tool_name,
+                        call_id=call_id,
+                        stage="cancelled",
+                    )
 
         tool.fn = wrapped
 
@@ -759,29 +1163,29 @@ def _remove_remote_tools_when_disabled(mcp: FastMCP) -> None:
 
 
 MACHINE_CAPABLE_TOOL_NAMES = {
-    "environment_info",
-    "run_shell_tool",
-    "run_python_tool",
+    "environment_get",
+    "run_shell",
+    "run_python",
     "shell_start",
     "shell_send",
     "shell_read",
-    "shell_kill",
+    "shell_stop",
     "shell_list",
     "job_start",
     "job_list",
     "job_tail",
     "job_stop",
     "job_retry",
-    "list_files",
-    "tree_view",
-    "glob_search",
-    "grep_search",
-    "read_file",
-    "view_image",
-    "write_file",
-    "edit_file",
-    "delete_file_or_dir",
-    "apply_patch",
+    "file_list",
+    "file_tree",
+    "file_glob",
+    "file_grep",
+    "file_read",
+    "image_view",
+    "file_write",
+    "file_edit",
+    "file_delete",
+    "file_patch",
     "browser_session",
     "browser_snapshot",
     "browser_act",
@@ -789,14 +1193,12 @@ MACHINE_CAPABLE_TOOL_NAMES = {
 }
 
 LOCAL_ONLY_TOOL_NAMES = {
-    "search",
-    "fetch",
-    "skills_list",
+    "skill_list",
     "skill_load",
-    "skill_read_file",
-    "create_file_link",
-    "list_file_links",
-    "revoke_file_link",
+    "skill_read",
+    "link_create",
+    "link_list",
+    "link_revoke",
     "secret_scan",
 }
 
@@ -827,8 +1229,8 @@ def _remove_local_only_tools_when_disabled(mcp: FastMCP) -> None:
 
 OPEN_WORLD_TOOL_NAMES = {
     *MACHINE_CAPABLE_TOOL_NAMES,
-    "create_file_link",
-    "revoke_file_link",
+    "link_create",
+    "link_revoke",
     "remote_transfer",
     "mcp_manage",
     "mcp_tool_call",
@@ -839,8 +1241,8 @@ READ_ONLY_OPEN_WORLD_TOOL_NAMES = {
 }
 
 NON_DESTRUCTIVE_MUTATION_TOOL_NAMES = {
-    "create_file_link",
-    "open_live_workspace",
+    "link_create",
+    "workspace_open",
 }
 
 
@@ -2014,93 +2416,13 @@ async def _remote_call(
         return _handled_error(exc)
 
 
-def _register_connector_tools(mcp: FastMCP, read_only_tool: ToolAnnotations) -> None:
-    read_only_meta = _public_read_meta()
-
-    @mcp.tool(structured_output=True, annotations=read_only_tool, meta=read_only_meta)
-    async def search(query: str) -> str:
-        """Search workspace files and return ChatGPT connector-compatible results."""
-        try:
-            result = await grep(
-                query,
-                cwd=".",
-                regex=False,
-                case_sensitive=False,
-                max_results=20,
-            )
-            seen: set[str] = set()
-            rows = []
-            for match in result.get("matches", []):
-                path = match.get("path")
-                if not path or path in seen:
-                    continue
-                seen.add(path)
-                line = match.get("line")
-                suffix = f":{line}" if line else ""
-                resolved = resolve_path(path, must_exist=True)
-                rows.append(
-                    {
-                        "id": path,
-                        "title": f"{path}{suffix}",
-                        "url": resolved.as_uri(),
-                    }
-                )
-            return json.dumps({"results": rows}, ensure_ascii=False)
-        except Exception as exc:
-            audit("tool_error", error=repr(exc))
-            return json.dumps({"results": []})
-
-    @mcp.tool(structured_output=True, annotations=read_only_tool, meta=read_only_meta)
-    async def fetch(id: str) -> str:
-        """Fetch a workspace file by id returned from search."""
-        try:
-            data = await asyncio.to_thread(read_text, id)
-            path = data.get("path") or id
-            binary = bool(data.get("binary"))
-            resolved = resolve_path(id, must_exist=True)
-            return json.dumps(
-                {
-                    "id": path,
-                    "title": path,
-                    "text": data.get("content")
-                    if not binary
-                    else data.get("message", "Binary file omitted"),
-                    "url": resolved.as_uri(),
-                    "metadata": {
-                        "source": "workspace",
-                        "binary": binary,
-                        "bytes": data.get("bytes"),
-                        "bytes_read": data.get("bytes_read"),
-                        "truncated": bool(data.get("truncated", False)),
-                        "truncated_bytes": data.get("truncated_bytes", 0),
-                    },
-                },
-                ensure_ascii=False,
-            )
-        except Exception as exc:
-            audit("tool_error", error=repr(exc))
-            return json.dumps(
-                {
-                    "id": id,
-                    "title": id,
-                    "text": f"Unable to fetch file: {type(exc).__name__}: {exc}",
-                    "url": f"file:///workspace/{id}",
-                    "metadata": {
-                        "source": "workspace",
-                        "error": type(exc).__name__,
-                    },
-                },
-                ensure_ascii=False,
-            )
-
-
 def _register_environment_tools(
     mcp: FastMCP, settings: Any, read_only_tool: ToolAnnotations
 ) -> None:
     shell_read_meta = _oauth_meta(["shell:read"])
 
     @mcp.tool(structured_output=True, annotations=read_only_tool, meta=shell_read_meta)
-    async def environment_info(machine: str | None = None) -> ToolResult:
+    async def environment_get(machine: str | None = None) -> ToolResult:
         """Return version, workspace, auth, policy, and environment information locally or on a remote machine."""
         if machine:
             return await _remote_call(settings, machine, "environment_info", {})
@@ -2128,17 +2450,17 @@ def _register_environment_tools(
             return _handled_error(exc)
 
     @mcp.tool(structured_output=True, annotations=read_only_tool, meta=shell_read_meta)
-    async def skills_list() -> ToolResult:
+    async def skill_list() -> ToolResult:
         """List installed agent skills without loading their instructions. The MCP tool surface stays fixed; adding or removing skill directories is reflected on the next call."""
         return await _tool_call(asyncio.to_thread, list_installed_skills, settings)
 
     @mcp.tool(structured_output=True, annotations=read_only_tool, meta=shell_read_meta)
     async def skill_load(name: str) -> ToolResult:
-        """Load one installed agent skill by the exact name returned from skills_list. Returns SKILL.md instructions plus related file paths."""
+        """Load one installed agent skill by the exact name returned from skill_list. Returns SKILL.md instructions plus related file paths."""
         return await _tool_call(asyncio.to_thread, load_installed_skill, name, settings)
 
     @mcp.tool(structured_output=True, annotations=read_only_tool, meta=shell_read_meta)
-    async def skill_read_file(name: str, path: str) -> ToolResult:
+    async def skill_read(name: str, path: str) -> ToolResult:
         """Read one related text file from an installed Skill."""
         return await _tool_call(asyncio.to_thread, read_installed_skill_file, name, path, settings)
 
@@ -2147,7 +2469,7 @@ def _register_command_tools(mcp: FastMCP, settings: Any) -> None:
     shell_execute_meta = _oauth_meta(["shell:read", "shell:execute"])
 
     @mcp.tool(structured_output=True, meta=shell_execute_meta)
-    async def run_shell_tool(
+    async def run_shell(
         command: str,
         cwd: str = ".",
         timeout_s: int | None = None,
@@ -2157,7 +2479,7 @@ def _register_command_tools(mcp: FastMCP, settings: Any) -> None:
         machine: str | None = None,
     ) -> ToolResult:
         """Run one non-interactive shell command locally or on a remote machine. Use for build, test, package-manager, Git, and inspection commands that should finish promptly. For long-running, interactive, or streaming processes, use shell_start or job_start. Optional purpose/explanation fields let agents state why the command is being run."""
-        _audit_tool_purpose("run_shell_tool", purpose, explanation)
+        _audit_tool_purpose("run_shell", purpose, explanation)
         if machine:
             return await _remote_call(
                 settings,
@@ -2179,7 +2501,7 @@ def _register_command_tools(mcp: FastMCP, settings: Any) -> None:
             return _handled_error(exc)
 
     @mcp.tool(structured_output=True, meta=shell_execute_meta)
-    async def run_python_tool(
+    async def run_python(
         code: str,
         cwd: str = ".",
         timeout_s: int = 60,
@@ -2188,7 +2510,7 @@ def _register_command_tools(mcp: FastMCP, settings: Any) -> None:
         machine: str | None = None,
     ) -> ToolResult:
         """Write and run a short Python script locally or on a remote machine."""
-        _audit_tool_purpose("run_python_tool", purpose, explanation)
+        _audit_tool_purpose("run_python", purpose, explanation)
         if machine:
             return await _remote_call(
                 settings,
@@ -2258,7 +2580,7 @@ def _register_shell_tools(mcp: FastMCP, settings: Any, read_only_tool: ToolAnnot
         return await _tool_call(read_shell, session_id, lines)
 
     @mcp.tool(structured_output=True, meta=shell_execute_meta)
-    async def shell_kill(
+    async def shell_stop(
         session_id: str,
         machine: str | None = None,
     ) -> ToolResult:
@@ -2360,7 +2682,7 @@ def _register_workspace_read_tools(
     shell_read_meta = _oauth_meta(["shell:read"])
 
     @mcp.tool(structured_output=True, annotations=read_only_tool, meta=shell_read_meta)
-    async def list_files(
+    async def file_list(
         path: str = ".",
         recursive: bool = False,
         max_entries: int = 500,
@@ -2381,7 +2703,7 @@ def _register_workspace_read_tools(
         return await _tool_call(asyncio.to_thread, list_dir, path, recursive, max_entries)
 
     @mcp.tool(structured_output=True, annotations=read_only_tool, meta=shell_read_meta)
-    async def tree_view(
+    async def file_tree(
         cwd: str = ".",
         depth: int = 3,
         max_entries: int = 500,
@@ -2398,7 +2720,7 @@ def _register_workspace_read_tools(
         return await _tool_call(tree, cwd, depth, max_entries)
 
     @mcp.tool(structured_output=True, annotations=read_only_tool, meta=shell_read_meta)
-    async def glob_search(
+    async def file_glob(
         pattern: str,
         cwd: str = ".",
         max_results: int = 500,
@@ -2418,7 +2740,7 @@ def _register_workspace_read_tools(
             return _handled_error(exc)
 
     @mcp.tool(structured_output=True, annotations=read_only_tool, meta=shell_read_meta)
-    async def grep_search(
+    async def file_grep(
         query: str,
         cwd: str = ".",
         glob: str | None = None,
@@ -2445,7 +2767,7 @@ def _register_workspace_read_tools(
         return await _tool_call(grep, query, cwd, glob, regex, case_sensitive, max_results)
 
     @mcp.tool(structured_output=True, annotations=read_only_tool, meta=shell_read_meta)
-    async def read_file(
+    async def file_read(
         path: str | list[str],
         start_line: int | None = None,
         end_line: int | None = None,
@@ -2474,11 +2796,11 @@ def _register_workspace_read_tools(
         )
 
     @mcp.tool(structured_output=True, annotations=read_only_tool, meta=shell_read_meta)
-    async def view_image(
+    async def image_view(
         path: str,
         machine: str | None = None,
     ) -> ViewImageResult:
-        """View a PNG, JPEG, GIF, or WebP file as native MCP image content locally or on a remote machine. Use this instead of read_file when visual inspection is needed. Remote images reuse the existing file-transfer protocol, so the worker does not need a new image-specific RPC."""
+        """View a PNG, JPEG, GIF, or WebP file as native MCP image content locally or on a remote machine. Use this instead of file_read when visual inspection is needed. Remote images reuse the existing file-transfer protocol, so the worker does not need a new image-specific RPC."""
         return cast(ViewImageResult, await _view_image_result(path, machine))
 
 
@@ -2486,7 +2808,7 @@ def _register_download_tools(mcp: FastMCP, read_only_tool: ToolAnnotations) -> N
     file_share_meta = _oauth_meta(["shell:read", "file:share"])
 
     @mcp.tool(structured_output=True, meta=file_share_meta)
-    async def create_file_link(
+    async def link_create(
         path: str,
         ttl_s: int | None = None,
         filename: str | None = None,
@@ -2505,12 +2827,12 @@ def _register_download_tools(mcp: FastMCP, read_only_tool: ToolAnnotations) -> N
         )
 
     @mcp.tool(structured_output=True, annotations=read_only_tool, meta=file_share_meta)
-    async def list_file_links(include_expired: bool = False) -> ToolResult:
+    async def link_list(include_expired: bool = False) -> ToolResult:
         """List generated local file download URLs."""
         return await _tool_call(asyncio.to_thread, list_share_links, include_expired)
 
     @mcp.tool(structured_output=True, meta=file_share_meta)
-    async def revoke_file_link(token: str) -> ToolResult:
+    async def link_revoke(token: str) -> ToolResult:
         """Revoke a generated local file download URL."""
         return await _tool_call(asyncio.to_thread, revoke_share_link, token)
 
@@ -2521,7 +2843,7 @@ def _register_workspace_write_tools(mcp: FastMCP, settings: Any) -> None:
     transfer_meta = _oauth_meta(["remote:use", "shell:read", "shell:write"])
 
     @mcp.tool(structured_output=True, meta=shell_write_meta)
-    async def write_file(
+    async def file_write(
         path: str,
         content: str,
         overwrite: bool = True,
@@ -2530,7 +2852,7 @@ def _register_workspace_write_tools(mcp: FastMCP, settings: Any) -> None:
         machine: str | None = None,
     ) -> ToolResult:
         """Write a UTF-8 text file locally or on a remote machine."""
-        _audit_tool_purpose("write_file", purpose, explanation)
+        _audit_tool_purpose("file_write", purpose, explanation)
         if machine:
             return await _remote_call(
                 settings,
@@ -2541,7 +2863,7 @@ def _register_workspace_write_tools(mcp: FastMCP, settings: Any) -> None:
         return await _tool_call(asyncio.to_thread, write_text, path, content, overwrite)
 
     @mcp.tool(structured_output=True, meta=shell_write_meta)
-    async def edit_file(
+    async def file_edit(
         path: str,
         edits: list[TextEdit],
         purpose: str | None = None,
@@ -2549,7 +2871,7 @@ def _register_workspace_write_tools(mcp: FastMCP, settings: Any) -> None:
         machine: str | None = None,
     ) -> ToolResult:
         """Apply one or more exact-text edits to one local or remote file. Each edits entry contains old, new, and optional replace_all; old must match exactly, including whitespace and indentation."""
-        _audit_tool_purpose("edit_file", purpose, explanation)
+        _audit_tool_purpose("file_edit", purpose, explanation)
         edit_payloads = [edit.model_dump() for edit in edits]
         if machine:
             return await _remote_call(
@@ -2561,7 +2883,7 @@ def _register_workspace_write_tools(mcp: FastMCP, settings: Any) -> None:
         return await _tool_call(asyncio.to_thread, edit_text, path, edit_payloads)
 
     @mcp.tool(structured_output=True, meta=shell_write_meta)
-    async def delete_file_or_dir(
+    async def file_delete(
         path: str,
         recursive: bool = False,
         purpose: str | None = None,
@@ -2569,7 +2891,7 @@ def _register_workspace_write_tools(mcp: FastMCP, settings: Any) -> None:
         machine: str | None = None,
     ) -> ToolResult:
         """Delete a local or remote file or directory. recursive=false deletes files or empty directories; recursive=true is required for non-empty directories and should be used carefully."""
-        _audit_tool_purpose("delete_file_or_dir", purpose, explanation)
+        _audit_tool_purpose("file_delete", purpose, explanation)
         if machine:
             return await _remote_call(
                 settings,
@@ -2580,7 +2902,7 @@ def _register_workspace_write_tools(mcp: FastMCP, settings: Any) -> None:
         return await _tool_call(asyncio.to_thread, delete_path, path, recursive)
 
     @mcp.tool(structured_output=True, meta=patch_meta)
-    async def apply_patch(
+    async def file_patch(
         patch: str,
         cwd: str = ".",
         purpose: str | None = None,
@@ -2588,7 +2910,7 @@ def _register_workspace_write_tools(mcp: FastMCP, settings: Any) -> None:
         machine: str | None = None,
     ) -> ToolResult:
         """Check and apply a unified diff or an apply_patch envelope locally or remotely."""
-        _audit_tool_purpose("apply_patch", purpose, explanation)
+        _audit_tool_purpose("file_patch", purpose, explanation)
         if machine:
             return await _remote_call(
                 settings,
@@ -2622,9 +2944,68 @@ def _register_workspace_write_tools(mcp: FastMCP, settings: Any) -> None:
         )
 
 
+def _current_principal_subject() -> str:
+    principal = current_principal()
+    if principal is None:
+        return "local-mcp-client"
+    return principal.subject or principal.email or "mcp-client"
+
+
 def _register_maintenance_tools(mcp: FastMCP, read_only_tool: ToolAnnotations) -> None:
     shell_read_meta = _oauth_meta(["shell:read"])
     shell_write_meta = _oauth_meta(["shell:read", "shell:write"])
+
+    @mcp.tool(structured_output=True, meta=shell_write_meta)
+    async def session_manage(
+        action: str,
+        session_id: str | None = None,
+        session_run_id: str | None = None,
+        label: str | None = None,
+        objective: str | None = None,
+        summary: str | None = None,
+        findings: list[str] | None = None,
+        next: str | None = None,
+        blockers: list[str] | None = None,
+        takeover: bool = False,
+    ) -> ToolResult:
+        """Manage a durable logical task session independent of machine and cwd. Start one before substantive tool-driven work; report semantic progress at meaningful checkpoints; resume by session_id to hand work to a new GPT/MCP run. resume with takeover=true always creates a new agent run and supersedes the old one. Use the returned active_run.run_id as session_run_id for report/finish/cancel and subsequent tools. Actions: start, resume, get, report, list, finish, cancel, delete. start may include label/objective; report accepts summary/findings/next/blockers/objective/label. delete permanently removes a detached or terminal Session and frees retained history capacity."""
+        session_key = mcp_session_key(mcp)
+        subject = _current_principal_subject()
+        result = await _tool_call(
+            asyncio.to_thread,
+            get_session_runtime_manager().manage,
+            session_key,
+            subject,
+            action=action,
+            session_id=session_id,
+            session_run_id=session_run_id,
+            label=label,
+            objective=objective,
+            summary=summary,
+            findings=findings,
+            next=next,
+            blockers=blockers,
+            takeover=takeover,
+            require_run_token=True,
+        )
+        if isinstance(result, dict) and result.get("ok"):
+            data = result.get("data")
+            normalized_action = action.strip().lower()
+            if isinstance(data, dict) and data.get("session_id") and normalized_action in {
+                "start",
+                "resume",
+            }:
+                get_live_channel_manager().bind_logical_session(
+                    session_key,
+                    str(data["session_id"]),
+                    subject,
+                    exclusive_model_owner=True,
+                )
+            if isinstance(data, dict) and normalized_action in {"finish", "cancel", "delete"}:
+                terminal_session_id = str(data.get("session_id") or session_id or "")
+                if terminal_session_id:
+                    get_live_channel_manager().detach_logical_session(terminal_session_id)
+        return result
 
     @mcp.tool(structured_output=True, annotations=read_only_tool, meta=shell_read_meta)
     async def secret_scan(
@@ -2635,15 +3016,32 @@ def _register_maintenance_tools(mcp: FastMCP, read_only_tool: ToolAnnotations) -
         """Scan local workspace text files for common secrets before commit or push."""
         return await _tool_call(_secret_scan, cwd, glob, max_results)
 
-    @mcp.tool(structured_output=True, annotations=read_only_tool, meta=shell_read_meta)
-    async def todo_read_tool() -> ToolResult:
-        """Read the local agent todo list."""
-        return await _tool_call(asyncio.to_thread, todo_read)
-
     @mcp.tool(structured_output=True, meta=shell_write_meta)
-    async def todo_write_tool(todos: list[dict]) -> ToolResult:
-        """Write the local agent todo list."""
-        return await _tool_call(asyncio.to_thread, todo_write, todos)
+    async def plan_manage(
+        action: str,
+        session_run_id: str | None = None,
+        objective: str | None = None,
+        steps: list[dict[str, Any]] | None = None,
+        step_id: str | None = None,
+        status: str | None = None,
+        text: str | None = None,
+        note: str | None = None,
+    ) -> ToolResult:
+        """Manage the optional Goal plan owned by the current logical session. An active plan enables automatic continuation after 15 minutes without agent activity, capped at 10 continuation attempts. Start or resume a logical session with session_manage first. Mutating actions require that session's active_run.run_id as session_run_id. Actions: start, get, update, block, resume, finish, cancel. start requires objective and steps; finish requires every step to be completed or skipped."""
+        return await _tool_call(
+            asyncio.to_thread,
+            get_session_runtime_manager().manage_plan,
+            mcp_session_key(mcp),
+            action=action,
+            session_run_id=session_run_id,
+            require_run_token=True,
+            objective=objective,
+            steps=steps,
+            step_id=step_id,
+            status=status,
+            text=text,
+            note=note,
+        )
 
     @mcp.tool(structured_output=True, annotations=read_only_tool, meta=shell_read_meta)
     async def audit_tail(lines: int = 100) -> ToolResult:
@@ -2911,19 +3309,41 @@ def _register_live_workspace_tools(
         machine: str | None,
         cwd: str,
         live_id: str | None,
+        session_id: str | None = None,
+        app_reattach: bool = False,
     ) -> LiveChannelResult:
         principal = current_principal()
-        if principal is None:
-            subject = "local-mcp-client"
-            scopes = tuple(ALL_OAUTH_SCOPES)
-        else:
-            subject = principal.subject or principal.email or "mcp-client"
-            scopes = tuple(sorted(principal_scopes(principal))) or tuple(ALL_OAUTH_SCOPES)
+        subject = _current_principal_subject()
+        scopes = (
+            tuple(ALL_OAUTH_SCOPES)
+            if principal is None
+            else tuple(sorted(principal_scopes(principal))) or tuple(ALL_OAUTH_SCOPES)
+        )
+        session_key = mcp_session_key(mcp)
+        session_manager = get_session_runtime_manager()
+        logical_session_id = await asyncio.to_thread(
+            session_manager.current_session_id,
+            session_key,
+            subject=subject,
+        )
+        if logical_session_id is None and session_id:
+            try:
+                await asyncio.to_thread(session_manager.get, session_id, subject=subject)
+            except ValueError as exc:
+                if not app_reattach or not str(exc).startswith("Unknown logical session:"):
+                    raise
+                # A suspended app can miss the detach/delete event. Treat only a
+                # missing Session as stale; ownership errors still propagate.
+                get_live_channel_manager().detach_logical_session(session_id)
+            else:
+                logical_session_id = session_id
         channel, live_token = get_live_channel_manager().open(
-            session_key=mcp_session_key(mcp),
+            session_key=session_key,
             subject=subject,
             scopes=scopes,
             live_id=live_id,
+            logical_session_id=logical_session_id,
+            app_reattach=app_reattach,
             parent_expires_at=(
                 float(principal.claims["exp"])
                 if principal is not None and principal.claims.get("exp") is not None
@@ -2932,6 +3352,7 @@ def _register_live_workspace_tools(
         )
         result = LiveChannelResult(
             live_id=channel.live_id,
+            session_id=channel.logical_session_id,
             api_base=_live_workspace_api_base(),
             ui_path=settings.ui_path,
             machine=machine or "local",
@@ -2963,7 +3384,7 @@ def _register_live_workspace_tools(
         ),
         meta=tool_meta,
     )
-    async def open_live_workspace(
+    async def workspace_open(
         machine: str | None = None,
         cwd: str = ".",
     ) -> LiveChannelResult:
@@ -2972,6 +3393,8 @@ def _register_live_workspace_tools(
             machine=machine,
             cwd=cwd,
             live_id=None,
+            session_id=None,
+            app_reattach=False,
         )
 
     @mcp.tool(
@@ -2991,12 +3414,15 @@ def _register_live_workspace_tools(
         machine: str | None = None,
         cwd: str = ".",
         live_id: str | None = None,
+        session_id: str | None = None,
     ) -> LiveChannelResult:
         """Internal app-only Live Workspace credential attachment endpoint."""
         return await build_live_channel_result(
             machine=machine,
             cwd=cwd,
             live_id=live_id,
+            session_id=session_id,
+            app_reattach=True,
         )
 
 
@@ -3018,7 +3444,6 @@ def build_mcp() -> FastMCP:
         openWorldHint=False,
     )
 
-    _register_connector_tools(mcp, read_only_tool)
     if settings.ui_enabled and settings.mode != "stdio":
         _register_live_workspace_tools(mcp, settings)
     _register_environment_tools(mcp, settings, read_only_tool)
@@ -3036,5 +3461,6 @@ def build_mcp() -> FastMCP:
     _remove_remote_tools_when_disabled(mcp)
     _remove_local_only_tools_when_disabled(mcp)
     _install_tool_annotations(mcp)
+    _install_session_run_arguments(mcp)
     _install_mcp_tool_watchdogs(mcp)
     return mcp

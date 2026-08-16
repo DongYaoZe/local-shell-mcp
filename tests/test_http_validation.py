@@ -71,4 +71,4 @@ def test_http_remote_only_mode_omits_controller_local_tool_routes(tmp_path, monk
         response = getattr(client, method)(path, json=payload) if payload is not None else getattr(client, method)(path)
         assert response.status_code == 404
 
-    assert client.get("/tools/todo").status_code == 200
+    assert client.get("/tools/todo").status_code == 404

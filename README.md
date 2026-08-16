@@ -11,13 +11,13 @@
 [![Docker](https://img.shields.io/badge/docker-ready-2496ed?logo=docker&logoColor=white)](https://github.com/fwerkor/local-shell-mcp/pkgs/container/local-shell-mcp)
 [![License](https://img.shields.io/github/license/fwerkor/local-shell-mcp)](LICENSE)
 
-[Documentation](https://fwerkor.github.io/local-shell-mcp/) · [Quickstart](https://fwerkor.github.io/local-shell-mcp/getting-started/quickstart/) · [Runtime choices](https://fwerkor.github.io/local-shell-mcp/guides/deployment/) · [ChatGPT connector](https://fwerkor.github.io/local-shell-mcp/getting-started/chatgpt-connector/) · [Tools](https://fwerkor.github.io/local-shell-mcp/reference/tools/) · [Releases](https://github.com/fwerkor/local-shell-mcp/releases)
+[Documentation](https://fwerkor.github.io/local-shell-mcp/) · [Quickstart](https://fwerkor.github.io/local-shell-mcp/getting-started/quickstart/) · [Runtime choices](https://fwerkor.github.io/local-shell-mcp/guides/deployment/) · [ChatGPT connector](https://fwerkor.github.io/local-shell-mcp/getting-started/chatgpt-connector/) · [DSH plugin](https://fwerkor.github.io/local-shell-mcp/clients/deepseek-harness/) · [Tools](https://fwerkor.github.io/local-shell-mcp/reference/tools/) · [Releases](https://github.com/fwerkor/local-shell-mcp/releases)
 
 </div>
 
 ---
 
-`local-shell-mcp` gives ChatGPT Developer Mode and other MCP clients controlled access to a real execution environment. It exposes a dedicated workspace with shell, persistent shell, filesystem, search, patch, Playwright, audit, todo, public file links, and outbound remote-worker access. Git is handled through ordinary shell commands instead of a parallel wrapper API.
+`local-shell-mcp` gives ChatGPT Developer Mode and other MCP clients controlled access to a real execution environment. It exposes a dedicated workspace with shell, persistent shell, filesystem, search, patch, Playwright, audit, durable logical sessions with optional Goal plans, public file links, and outbound remote-worker access. Git is handled through ordinary shell commands instead of a parallel wrapper API.
 
 ```text
 Runtime: Docker / VS Code extension / binary / Python / stdio
@@ -40,6 +40,7 @@ The intended safety boundary is the container or VM, not the host.
 | Remote workers | Control NAT, firewall, HPC, NPU, or lab machines that can only connect outward. |
 | Agent Skills | Discover, load, and read reusable `SKILL.md` workflows through three fixed tools without changing the MCP tool list. |
 | ChatGPT connector support | OAuth 2.1, `/mcp`, discovery controls, and ChatGPT-compatible tool schemas. |
+| DeepSeek Harness plugin | Install this repository as a DSH bundle and expose the complete LSM tool surface, including remote workers. |
 | ChatGPT Live Workspace | Render a native MCP App for real-time activity, terminal, files, diffs, jobs, remotes, audit, and direct human/agent collaboration inside ChatGPT. |
 | Safer operations | Workspace scoping, shell timeouts, output limits, environment filtering, audit logs, and secret scanning. |
 
@@ -89,8 +90,8 @@ Full setup instructions are in the [documentation](https://fwerkor.github.io/loc
 
 The service includes two compatible human interfaces backed by the same authenticated API and state:
 
-- **Web UI** is a native browser dashboard for system health, machines, workloads, recent MCP activity, alerts, and todos.
-- **OpenTUI** is the full terminal-oriented interface with Dashboard, Files, Terminals, Remotes, Audit, and Todos screens. It remains available in the browser as a selectable console and as the native `local-shell-mcp tui` command.
+- **Web UI** is a native browser dashboard for system health, machines, workloads, recent MCP activity, and alerts.
+- **OpenTUI** is the full terminal-oriented interface with Dashboard, Files, Terminals, Remotes, and Audit screens. It remains available in the browser as a selectable console and as the native `local-shell-mcp tui` command.
 
 Open the browser interface on the service origin:
 
@@ -114,7 +115,11 @@ See the [human interface guide](https://fwerkor.github.io/local-shell-mcp/guides
 
 For full shell, filesystem, remote-worker, and Playwright tools, use ChatGPT Developer Mode or another full MCP client. ChatGPT is a client connection; choose and start a runtime first.
 
-When the client supports MCP Apps, `open_live_workspace` can open the execution workspace as a floating MCP App and expand it to fullscreen when needed. Open it once for an active task; the app reconnects itself rather than requiring repeated tool calls. The workspace is always collaborative: ChatGPT and the human can operate the same terminal/files/remotes concurrently. Ordinary MCP tools remain the execution API, while the app adds live operational activity, persistent terminals, file/diff inspection, jobs, remotes, and audit data. Clients that do not render MCP Apps continue to use the normal tool surface unchanged.
+`session_manage` provides a durable logical task context for agent work. A Session is deliberately independent of machine and working directory: it stores the task objective, semantic progress reports, recent execution activity, agent-run history, and an optional Plan. A later ChatGPT run can call `session_manage(action="resume", session_id=..., takeover=true)` to inherit that context; takeover supersedes a still-active older run so stale agents cannot continue mutating the same Session. Agents should report meaningful checkpoints with `session_manage(action="report", ...)` rather than copying every tool result into the Session summary.
+
+When the client supports MCP Apps, `workspace_open` opens the execution view for the current Session as a floating MCP App and can expand to fullscreen. The Live Workspace is a reconnectable view and collaboration transport, not the owner of task state: closing it, reconnecting MCP, or handing the Session to another ChatGPT run does not discard Session progress or its Plan. Ordinary MCP tools remain the execution API, while the app adds live operational activity, persistent terminals, file/diff inspection, jobs, remotes, audit data, and the active Session id. Clients that do not render MCP Apps continue to use the normal tool surface unchanged.
+
+`plan_manage` optionally enables **Goal mode** on the current Session for substantial multi-step work. An active Plan is the goal: its steps can be revised as execution changes and, while a Live Workspace is attached, the app can request continuation after 15 minutes without agent tool activity. Automatic continuation is capped at 10 continuation attempts (accepted or rejected) and resumes the same Session before continuing. Blocked, completed, and cancelled Plan statuses are never nudged; an active Plan whose steps are all completed or skipped remains eligible for cleanup continuation so a resumed agent can call `plan_manage(action="finish")`. A Session does not require a Plan.
 
 1. Expose the server through HTTPS.
 2. Keep OAuth enabled.
@@ -123,6 +128,18 @@ When the client supports MCP Apps, `open_live_workspace` can open the execution 
 5. Start with a bounded task and inspect the audit log when needed.
 
 Read the dedicated [ChatGPT connector guide](https://fwerkor.github.io/local-shell-mcp/getting-started/chatgpt-connector/).
+
+## DeepSeek Harness plugin
+
+The repository root is also a DSH plugin bundle. With a normal LSM HTTP/MCP service running on the same host, install it directly into a DSH profile:
+
+```bash
+dsh plugin --profile web add 'github:fwerkor/local-shell-mcp#main'
+```
+
+The bundle uses an LSM-aware Streamable HTTP bridge and keeps the complete LSM tool surface, including `remote_manage`, `remote_transfer`, browser tools, and Dynamic MCP tools. Each DSH Session receives a stable v4 logical-session identity, so its Logical Session, active run, Activity, and native **Live Workspace** view stay isolated from other DSH conversations and survive DSH-side MCP transport recreation. DSH sees model tools under the normal `mcp__lsm__*` namespace. For production, pin the Git spec to a reviewed release or commit.
+
+See the [DeepSeek Harness integration guide](https://fwerkor.github.io/local-shell-mcp/clients/deepseek-harness/).
 
 ## VS Code extension runtime
 
@@ -153,7 +170,7 @@ See the [remote workers guide](https://fwerkor.github.io/local-shell-mcp/guides/
 
 Skills are discovered from three ordered sources: project-level `/workspace/.agents/skills`, the LSM-managed `/workspace/.local-shell-mcp/agent_config/skills`, and global `~/.config/agents/skills`. Higher-priority sources override lower-priority Skills with the same name, and symlinked Skill directories and files are supported.
 
-This makes the universal Skills CLI layout work directly, for example `npx skills add owner/repo --agent universal -y`. Use `skills_list` to discover installed Skills, `skill_load` to load one instruction set, and `skill_read_file` to read a related file by the returned Skill-relative path. Changes are detected on the next call; no per-Skill MCP tools are registered and no client reconnect is required.
+This makes the universal Skills CLI layout work directly, for example `npx skills add owner/repo --agent universal -y`. Use `skill_list` to discover installed Skills, `skill_load` to load one instruction set, and `skill_read` to read a related file by the returned Skill-relative path. Changes are detected on the next call; no per-Skill MCP tools are registered and no client reconnect is required.
 
 See the [Agent Skills guide](https://fwerkor.github.io/local-shell-mcp/guides/skills/).
 
@@ -161,21 +178,24 @@ See the [Agent Skills guide](https://fwerkor.github.io/local-shell-mcp/guides/sk
 
 The public MCP surface includes:
 
-- Shell and jobs: `run_shell_tool`, `run_python_tool`, persistent `shell_*`, and tracked `job_*` tools. Use `run_shell_tool` for Git CLI operations.
-- Filesystem: `list_files`, `tree_view`, `glob_search`, `grep_search`, unified `read_file`, native-vision `view_image`, `write_file`, unified `edit_file`, `delete_file_or_dir`, and `apply_patch`.
+- Live Workspace: `workspace_open` opens the reconnectable MCP App for the current logical Session.
+- Shell and jobs: `run_shell`, `run_python`, persistent `shell_*`, and tracked `job_*` tools. Use `run_shell` for Git CLI operations.
+- Filesystem: `file_list`, `file_tree`, `file_glob`, `file_grep`, unified `file_read`, native-vision `image_view`, `file_write`, unified `file_edit`, `file_delete`, and `file_patch`.
 - Transfer: `remote_transfer` for files or directories across controller and worker endpoints.
 - Dynamic MCP: `mcp_manage`, `mcp_tool_search`, `mcp_tool_inspect`, and `mcp_tool_call`. External tools are discovered progressively and never expand LSM's own `tools/list` surface.
 - Browser: persistent high-level `browser_session`, `browser_snapshot`, and `browser_act`; `browser_run_script` is the low-level Playwright escape hatch.
-- File links: `create_file_link`, `list_file_links`, `revoke_file_link`.
+- File links: `link_create`, `link_list`, `link_revoke`.
 - Remote workers: `remote_manage` with `invite`, `list`, `rename`, and `revoke` actions; normal execution tools accept optional `machine`.
-- Agent Skills: `skills_list`, `skill_load`, `skill_read_file`.
-- Diagnostics: `environment_info` (including version information), `secret_scan`, `audit_tail`, `todo_read_tool`, and `todo_write_tool`.
+- Agent Skills: `skill_list`, `skill_load`, `skill_read`.
+- Sessions: `session_manage` for durable task context, progress handoff, agent-run takeover, and cross-run inheritance.
+- Planning: `plan_manage` for optional Session-owned Goal mode and automatic continuation.
+- Diagnostics: `environment_get` (including version information), `secret_scan`, and `audit_tail`.
 
 The detailed tool reference, including purpose, inputs, returns, combinations, and notes for every tool, is available in the [docs](https://fwerkor.github.io/local-shell-mcp/reference/tools/).
 
-## Session-oriented community fork
+## Alternative workspace-bound session model
 
-Users who prefer an explicit session abstraction, including those who do not use ChatGPT Memory, may prefer the independently maintained [rijuyuezhu/local-shell-mcp](https://github.com/rijuyuezhu/local-shell-mcp) fork. It binds workspace context, jobs, todos, and transfers to sessions and has its own tool surface and release lifecycle.
+Mainline LSM Sessions are logical task contexts and intentionally do not bind tools, machines, working directories, jobs, or transfers to a Session. The independently maintained [rijuyuezhu/local-shell-mcp](https://github.com/rijuyuezhu/local-shell-mcp) fork uses a different, execution-oriented session model that binds workspace context and related resources to explicit sessions. It has its own tool surface and release lifecycle.
 
 ## Security model
 

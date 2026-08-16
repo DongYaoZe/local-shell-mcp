@@ -9,6 +9,9 @@ from typing import Protocol
 
 from .settings import get_settings
 
+_REDIS_LOCK_TTL_S = 30.0
+_REDIS_LOCK_RENEW_INTERVAL_S = 10.0
+
 
 class StateStore(Protocol):
     def read_bytes(self, key: str) -> bytes | None: ...
@@ -134,6 +137,7 @@ class RedisStateStore:
             ) from exc
         self._client = redis.Redis.from_url(url)
         self._prefix = prefix.strip(":") or "local-shell-mcp"
+        self._active_locks = threading.local()
 
     def _key(self, key: str) -> str:
         return f"{self._prefix}:{key}"
@@ -142,10 +146,19 @@ class RedisStateStore:
         value = self._client.get(self._key(key))
         return None if value is None else bytes(value)
 
+    def _refresh_active_locks(self) -> None:
+        for lock in getattr(self._active_locks, "stack", ()):
+            # Refresh immediately before a state mutation. Besides extending
+            # the TTL, redis-py verifies that the lock token is still ours and
+            # raises if another controller acquired the lock after expiry.
+            lock.reacquire()
+
     def write_bytes(self, key: str, value: bytes) -> None:
+        self._refresh_active_locks()
         self._client.set(self._key(key), value)
 
     def delete(self, key: str) -> None:
+        self._refresh_active_locks()
         self._client.delete(self._key(key))
 
     def list_keys(self, prefix: str = "") -> list[str]:
@@ -160,13 +173,53 @@ class RedisStateStore:
 
     @contextlib.contextmanager
     def lock(self, key: str) -> Iterator[None]:
-        lock = self._client.lock(self._key(f"locks:{key}"), timeout=30, blocking_timeout=5)
+        # Session transactions can legitimately outlive the initial Redis lock
+        # TTL (for example, a retained-history scan before Session creation).
+        # Keep the same lock token visible to the renewal thread and refresh the
+        # TTL until the protected transaction has actually finished.
+        lock = self._client.lock(
+            self._key(f"locks:{key}"),
+            timeout=_REDIS_LOCK_TTL_S,
+            blocking_timeout=5,
+            thread_local=False,
+        )
         acquired = lock.acquire(blocking=True)
         if not acquired:
             raise TimeoutError(f"timed out acquiring state lock: {key}")
+        stop_renewal = threading.Event()
+
+        def renew() -> None:
+            while not stop_renewal.wait(_REDIS_LOCK_RENEW_INTERVAL_S):
+                try:
+                    lock.reacquire()
+                except Exception:
+                    # A transient Redis outage must not permanently stop lock
+                    # renewal. Keep retrying until the protected transaction
+                    # ends; state operations in the transaction still surface
+                    # persistent backend failures to the caller.
+                    continue
+
+        renewal = threading.Thread(
+            target=renew,
+            name="lsm-redis-state-lock-renewal",
+            daemon=True,
+        )
+        stack = getattr(self._active_locks, "stack", None)
+        if stack is None:
+            stack = []
+            self._active_locks.stack = stack
+        stack.append(lock)
+        renewal.start()
         try:
             yield
         finally:
+            stop_renewal.set()
+            renewal.join(timeout=max(1.0, _REDIS_LOCK_RENEW_INTERVAL_S * 2))
+            if stack and stack[-1] is lock:
+                stack.pop()
+            else:  # pragma: no cover - defensive against malformed nested use.
+                with contextlib.suppress(ValueError):
+                    stack.remove(lock)
             with contextlib.suppress(Exception):
                 lock.release()
 

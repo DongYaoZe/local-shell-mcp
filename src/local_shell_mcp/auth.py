@@ -134,8 +134,6 @@ def required_scopes_for_http_tool(path: str, method: str | None = None) -> tuple
 
     if path.startswith("/tools/download/"):
         return file_share
-    if path == "/tools/todo":
-        return read if str(method or "").upper() == "GET" else write
     if path in {
         "/tools/write_file",
         "/tools/edit_file",
@@ -262,14 +260,15 @@ def verify_request(request: Request) -> Principal:
         if token:
             from .live_channel import get_live_channel_manager
 
-            channel = get_live_channel_manager().authenticate(token)
-            if channel is not None:
+            auth_context = get_live_channel_manager().authenticate_context(token)
+            if auth_context is not None:
+                channel, subject, scopes = auth_context
                 return Principal(
                     email=None,
-                    subject=channel.subject,
+                    subject=subject,
                     claims={
                         "auth": "live-channel",
-                        "scope": " ".join(channel.scopes),
+                        "scope": " ".join(scopes),
                         "live_id": channel.live_id,
                     },
                 )

@@ -2,7 +2,7 @@
 
 本页说明如何把 ChatGPT 作为客户端接入。它不负责选择运行时。使用本页前，先通过 Docker、VS Code 扩展、独立二进制或 Python 安装方式启动 `local-shell-mcp` 服务。
 
-`local-shell-mcp` 面向 ChatGPT Developer Mode 和完整 MCP 客户端设计。同时，它也提供只读的连接器式 `search` 和 `fetch` 工具，便于客户端发现文件内容。
+`local-shell-mcp` 面向 ChatGPT Developer Mode 和完整 MCP 客户端设计。MCP 端点直接暴露标准的 LSM 工具面。
 
 ## 运行时前置条件
 
@@ -56,7 +56,7 @@ LOCAL_SHELL_MCP_OAUTH_ACCESS_TOKEN_TTL_S=0
 
 ## Live Workspace MCP App
 
-支持 MCP Apps 的 ChatGPT 客户端可以渲染 `local-shell-mcp` 的交互式执行工作区。需要实时观察或人机协作时，只需让 ChatGPT 为当前任务打开一次 Live Workspace；此后 App 会自行重连，不需要反复调用 `open_live_workspace`。
+支持 MCP Apps 的 ChatGPT 客户端可以渲染 `local-shell-mcp` 的交互式执行工作区。需要实时观察或人机协作时，只需让 ChatGPT 为当前任务打开一次 Live Workspace；此后 App 会自行重连，不需要反复调用 `workspace_open`。
 
 Live Workspace 只展示可观察的执行状态和共享资源，不展示模型的私有推理过程：
 
@@ -76,14 +76,14 @@ Files、Diff、Audit 和 Activity 视图可以通过 MCP Apps bridge 把选中�
 
 为了让终端和事件流保持低延迟，渲染后的 MCP App 会从 sandbox 直接连接到配置的服务源站。因此，`LOCAL_SHELL_MCP_PUBLIC_BASE_URL` 必须是 ChatGPT 浏览器可以访问的 HTTPS 源站地址。MCP 端点仍然是 `https://your-public-host.example.com/mcp`。
 
-打开工作区时会签发随机、短生命周期的 Live Workspace bearer token。该 token 只放在供渲染 App 使用的 MCP result metadata 中，不进入模型可见的 structured content，并且只会被 human/live UI API 接受。App 使用同一个 `live_id` 自动重附着时会复用当前凭据，避免重连中的视图互相使 token 失效；显式再次调用 `open_live_workspace` 时仍会轮换 token。嵌入式 App 不使用浏览器 cookie 或环境中的隐式凭据。
+打开工作区时会签发随机、短生命周期的 Live Workspace bearer token。该 token 只放在供渲染 App 使用的 MCP result metadata 中，不进入模型可见的 structured content，并且只会被 human/live UI API 接受。App 使用同一个 `live_id` 自动重附着时会复用当前凭据，避免重连中的视图互相使 token 失效；同时会携带当前逻辑 `session_id`，因此即使内存中的 Live Workspace 状态丢失，也能恢复到持久 Session。显式再次调用 `workspace_open` 时仍会轮换 token。嵌入式 App 不使用浏览器 cookie 或环境中的隐式凭据。
 
 不支持 MCP Apps 的客户端可以忽略这些 UI metadata。所有普通 MCP 数据工具仍然可用，行为保持不变。
 
 ## 第一次提示词
 
 ```text
-使用 local-shell-mcp。先调用 environment_info，然后列出工作区根目录。暂时不要修改文件。
+使用 local-shell-mcp。先调用 environment_get，然后列出工作区根目录。暂时不要修改文件。
 ```
 
 这个提示只验证连通性，不会主动修改文件。
@@ -95,7 +95,7 @@ Files、Diff、Audit 和 Activity 视图可以通过 MCP Apps bridge 把选中�
 - 除非另有说明，只在 `/workspace` 内工作。
 - 提交前先运行测试。
 - 推送前使用 `secret_scan`。
-- 只对可以分享的文件使用 `create_file_link`。
+- 只对可以分享的文件使用 `link_create`。
 - 长时间进程优先使用持久 shell session。
 - 汇总所有修改过文件的命令。
 

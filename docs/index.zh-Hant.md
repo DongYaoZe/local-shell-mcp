@@ -31,7 +31,7 @@ Docker、VS Code 擴展、二進制、Python 和 stdio 是運行時；ChatGPT �
 
 ## 它提供什麼
 
-`local-shell-mcp` 會把一個受控的本地或容器工作區暴露給 ChatGPT 和其它 MCP 客戶端。它提供 Shell、持久 Shell、文件系統、搜索、補丁、Git、Playwright、審計、todo、臨時文件鏈接和遠程節點工具，並支持 ChatGPT 兼容的 MCP over HTTP 與 OAuth。
+`local-shell-mcp` 會把一個受控的本地或容器工作區暴露給 ChatGPT 和其它 MCP 客戶端。它提供 Shell、持久 Shell、文件系統、搜索、補丁、Git、Playwright、審計、持久邏輯會話與可選 Goal plan、臨時文件鏈接和遠程節點工具，並支持 ChatGPT 兼容的 MCP over HTTP 與 OAuth。
 
 適用場景包括：檢查倉庫、運行測試、修改代碼、操作 Git、採集網頁證據、生成可下載產物，或者控制只能主動連接控制端的遠程機器。
 
@@ -65,12 +65,13 @@ Docker、VS Code 擴展、二進制、Python 和 stdio 是運行時；ChatGPT �
 
 | 工具族 | 示例 | 用途 |
 |---|---|---|
-| Shell 和 Python | `run_shell_tool`, `run_python_tool`, `shell_start` | 構建、測試、腳本、長時間進程 |
-| 文件和搜索 | `tree_view`, `grep_search`, `read_file`, `apply_patch` | 倉庫檢查和精確修改 |
-| Git | `run_shell_tool`, `run_shell_tool`, `run_shell_tool`, `run_shell_tool` | 可審查的源碼管理流程 |
+| Shell 和 Python | `run_shell`, `run_python`, `shell_start` | 構建、測試、腳本、長時間進程 |
+| 文件和搜索 | `file_tree`, `file_grep`, `file_read`, `file_patch` | 倉庫檢查和精確修改 |
+| Git | `run_shell`, `run_shell`, `run_shell`, `run_shell` | 可審查的源碼管理流程 |
+| Session 與 Goal | `session_manage`, `plan_manage` | 持久任務繼承、進度彙報和可選 Goal 模式 |
 | 瀏覽器 | `browser_session`, `browser_snapshot`, `browser_act`、`browser_run_script` | 持久互動、UI 檢查、截圖、渲染文檔、頁面文字 |
-| 文件鏈接 | `create_file_link`, `revoke_file_link` | 從聊天中下載生成產物 |
-| 遠程節點 | `remote_manage`, `run_shell_tool`, `remote_transfer` | NAT、防火牆或集羣登錄流程後的機器 |
+| 文件鏈接 | `link_create`, `link_revoke` | 從聊天中下載生成產物 |
+| 遠程節點 | `remote_manage`, `run_shell`, `remote_transfer` | NAT、防火牆或集羣登錄流程後的機器 |
 
 ## 典型工作流
 
@@ -87,7 +88,7 @@ Docker、VS Code 擴展、二進制、Python 和 stdio 是運行時；ChatGPT �
 
 1. 創建一次性遠程節點邀請。
 2. 在遠程主機上粘貼生成的命令。
-3. 通過普通工具的 `machine` 參數操作遠程節點；Git 使用 `run_shell_tool`，路徑傳輸使用 `remote_transfer`。
+3. 通過普通工具的 `machine` 參數操作遠程節點；Git 使用 `run_shell`，路徑傳輸使用 `remote_transfer`。
 4. 任務結束後撤銷該節點。
 
 ### 產物生成

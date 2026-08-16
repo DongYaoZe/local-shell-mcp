@@ -11,14 +11,19 @@ import {
   activityEventKey,
   activityIntent,
   basename,
+  coalesceActivityEvents,
+  continuationCountdownState,
+  continuationDispatchStillValid,
   escapeHtml,
   eventDetail,
   eventTitle,
   eventTone,
   formatBytes,
   formatClock,
+  formatCountdown,
   isOperationalActivityEvent,
   joinPath,
+  mergeActivityEvents,
   toggleWorkspaceDisplayMode,
   parentPath,
   reconnectDelayMs,
@@ -53,11 +58,50 @@ type Machine = { name: string; status?: string; workdir?: string; version?: stri
 type TerminalSession = { session_id: string; backend?: string; created?: number; attached?: number; cwd?: string; name?: string }
 type FileEntry = { name: string; path: string; type: string; size?: number; modified?: number; hidden?: boolean }
 
+type PlanStep = { id: string; text: string; status: "pending" | "active" | "completed" | "skipped"; note?: string }
+type PlanState = {
+  plan_id: string
+  objective: string
+  status: "active" | "blocked" | "completed" | "cancelled"
+  steps: PlanStep[]
+  revision: number
+  note?: string | null
+  continuation_count: number
+  continuation_pending: boolean
+  continuation_claim_id?: string | null
+  last_agent_activity: number
+  execution_lease_s: number
+  continuation_due_at: number
+  continuation_due: boolean
+  continuation_retry_after?: number | null
+  max_continuations: number
+  auto_continue_exhausted: boolean
+  in_flight_calls?: number
+}
+
+type LogicalSessionState = {
+  session_id: string
+  label?: string | null
+  objective?: string | null
+  status: string
+  active_run?: { run_id?: string; status?: string } | null
+  progress?: {
+    summary?: string | null
+    findings?: string[]
+    next?: string | null
+    blockers?: string[]
+    updated_at?: number | null
+  }
+  recent_activity?: LiveEvent[]
+  plan?: PlanState | null
+}
+
 type LiveConfig = {
   token: string
   apiBase: string
   uiPath: string
   liveId: string
+  sessionId: string
   machine: string
   cwd: string
 }
@@ -71,7 +115,6 @@ type Dashboard = {
   session_count?: number
   activity?: JsonRecord[]
   alerts?: JsonRecord[]
-  todo_counts?: JsonRecord
   version?: JsonRecord
 }
 
@@ -79,6 +122,18 @@ const app = new App(
   { name: "local-shell-mcp-live-workspace", version: "1.0.0" },
   { availableDisplayModes: ["pip", "fullscreen"] },
 )
+
+type DshBootstrap = {
+  sessionId: string
+  configEndpoint: string
+}
+
+type DshWindow = Window & {
+  __LSM_DSH_BOOTSTRAP__?: DshBootstrap
+}
+
+const dshBootstrap = (window as DshWindow).__LSM_DSH_BOOTSTRAP__ || null
+const isDshHost = dshBootstrap !== null
 
 const root = document.createElement("div")
 root.id = "live-workspace-root"
@@ -91,13 +146,24 @@ let pollGeneration = 0
 let connected = false
 let connectionMessage = "Waiting for Live Workspace…"
 let activeTab = "activity"
-let displayMode: DisplayMode = "pip"
+let displayMode: DisplayMode = isDshHost ? "fullscreen" : "pip"
 let bootstrap: JsonRecord | null = null
 let dashboard: Dashboard | null = null
 let machines: Machine[] = []
 let lastPassiveRefresh = 0
 let passiveRefreshing = false
 let coreRefreshQueued = false
+let plan: PlanState | null = null
+let logicalSession: LogicalSessionState | null = null
+let continuationChecking = false
+let continuationClaimId = ""
+type ContinuationDispatch = {
+  claimId: string
+  validatedAgentActivity: number
+  controller: AbortController
+  invalidationReason: string
+}
+let continuationDispatch: ContinuationDispatch | null = null
 let activityExpandedEventKey = ""
 const activityAuditDetails = new Map<string, JsonRecord>()
 let activityDetailRevision = 0
@@ -106,6 +172,15 @@ let knownActiveJobs = new Set<string>()
 let knownStandaloneSessions = new Set<string>()
 let shuttingDown = false
 let passiveRefreshTimer: number | null = null
+let planContinuationTimer: number | null = null
+let countdownRenderTimer: number | null = null
+let dshModelContext = ""
+let dshPromptSequence = 0
+const dshPromptWaiters = new Map<string, {
+  resolve: (value: JsonRecord) => void
+  reject: (error: Error) => void
+  timer: number
+}>()
 
 let terminal: Terminal | null = null
 let fitAddon: FitAddon | null = null
@@ -188,6 +263,78 @@ function qs<T extends Element>(selector: string): T | null {
   return root.querySelector<T>(selector)
 }
 
+function currentHostContext(): JsonRecord {
+  if (isDshHost) {
+    return { displayMode: "fullscreen", availableDisplayModes: [] }
+  }
+  return (app.getHostContext() || {}) as JsonRecord
+}
+
+function onDshPromptResult(event: MessageEvent): void {
+  if (!isDshHost || event.source !== window.parent || event.origin !== window.location.origin) return
+  const data = event.data as JsonRecord | null
+  if (!data || data.type !== "local-shell-mcp:dsh:prompt-result") return
+  const requestId = String(data.requestId || "")
+  const waiter = dshPromptWaiters.get(requestId)
+  if (!waiter) return
+  dshPromptWaiters.delete(requestId)
+  window.clearTimeout(waiter.timer)
+  if (data.ok === true) waiter.resolve(data)
+  else waiter.reject(new Error(String(data.message || "DSH rejected the Live Workspace message")))
+}
+
+function sendDshPrompt(text: string, signal?: AbortSignal): Promise<JsonRecord> {
+  if (!dshBootstrap) return Promise.reject(new Error("DSH Live Workspace bridge is unavailable"))
+  if (signal?.aborted) return Promise.reject(new DOMException("The operation was aborted", "AbortError"))
+  const requestId = `${Date.now().toString(36)}-${(++dshPromptSequence).toString(36)}`
+  return new Promise((resolve, reject) => {
+    const timer = window.setTimeout(() => {
+      if (!dshPromptWaiters.delete(requestId)) return
+      reject(new Error("DSH did not acknowledge the Live Workspace message"))
+    }, 30_000)
+    const waiter = { resolve, reject, timer }
+    dshPromptWaiters.set(requestId, waiter)
+    signal?.addEventListener("abort", () => {
+      if (dshPromptWaiters.get(requestId) !== waiter) return
+      dshPromptWaiters.delete(requestId)
+      window.clearTimeout(timer)
+      reject(new DOMException("The operation was aborted", "AbortError"))
+    }, { once: true })
+    window.parent.postMessage({
+      type: "local-shell-mcp:dsh:prompt",
+      requestId,
+      sessionId: dshBootstrap.sessionId,
+      text,
+    }, window.location.origin)
+  })
+}
+
+async function updateHostModelContext(
+  payload: Parameters<typeof app.updateModelContext>[0],
+): Promise<unknown> {
+  if (!isDshHost) return await app.updateModelContext(payload)
+  dshModelContext = payload.content
+    ?.filter((item) => item.type === "text")
+    .map((item) => item.text)
+    .join("\n\n") || ""
+  return {}
+}
+
+async function sendHostMessage(
+  payload: Parameters<typeof app.sendMessage>[0],
+  options?: Parameters<typeof app.sendMessage>[1],
+): Promise<unknown> {
+  if (!isDshHost) return await app.sendMessage(payload, options)
+  const messageText = payload.content
+    .filter((item) => item.type === "text")
+    .map((item) => item.text)
+    .join("\n\n")
+  const text = dshModelContext ? `${dshModelContext}\n\n${messageText}` : messageText
+  dshModelContext = ""
+  await sendDshPrompt(text, options?.signal)
+  return { isError: false }
+}
+
 function notify(message: string, tone: "info" | "success" | "warning" | "danger" = "info"): void {
   const host = qs<HTMLElement>("[data-role=toasts]")
   if (!host) return
@@ -230,21 +377,33 @@ function updateChrome(): void {
   qs<HTMLElement>("[data-role=connection-dot]")?.classList.toggle("connected", connected)
   const connectionLabel = qs<HTMLElement>("[data-role=connection-label]")
   if (connectionLabel) connectionLabel.textContent = connectionMessage
+  const subtitle = qs<HTMLElement>("[data-role=subtitle]")
+  if (subtitle) subtitle.textContent = config?.sessionId
+    ? `local-shell-mcp · session ${config.sessionId}`
+    : "local-shell-mcp · no logical session attached"
   root.querySelectorAll<HTMLButtonElement>("[data-tab]").forEach((button) => {
     button.classList.toggle("active", button.dataset.tab === activeTab)
   })
   const expandButton = qs<HTMLButtonElement>("[data-action=expand]")
   if (expandButton) {
-    const fullscreen = displayMode === "fullscreen"
-    const targetMode = toggleWorkspaceDisplayMode(displayMode)
-    const available = app.getHostContext()?.availableDisplayModes || []
-    const supported = available.includes(targetMode)
-    expandButton.classList.toggle("active", fullscreen)
-    expandButton.disabled = !supported
-    expandButton.title = supported
-      ? fullscreen ? "Return to floating window" : "Fullscreen"
-      : fullscreen ? "Floating window unavailable in this host" : "Fullscreen unavailable in this host"
-    expandButton.setAttribute("aria-label", expandButton.title)
+    if (isDshHost) {
+      expandButton.hidden = true
+      expandButton.disabled = true
+      expandButton.style.display = "none"
+      expandButton.setAttribute("aria-hidden", "true")
+    } else {
+      expandButton.style.removeProperty("display")
+      const fullscreen = displayMode === "fullscreen"
+      const targetMode = toggleWorkspaceDisplayMode(displayMode)
+      const available = (currentHostContext().availableDisplayModes as string[] | undefined) || []
+      const supported = available.includes(targetMode)
+      expandButton.classList.toggle("active", fullscreen)
+      expandButton.disabled = !supported
+      expandButton.title = supported
+        ? fullscreen ? "Return to floating window" : "Fullscreen"
+        : fullscreen ? "Floating window unavailable in this host" : "Fullscreen unavailable in this host"
+      expandButton.setAttribute("aria-label", expandButton.title)
+    }
   }
 
   const running = currentRunningEvent()
@@ -281,20 +440,19 @@ function operationalEvents(): LiveEvent[] {
 }
 
 function currentRunningEvent(): LiveEvent | null {
-  const visible = operationalEvents()
-  const completed = new Set(visible.filter((event) => event.type === "tool.completed" || event.type === "tool.failed").map((event) => String(event.data.call_id || "")))
+  const visible = coalesceActivityEvents(operationalEvents())
   for (let index = visible.length - 1; index >= 0; index -= 1) {
     const event = visible[index]
-    if (event.type === "tool.started" && !completed.has(String(event.data.call_id || ""))) return event
+    if (event.type === "tool.started") return event
   }
   return null
 }
 
 function latestCompletedSummary(): string {
-  const visible = operationalEvents()
+  const visible = coalesceActivityEvents(operationalEvents())
   for (let index = visible.length - 1; index >= 0; index -= 1) {
     const event = visible[index]
-    if (["tool.completed", "tool.failed", "human.action"].includes(event.type)) return activityIntent(event)
+    if (["tool.completed", "tool.failed", "tool.cancelled", "tool.blocked", "human.action"].includes(event.type)) return activityIntent(event)
   }
   return connected ? "Ready" : "Waiting for connection"
 }
@@ -312,6 +470,10 @@ async function handleAction(action: string, target: HTMLElement): Promise<void> 
     if (action === "expand") await requestDisplayMode(toggleWorkspaceDisplayMode(displayMode))
     else if (action === "refresh") await refreshCurrent(true)
     else if (action === "activity-ask") await askAboutLatestActivity()
+    else if (action === "plan-pause") await controlPlan("pause")
+    else if (action === "plan-resume") await controlPlan("resume")
+    else if (action === "plan-cancel") await controlPlan("cancel")
+    else if (action === "plan-cancel-countdown") await controlPlan("pause", "Auto continuation cancelled by user")
     else if (action === "activity-open-detail") await toggleActivityDetail(target.dataset.eventKey || "", target.dataset.callId || "")
     else if (action === "activity-open-terminal") {
       terminalMachine = target.dataset.machine || "local"
@@ -327,7 +489,7 @@ async function handleAction(action: string, target: HTMLElement): Promise<void> 
       const tool = target.dataset.tool || ""
       fileMachine = target.dataset.machine || "local"
       if (path) {
-        if (["list_files", "tree_view", "glob_search", "grep_search", "search"].includes(tool)) {
+        if (["file_list", "file_tree", "file_glob", "file_grep", "list_files", "tree_view", "glob_search", "grep_search", "search"].includes(tool)) {
           filePath = path
           selectedFile = ""
         } else {
@@ -372,6 +534,7 @@ async function handleAction(action: string, target: HTMLElement): Promise<void> 
 }
 
 async function requestDisplayMode(mode: "fullscreen" | "pip"): Promise<void> {
+  if (isDshHost) return
   try {
     const result = await app.requestDisplayMode({ mode })
     if (result.mode === "pip" || result.mode === "fullscreen") displayMode = result.mode
@@ -379,6 +542,69 @@ async function requestDisplayMode(mode: "fullscreen" | "pip"): Promise<void> {
     updateChrome()
   } catch (error) {
     notify(`Host did not change display mode: ${error instanceof Error ? error.message : String(error)}`, "warning")
+  }
+}
+
+async function controlPlan(action: "pause" | "resume" | "cancel", note?: string): Promise<void> {
+  if (!config || !plan) return
+  if (action === "pause" || action === "cancel") {
+    abortContinuationDispatch(`Goal ${action === "pause" ? "paused" : "cancelled"} by user`)
+  }
+  const payload = await api<{ goal_mode: boolean; plan: PlanState }>("/api/live/plan", {
+    method: "POST",
+    body: JSON.stringify({ action, ...(note ? { note } : {}) }),
+  })
+  plan = payload.plan
+  if (logicalSession) logicalSession = { ...logicalSession, plan }
+  renderCurrentTab()
+  notify(
+    action === "pause" ? "Goal paused" : action === "resume" ? "Goal resumed" : "Goal cancelled",
+    action === "cancel" ? "warning" : "success",
+  )
+}
+
+function abortContinuationDispatch(reason: string): void {
+  const dispatch = continuationDispatch
+  if (!dispatch || dispatch.controller.signal.aborted) return
+  dispatch.invalidationReason = reason
+  dispatch.controller.abort()
+}
+
+function observeContinuationPlan(nextPlan: PlanState | null): void {
+  const dispatch = continuationDispatch
+  if (!dispatch) return
+  if (!continuationDispatchStillValid(nextPlan, dispatch.claimId, dispatch.validatedAgentActivity)) {
+    abortContinuationDispatch("Continuation became stale before host dispatch completed")
+  }
+}
+
+async function watchContinuationDispatch(dispatch: ContinuationDispatch): Promise<void> {
+  while (!shuttingDown && continuationDispatch === dispatch && !dispatch.controller.signal.aborted) {
+    await waitForRetry(500)
+    if (continuationDispatch !== dispatch || dispatch.controller.signal.aborted) return
+    try {
+      const validation = await api<{ valid: boolean; plan?: PlanState | null }>("/api/live/plan/continuation", {
+        method: "POST",
+        body: JSON.stringify({ action: "validate", claim_id: dispatch.claimId }),
+      })
+      if (continuationDispatch !== dispatch || dispatch.controller.signal.aborted) return
+      const nextPlan = validation.plan || null
+      observeContinuationPlan(nextPlan)
+      plan = nextPlan || plan
+      if (!validation.valid) {
+        abortContinuationDispatch("Continuation claim was invalidated before host dispatch completed")
+        if (activeTab === "activity") renderActivity()
+        return
+      }
+    } catch (error) {
+      abortContinuationDispatch(
+        isLiveCredentialError(error)
+          ? "Live Workspace authorization changed during continuation dispatch"
+          : "Continuation could not be revalidated before host dispatch completed",
+      )
+      console.warn("Unable to revalidate continuation while dispatching", error)
+      return
+    }
   }
 }
 
@@ -411,27 +637,130 @@ function renderCurrentTab(): void {
   else renderAudit()
 }
 
+function durableSessionEvents(): LiveEvent[] {
+  const durable = logicalSession?.recent_activity || []
+  return mergeActivityEvents(durable, operationalEvents())
+}
+
+function planProgress(): { completed: number; total: number; percent: number; active: PlanStep | null } {
+  if (!plan) return { completed: 0, total: 0, percent: 0, active: null }
+  const completed = plan.steps.filter((step) => step.status === "completed" || step.status === "skipped").length
+  const total = plan.steps.length
+  return {
+    completed,
+    total,
+    percent: total ? Math.round((completed / total) * 100) : 0,
+    active: plan.steps.find((step) => step.status === "active") || null,
+  }
+}
+
 function renderActivity(): void {
-  const visible = operationalEvents()
-  const recent = [...visible].reverse().slice(0, 120)
+  const visible = coalesceActivityEvents(durableSessionEvents())
+  // Durable Session history keeps 200 raw lifecycle events. Since a normal
+  // started/completed pair coalesces into one row, reconnects intentionally
+  // restore roughly 100 tool rows; the larger slice also leaves room for
+  // live-only and semantic Session/Plan events.
+  const recent = [...visible].reverse().slice(0, 200)
   const running = currentRunningEvent()
-  const completed = visible.filter((event) => event.type === "tool.completed").length
-  const failed = visible.filter((event) => event.type === "tool.failed").length
-  const human = visible.filter((event) => event.actor === "human").length
+  const progress = planProgress()
+  const sessionStatus = logicalSession?.status || (config?.sessionId ? "active" : "unattached")
   mainNode().innerHTML = `
-    <section class="view activity-view">
-      <div class="view-toolbar"><div><h2>Operational activity</h2><p>What ChatGPT is doing in LSM, with direct paths to the relevant workspace view.</p></div><div class="toolbar-actions"><button class="button" data-action="activity-ask">${icon("chat")}Ask about latest</button><button class="button" data-action="refresh">${icon("refresh")}Refresh</button></div></div>
-      ${activityFocusCards()}
-      <div class="metric-row">
-        <div><small>Current</small><strong>${running ? escapeHtml(activityIntent(running)) : dashboard?.jobs?.length ? "Background work" : dashboard?.sessions?.length ? "Terminal ready" : "Idle"}</strong><span>${running ? escapeHtml(eventDetail(running) || "running") : dashboard?.jobs?.length ? escapeHtml(String(dashboard.jobs[0]?.name || dashboard.jobs[0]?.job_id || "job")) : dashboard?.sessions?.length ? escapeHtml(String(dashboard.sessions[0]?.name || dashboard.sessions[0]?.session_id || "session")) : "Ready"}</span></div>
-        <div><small>Completed</small><strong>${completed}</strong><span>operations</span></div>
-        <div><small>Failures</small><strong>${failed}</strong><span>${failed ? "needs attention" : "none"}</span></div>
-        <div><small>Human actions</small><strong>${human}</strong><span>interventions</span></div>
+    <section class="view activity-view task-monitor-view">
+      <div class="view-toolbar task-monitor-toolbar"><div><h2>Live task monitor</h2><p>${config?.sessionId ? `Logical Session ${escapeHtml(config.sessionId)}` : "No Logical Session attached yet"}</p></div><div class="toolbar-actions"><button class="button" data-action="activity-ask">${icon("chat")}Ask</button><button class="button" data-action="refresh">${icon("refresh")}Refresh</button></div></div>
+      <div class="task-monitor-grid">
+        <section class="monitor-card session-monitor-card">
+          <div class="monitor-card-head"><span>Session</span><strong class="status-pill ${escapeHtml(sessionStatus)}">${escapeHtml(sessionStatus)}</strong></div>
+          <strong class="monitor-primary">${escapeHtml(logicalSession?.label || logicalSession?.objective || (config?.sessionId ? "Active logical task" : "Standard workspace"))}</strong>
+          <span class="monitor-secondary">${logicalSession?.active_run?.run_id ? `Run ${escapeHtml(logicalSession.active_run.run_id)}` : config?.sessionId ? "Waiting for active run" : "No extra user action required"}</span>
+        </section>
+        <section class="monitor-card operation-monitor-card">
+          <div class="monitor-card-head"><span>Latest operation</span><strong class="live-dot-label"><i class="live-dot ${running ? "busy" : ""}"></i>${running ? "Running" : connected ? "Live" : "Offline"}</strong></div>
+          <strong class="monitor-primary">${escapeHtml(running ? activityIntent(running) : latestCompletedSummary())}</strong>
+          <span class="monitor-secondary">${escapeHtml(running ? eventDetail(running) || "Tool call in progress" : recent[0] ? eventTitle(recent[0]) : "Waiting for activity")}</span>
+        </section>
+        <section class="monitor-card plan-monitor-card">
+          <div class="monitor-card-head"><span>Plan progress</span><strong>${plan ? `${progress.percent}%` : "Standard"}</strong></div>
+          ${plan ? `<div class="progress-track"><span style="width:${progress.percent}%"></span></div><strong class="monitor-primary">${progress.completed}/${progress.total} steps complete</strong><span class="monitor-secondary">${escapeHtml(progress.active?.text || (plan.status === "completed" ? "Plan completed" : plan.status === "blocked" ? "Plan paused" : "No active step"))}</span>` : '<strong class="monitor-primary">No active plan</strong><span class="monitor-secondary">Session tracking remains active without Goal mode.</span>'}
+        </section>
+        ${autoContinueCard()}
       </div>
-      <div class="panel activity-panel">
-        <div class="panel-head"><strong>Timeline</strong><span>${recent.length} recent events</span></div>
-        <div class="timeline">${recent.length ? recent.map(activityRow).join("") : '<div class="empty-state">No execution activity yet. Start a task and this view will follow it.</div>'}</div>
+      <div class="task-monitor-body">
+        <div class="task-context-column">
+          ${sessionProgressPanel()}
+          ${planCard()}
+          ${activityFocusCards()}
+        </div>
+        <section class="panel activity-panel session-activity-panel">
+          <div class="panel-head"><div><strong>Logical Session activity</strong><small>Durable, live execution feed</small></div><span>${recent.length} recent</span></div>
+          <div class="timeline session-timeline">${recent.length ? recent.map(activityRow).join("") : '<div class="empty-state">No execution activity yet. The current task will appear here automatically.</div>'}</div>
+        </section>
       </div>
+    </section>`
+}
+
+function sessionProgressPanel(): string {
+  if (!logicalSession) return ""
+  const progress = logicalSession.progress || {}
+  const findings = progress.findings || []
+  const blockers = progress.blockers || []
+  if (!progress.summary && !progress.next && !findings.length && !blockers.length) return ""
+  return `
+    <section class="panel session-progress-panel">
+      <div class="panel-head"><div><strong>Session checkpoint</strong><small>Semantic progress reported by the active agent</small></div>${progress.updated_at ? `<span>${escapeHtml(formatClock(progress.updated_at))}</span>` : ""}</div>
+      <div class="checkpoint-grid">
+        <div><small>Current</small><strong>${escapeHtml(progress.summary || "No summary yet")}</strong></div>
+        <div><small>Next</small><strong>${escapeHtml(progress.next || "No next action reported")}</strong></div>
+        <div class="${blockers.length ? "has-blocker" : ""}"><small>Blockers</small><strong>${escapeHtml(blockers.length ? blockers.join(" · ") : "None")}</strong></div>
+      </div>
+      ${findings.length ? `<div class="checkpoint-findings"><small>Findings</small>${findings.slice(0, 6).map((item) => `<span>${escapeHtml(item)}</span>`).join("")}</div>` : ""}
+    </section>`
+}
+
+function autoContinueCard(): string {
+  if (!plan) {
+    return `<section class="monitor-card auto-monitor-card" data-role="auto-continue-card"><div class="monitor-card-head"><span>Auto continue</span><strong>Off</strong></div><strong class="monitor-primary">Plan mode inactive</strong><span class="monitor-secondary">No continuation timer is needed.</span></section>`
+  }
+  if (plan.status === "blocked") {
+    return `<section class="monitor-card auto-monitor-card paused" data-role="auto-continue-card"><div class="monitor-card-head"><span>Auto continue</span><strong>Paused</strong></div><strong class="monitor-primary">Waiting for you</strong><span class="monitor-secondary">Automatic continuation is disabled while the plan is paused.</span><button class="button compact-monitor-action" data-action="plan-resume">Resume</button></section>`
+  }
+  if (plan.auto_continue_exhausted) {
+    return `<section class="monitor-card auto-monitor-card paused" data-role="auto-continue-card"><div class="monitor-card-head"><span>Auto continue</span><strong>Stopped</strong></div><strong class="monitor-primary">${plan.continuation_count}/${plan.max_continuations} attempts used</strong><span class="monitor-secondary">The automatic continuation cap has been reached.</span></section>`
+  }
+  if (plan.continuation_pending) {
+    return `<section class="monitor-card auto-monitor-card active" data-role="auto-continue-card"><div class="monitor-card-head"><span>Auto continue</span><strong>Triggering</strong></div><strong class="monitor-primary">Continuation requested</strong><span class="monitor-secondary">Handing the same Logical Session to the next agent run.</span></section>`
+  }
+  if (Number(plan.in_flight_calls || 0) > 0) {
+    return `<section class="monitor-card auto-monitor-card" data-role="auto-continue-card"><div class="monitor-card-head"><span>Auto continue</span><strong>Waiting</strong></div><strong class="monitor-primary">Tool call in progress</strong><span class="monitor-secondary">The idle timer does not trigger while work is still running.</span></section>`
+  }
+  const countdown = continuationCountdownState(plan)
+  if (!countdown.visible) {
+    const untilVisible = Math.max(0, (5 * 60) - countdown.idleSeconds)
+    return `<section class="monitor-card auto-monitor-card" data-role="auto-continue-card"><div class="monitor-card-head"><span>Auto continue</span><strong>Armed</strong></div><strong class="monitor-primary">${plan.continuation_count}/${plan.max_continuations} continuations</strong><span class="monitor-secondary">Countdown appears after 5 min idle${countdown.idleSeconds > 0 ? ` · ${formatCountdown(untilVisible)} until visible` : ""}.</span></section>`
+  }
+  return `<section class="monitor-card auto-monitor-card countdown" data-role="auto-continue-card"><div class="monitor-card-head"><span>Auto continue</span><strong>Countdown</strong></div><strong class="countdown-time">${escapeHtml(formatCountdown(countdown.remainingSeconds))}</strong><div class="countdown-track"><span style="width:${Math.round(countdown.progress * 100)}%"></span></div><span class="monitor-secondary">until automatic continuation · attempt ${plan.continuation_count + 1}/${plan.max_continuations}</span><button class="button compact-monitor-action" data-action="plan-cancel-countdown">Cancel countdown</button></section>`
+}
+
+function refreshAutoContinueCard(): void {
+  if (activeTab !== "activity") return
+  const node = qs<HTMLElement>('[data-role="auto-continue-card"]')
+  if (!node) return
+  const replacement = document.createElement("div")
+  replacement.innerHTML = autoContinueCard()
+  const next = replacement.firstElementChild
+  if (next) node.replaceWith(next)
+}
+
+function planCard(): string {
+  if (!plan || !["active", "blocked"].includes(plan.status)) return ""
+  const progress = planProgress()
+  const status = plan.status === "blocked" ? "Needs you" : plan.continuation_pending ? "Continuing" : "Active"
+  return `
+    <section class="goal-card ${escapeHtml(plan.status)} detailed-plan-card">
+      <div class="goal-head"><div><small>Plan</small><strong>${escapeHtml(plan.objective)}</strong></div><span class="goal-status">${escapeHtml(status)}</span></div>
+      <div class="plan-progress-summary"><div class="progress-track"><span style="width:${progress.percent}%"></span></div><span>${progress.completed}/${progress.total} complete · ${progress.percent}%</span></div>
+      ${plan.note ? `<p class="goal-note">${escapeHtml(plan.note)}</p>` : ""}
+      <div class="plan-steps">${plan.steps.map((step) => `<div class="plan-step ${escapeHtml(step.status)}"><span class="plan-step-mark">${step.status === "completed" ? "✓" : step.status === "skipped" ? "–" : step.status === "active" ? "→" : "○"}</span><div><strong>${escapeHtml(step.text)}</strong>${step.note ? `<small>${escapeHtml(step.note)}</small>` : ""}</div></div>`).join("")}</div>
+      <footer><span>Auto continue ${plan.continuation_count}/${plan.max_continuations}</span><div class="goal-actions">${plan.status === "blocked" ? '<button class="button" data-action="plan-resume">Resume</button>' : '<button class="button" data-action="plan-pause">Pause</button>'}<button class="button danger" data-action="plan-cancel">Cancel plan</button></div></footer>
     </section>`
 }
 
@@ -532,12 +861,12 @@ async function toggleActivityDetail(eventKey: string, callId: string): Promise<v
 }
 
 async function askAboutLatestActivity(): Promise<void> {
-  const recent = operationalEvents().slice(-20)
-  await app.updateModelContext({
+  const recent = durableSessionEvents().slice(-20)
+  await updateHostModelContext({
     content: [{ type: "text", text: `Live Workspace recent operational activity:\n${recent.map((event) => `${formatClock(event.ts)} ${eventTitle(event)} — ${eventDetail(event)}`).join("\n")}` }],
     structuredContent: { liveWorkspaceEvents: recent },
   })
-  await app.sendMessage({ role: "user", content: [{ type: "text", text: "Review the recent Live Workspace activity and tell me what matters, especially any failure, blocker, or next action." }] })
+  await sendHostMessage({ role: "user", content: [{ type: "text", text: "Review the recent Live Workspace activity and tell me what matters, especially any failure, blocker, or next action." }] })
 }
 
 function renderTerminal(): void {
@@ -718,7 +1047,7 @@ function renderFiles(): void {
       <div class="view-toolbar files-toolbar"><div class="path-controls"><label>Machine<select data-role="file-machine">${machineOptions(fileMachine)}</select></label><button class="button" data-action="file-up">Up</button><input data-role="file-path" value="${escapeHtml(filePath)}" aria-label="Path"/></div><div class="toolbar-actions"><button class="button" data-action="file-new">New file</button><button class="button" data-action="file-new-dir">New folder</button><button class="button" data-action="refresh">${icon("refresh")}Refresh</button></div></div>
       <div class="files-grid">
         <section class="panel file-list-panel"><div class="panel-head"><strong>${escapeHtml(fileMachine)}:${escapeHtml(filePath)}</strong><span>${fileEntries.length} entries</span></div><div class="file-list">${fileEntries.length ? fileEntries.map(fileRow).join("") : '<div class="empty-state">Directory is empty.</div>'}</div></section>
-        <section class="panel preview-panel"><div class="panel-head"><div><strong>${escapeHtml(selected?.name || "Preview")}</strong><span>${selected ? `${escapeHtml(selected.type)} · ${formatBytes(selected.size)}` : "Choose a file"}</span></div><div class="preview-actions">${selected?.type === "file" ? `<button class="text-button" data-action="file-context">Send context</button><button class="text-button" data-action="file-ask">Ask ChatGPT</button><button class="text-button" data-action="file-edit">Edit</button><button class="text-button danger" data-action="file-delete">Delete</button>` : ""}</div></div><div class="file-preview" data-role="file-preview">${renderFilePreview()}</div></section>
+        <section class="panel preview-panel"><div class="panel-head"><div><strong>${escapeHtml(selected?.name || "Preview")}</strong><span>${selected ? `${escapeHtml(selected.type)} · ${formatBytes(selected.size)}` : "Choose a file"}</span></div><div class="preview-actions">${selected?.type === "file" ? `${isDshHost ? "" : '<button class="text-button" data-action="file-context">Send context</button>'}<button class="text-button" data-action="file-ask">${isDshHost ? "Ask DSH" : "Ask ChatGPT"}</button><button class="text-button" data-action="file-edit">Edit</button><button class="text-button danger" data-action="file-delete">Delete</button>` : ""}</div></div><div class="file-preview" data-role="file-preview">${renderFilePreview()}</div></section>
       </div>
     </section>`
   wireFileControls()
@@ -859,16 +1188,16 @@ async function shareSelectedFile(ask: boolean): Promise<void> {
   const content = await api<JsonRecord>(`/api/ui/files/content?machine=${encodeURIComponent(requestMachine)}&path=${encodeURIComponent(requestPath)}`)
   if (fileMachine !== requestMachine || selectedFile !== requestPath) return
   const text = truncateContext(String(content.content || ""))
-  await app.updateModelContext({ content: [{ type: "text", text: `Selected file ${requestMachine}:${requestPath}:\n\n${text}` }], structuredContent: { selectedFile: { machine: requestMachine, path: requestPath, sha256: content.sha256 } } })
+  await updateHostModelContext({ content: [{ type: "text", text: `Selected file ${requestMachine}:${requestPath}:\n\n${text}` }], structuredContent: { selectedFile: { machine: requestMachine, path: requestPath, sha256: content.sha256 } } })
   notify("Selected file added to model context", "success")
-  if (ask) await app.sendMessage({ role: "user", content: [{ type: "text", text: `Inspect the selected file ${requestPath} in Live Workspace. Explain anything important and suggest or make the next appropriate change.` }] })
+  if (ask) await sendHostMessage({ role: "user", content: [{ type: "text", text: `Inspect the selected file ${requestPath} in Live Workspace. Explain anything important and suggest or make the next appropriate change.` }] })
 }
 
 function renderDiff(): void {
   const status = gitSnapshot ? String(gitSnapshot.status.stdout || gitSnapshot.status.stderr || "") : ""
   const diff = gitSnapshot ? String(gitSnapshot.diff.stdout || gitSnapshot.diff.stderr || "") : ""
   mainNode().innerHTML = `
-    <section class="view diff-view"><div class="view-toolbar"><div><h2>Working tree diff</h2><p>${escapeHtml(gitSnapshot?.machine || diffMachine)}:${escapeHtml(gitSnapshot?.cwd || diffCwd)} · unstaged and staged changes</p></div><div class="toolbar-actions"><button class="button" data-action="diff-context">Send context</button><button class="button" data-action="diff-ask">${icon("chat")}Ask for review</button><button class="button" data-action="refresh">${icon("refresh")}Refresh</button></div></div>
+    <section class="view diff-view"><div class="view-toolbar"><div><h2>Working tree diff</h2><p>${escapeHtml(gitSnapshot?.machine || diffMachine)}:${escapeHtml(gitSnapshot?.cwd || diffCwd)} · unstaged and staged changes</p></div><div class="toolbar-actions">${isDshHost ? "" : '<button class="button" data-action="diff-context">Send context</button>'}<button class="button" data-action="diff-ask">${icon("chat")}Ask for review</button><button class="button" data-action="refresh">${icon("refresh")}Refresh</button></div></div>
       <div class="diff-layout"><section class="panel status-panel"><div class="panel-head"><strong>Git status</strong><span>${escapeHtml(gitSnapshot?.cwd || diffCwd)}</span></div><pre>${escapeHtml(status || "Clean")}</pre></section><section class="panel diff-panel"><div class="panel-head"><strong>Changes</strong><span>${diff ? `${diff.split("\n").length} lines` : "clean"}</span></div><div class="diff-code">${gitSnapshot ? renderDiffHtml(diff) : '<div class="loading small"><span></span>Loading diff…</div>'}</div></section></div>
     </section>`
 }
@@ -888,9 +1217,9 @@ async function shareDiff(ask: boolean): Promise<void> {
   if (!gitSnapshot) await refreshDiff()
   const status = String(gitSnapshot?.status.stdout || "")
   const diff = truncateContext(String(gitSnapshot?.diff.stdout || ""), 28_000)
-  await app.updateModelContext({ content: [{ type: "text", text: `Live Workspace git status (${gitSnapshot?.machine || diffMachine}):\n${status}\n\nDiff:\n${diff}` }], structuredContent: { git: { machine: gitSnapshot?.machine || diffMachine, cwd: gitSnapshot?.cwd || diffCwd, status } } })
+  await updateHostModelContext({ content: [{ type: "text", text: `Live Workspace git status (${gitSnapshot?.machine || diffMachine}):\n${status}\n\nDiff:\n${diff}` }], structuredContent: { git: { machine: gitSnapshot?.machine || diffMachine, cwd: gitSnapshot?.cwd || diffCwd, status } } })
   notify("Diff added to model context", "success")
-  if (ask) await app.sendMessage({ role: "user", content: [{ type: "text", text: "Review the current Live Workspace git diff. Identify correctness risks, regressions, missing tests, and concrete improvements. Make fixes when appropriate." }] })
+  if (ask) await sendHostMessage({ role: "user", content: [{ type: "text", text: "Review the current Live Workspace git diff. Identify correctness risks, regressions, missing tests, and concrete improvements. Make fixes when appropriate." }] })
 }
 
 function renderJobs(): void {
@@ -1079,8 +1408,8 @@ async function askAboutAudit(id: string): Promise<void> {
   if (!entry) return
   let detail: unknown = entry
   try { detail = await api(`/api/ui/audit/detail?id=${encodeURIComponent(id)}`) } catch { /* preview is enough */ }
-  await app.updateModelContext({ content: [{ type: "text", text: `Selected local-shell-mcp audit entry:\n${truncateContext(JSON.stringify(detail, null, 2), 20_000)}` }], structuredContent: { auditEntryId: id } })
-  await app.sendMessage({ role: "user", content: [{ type: "text", text: "Explain the selected Live Workspace audit entry, whether it indicates a problem, and what I should do next." }] })
+  await updateHostModelContext({ content: [{ type: "text", text: `Selected local-shell-mcp audit entry:\n${truncateContext(JSON.stringify(detail, null, 2), 20_000)}` }], structuredContent: { auditEntryId: id } })
+  await sendHostMessage({ role: "user", content: [{ type: "text", text: "Explain the selected Live Workspace audit entry, whether it indicates a problem, and what I should do next." }] })
 }
 
 async function refreshJobs(): Promise<void> {
@@ -1212,9 +1541,30 @@ function mergeEvents(incoming: LiveEvent[]): void {
   if (activeTab === "activity") renderActivity()
 }
 
+function resetActivityForSessionBoundary(): void {
+  events = []
+  activityExpandedEventKey = ""
+  activityAuditDetails.clear()
+  activityDetailRevision += 1
+}
+
+function applyLogicalSessionId(value: string | null | undefined): boolean {
+  const nextSessionId = String(value ?? "")
+  const changed = Boolean(config && config.sessionId !== nextSessionId)
+  if (changed) {
+    continuationClaimId = ""
+    resetActivityForSessionBoundary()
+  }
+  if (config) config.sessionId = nextSessionId
+  return changed
+}
+
 async function loadSnapshot(generation: number): Promise<boolean> {
-  const payload = await api<{ channel: JsonRecord; events: LiveEvent[] }>("/api/live/snapshot")
+  const payload = await api<{ channel: JsonRecord & { plan?: PlanState | null; session?: LogicalSessionState | null; session_id?: string | null }; events: LiveEvent[] }>("/api/live/snapshot")
   if (generation !== pollGeneration) return false
+  applyLogicalSessionId(payload.channel.session_id)
+  plan = payload.channel.plan || null
+  logicalSession = payload.channel.session || null
   activityAuditDetails.clear()
   activityDetailRevision += 1
   events = payload.events || []
@@ -1228,14 +1578,120 @@ async function loadSnapshot(generation: number): Promise<boolean> {
 
 async function pollEvents(generation: number): Promise<void> {
   while (!shuttingDown && config && generation === pollGeneration) {
-    const payload = await api<{ events: LiveEvent[]; cursor: number }>(`/api/live/events?after=${cursor}&timeout=25`)
+    const payload = await api<{ events: LiveEvent[]; cursor: number; plan?: PlanState | null; session?: LogicalSessionState | null; session_id?: string | null }>(`/api/live/events?after=${cursor}&timeout=25`)
     if (generation !== pollGeneration) return
+    const nextPlan = payload.plan || null
+    observeContinuationPlan(nextPlan)
+    applyLogicalSessionId(payload.session_id)
+    plan = nextPlan
+    logicalSession = payload.session || null
     mergeEvents(payload.events || [])
     cursor = Math.max(cursor, Number(payload.cursor || 0))
     connected = true
     connectionMessage = "Live"
     updateChrome()
     if (payload.events?.some((event) => ["tool.completed", "tool.failed", "human.action"].includes(event.type)) && Date.now() - lastPassiveRefresh > 1500) void refreshAllCore()
+  }
+}
+
+async function checkPlanContinuation(): Promise<void> {
+  if (!config || continuationChecking) return
+  continuationChecking = true
+  try {
+    const requestedClaimId = continuationClaimId || `c_${crypto.randomUUID().replaceAll("-", "")}`
+    continuationClaimId = requestedClaimId
+    const claim = await api<{ claimed: boolean; claim_id?: string | null; plan?: PlanState | null; recent_events?: LiveEvent[]; continuation_count?: number; session_id?: string | null }>("/api/live/plan/continuation", {
+      method: "POST",
+      body: JSON.stringify({ action: "claim", claim_id: requestedClaimId }),
+    })
+    plan = claim.plan || plan
+    if (!claim.claimed || !plan) {
+      continuationClaimId = ""
+      if (activeTab === "activity") renderActivity()
+      return
+    }
+
+    const recent = claim.recent_events || []
+    const sessionId = String(claim.session_id || config.sessionId || "")
+    if (sessionId) config.sessionId = sessionId
+    const attempt = Number(claim.continuation_count || plan.continuation_count + 1)
+    const claimId = String(claim.claim_id || requestedClaimId)
+    if (!claimId) throw new Error("Continuation claim did not include an identifier")
+    continuationClaimId = claimId
+    const checkpoint = {
+      sessionId,
+      objective: plan.objective,
+      status: plan.status,
+      steps: plan.steps,
+      continuation: `${attempt}/${plan.max_continuations}`,
+      recentActivity: recent,
+    }
+    let accepted = false
+    let error = ""
+    let validated = false
+    try {
+      await updateHostModelContext({
+        content: [{ type: "text", text: `Active local-shell-mcp Goal checkpoint:\n${truncateContext(JSON.stringify(checkpoint, null, 2), 20_000)}` }],
+        structuredContent: { localShellMcpSessionId: sessionId, localShellMcpPlan: plan, localShellMcpRecentActivity: recent },
+      })
+      const validation = await api<{ valid: boolean; plan?: PlanState | null }>("/api/live/plan/continuation", {
+        method: "POST",
+        body: JSON.stringify({ action: "validate", claim_id: claimId }),
+      })
+      plan = validation.plan || plan
+      if (!validation.valid) {
+        continuationClaimId = ""
+        if (activeTab === "activity") renderActivity()
+        return
+      }
+      validated = true
+      const dispatch: ContinuationDispatch = {
+        claimId,
+        validatedAgentActivity: Number(plan.last_agent_activity),
+        controller: new AbortController(),
+        invalidationReason: "",
+      }
+      continuationDispatch = dispatch
+      const dispatchWatcher = watchContinuationDispatch(dispatch)
+      const resumeInstruction = !isDshHost && sessionId
+        ? `First call session_manage(action="resume", session_id="${sessionId}", takeover=true) so this agent run inherits the durable task context. `
+        : ""
+      try {
+        const response = await sendHostMessage({
+          role: "user",
+          content: [{ type: "text", text: `${resumeInstruction}Continue working on the active plan from its current state. Do not repeat completed steps. Keep working autonomously and keep the Session progress and Plan synchronized with execution: report meaningful checkpoints with session_manage(action="report", ...); use plan_manage(action="update") whenever step status or the execution plan changes; when every step is completed or skipped, call plan_manage(action="finish") before ending the turn; if you genuinely cannot continue without user input or an external condition, call plan_manage(action="block", note=...) and report the blocker before ending the turn.` }],
+        }, { signal: dispatch.controller.signal })
+        const result = response as unknown as JsonRecord
+        accepted = result?.isError !== true
+        if (!accepted) error = String(result?.message || "Host rejected the continuation message")
+      } finally {
+        if (dispatch.invalidationReason) error = dispatch.invalidationReason
+        if (continuationDispatch === dispatch) continuationDispatch = null
+        dispatch.controller.abort()
+        await dispatchWatcher
+      }
+    } catch (sendError) {
+      error = error || (sendError instanceof Error ? sendError.message : String(sendError))
+    }
+
+    try {
+      const report = await api<{ plan: PlanState }>("/api/live/plan/continuation", {
+        method: "POST",
+        body: JSON.stringify({ action: "report", claim_id: claimId, accepted, error: error || null }),
+      })
+      plan = report.plan
+      continuationClaimId = ""
+    } catch (reportError) {
+      if (validated) continuationClaimId = ""
+      console.warn("Unable to report plan continuation result", reportError)
+    }
+    if (accepted) notify(`Goal continuation ${plan?.continuation_count || attempt}/${plan?.max_continuations || ""} sent`, "success")
+    else if (error) console.warn("Goal continuation was not accepted", error)
+    if (activeTab === "activity") renderActivity()
+  } catch (error) {
+    console.warn("Goal continuation check failed", error)
+  } finally {
+    continuationChecking = false
   }
 }
 
@@ -1254,6 +1710,7 @@ async function runConnectionLoop(generation: number): Promise<void> {
       if (generation !== pollGeneration) return
       attempt = 0
       announcedRetry = false
+      void checkPlanContinuation()
       await pollEvents(generation)
       return
     } catch (caught) {
@@ -1262,7 +1719,12 @@ async function runConnectionLoop(generation: number): Promise<void> {
       if (isLiveCredentialError(error)) {
         const stale = config
         try {
-          await refreshLiveCredentials({ machine: stale.machine, cwd: stale.cwd, live_id: stale.liveId }, true)
+          await refreshLiveCredentials({
+            machine: stale.machine,
+            cwd: stale.cwd,
+            live_id: stale.liveId,
+            ...(stale.sessionId ? { session_id: stale.sessionId } : {}),
+          }, true)
           return
         } catch (credentialError) {
           error = credentialError
@@ -1290,18 +1752,20 @@ function activateLiveConfig(nextConfig: LiveConfig): void {
     && config.token === nextConfig.token
     && config.apiBase === nextConfig.apiBase
     && config.liveId === nextConfig.liveId
+    && config.sessionId === nextConfig.sessionId
     && config.machine === nextConfig.machine
     && config.cwd === nextConfig.cwd
   ) return
   const channelChanged = !config || config.liveId !== nextConfig.liveId
+  const sessionChanged = !config || config.sessionId !== nextConfig.sessionId
   const targetChanged = !config || config.machine !== nextConfig.machine || config.cwd !== nextConfig.cwd
-  if (channelChanged) {
-    events = []
-    cursor = 0
+  if (sessionChanged) continuationClaimId = ""
+  if (channelChanged || sessionChanged) {
+    resetActivityForSessionBoundary()
+    if (channelChanged) cursor = 0
     connected = false
-    activityExpandedEventKey = ""
-    activityAuditDetails.clear()
-    activityDetailRevision += 1
+    plan = null
+    logicalSession = null
   }
   if (targetChanged) resetWorkspaceTarget(nextConfig.machine, nextConfig.cwd)
   config = nextConfig
@@ -1314,13 +1778,61 @@ function activateLiveConfig(nextConfig: LiveConfig): void {
 
 const credentialRefreshes = new Map<string, Promise<void>>()
 
-async function requestLiveConfig(structured: JsonRecord, allowCreate: boolean): Promise<LiveConfig> {
+async function requestDshLiveConfig(structured: JsonRecord, allowCreate: boolean): Promise<LiveConfig> {
+  if (!dshBootstrap) throw new Error("DSH Live Workspace bridge is unavailable")
   const machine = String(structured.machine || "local")
   const cwd = String(structured.cwd || ".")
   const liveId = String(structured.live_id || "")
+  const sessionId = String(structured.session_id || config?.sessionId || "")
+  const invoke = async (id: string): Promise<LiveConfig> => {
+    const url = new URL(dshBootstrap.configEndpoint, window.location.origin)
+    url.searchParams.set("session", dshBootstrap.sessionId)
+    url.searchParams.set("machine", machine)
+    url.searchParams.set("cwd", cwd)
+    if (id) url.searchParams.set("live_id", id)
+    if (sessionId) url.searchParams.set("session_id", sessionId)
+    const response = await fetch(url, { credentials: "same-origin", cache: "no-store" })
+    const payload = await response.json() as { ok?: boolean; data?: JsonRecord; message?: string }
+    if (!response.ok || payload.ok === false || !payload.data) {
+      throw new Error(String(payload.message || `DSH Live Workspace bridge returned HTTP ${response.status}`))
+    }
+    const data = payload.data
+    const resolved: LiveConfig = {
+      token: String(data.token || ""),
+      apiBase: String(data.apiBase || ""),
+      uiPath: String(data.uiPath || "/ui"),
+      liveId: String(data.liveId || ""),
+      sessionId: String(data.sessionId || ""),
+      machine: String(data.machine || machine),
+      cwd: String(data.cwd || cwd),
+    }
+    if (!resolved.token || !resolved.apiBase) {
+      throw new Error("DSH omitted Live Workspace credentials")
+    }
+    return resolved
+  }
+  try {
+    return await invoke(liveId)
+  } catch (error) {
+    if (!allowCreate || !liveId) throw error
+    return await invoke("")
+  }
+}
+
+async function requestLiveConfig(structured: JsonRecord, allowCreate: boolean): Promise<LiveConfig> {
+  if (isDshHost) return await requestDshLiveConfig(structured, allowCreate)
+  const machine = String(structured.machine || "local")
+  const cwd = String(structured.cwd || ".")
+  const liveId = String(structured.live_id || "")
+  const sessionId = String(structured.session_id || config?.sessionId || "")
   const invoke = (id: string) => app.callServerTool({
     name: "live_workspace_reconnect",
-    arguments: id ? { machine, cwd, live_id: id } : { machine, cwd },
+    arguments: {
+      machine,
+      cwd,
+      ...(id ? { live_id: id } : {}),
+      ...(sessionId ? { session_id: sessionId } : {}),
+    },
   })
   const response = await invoke(liveId)
   let resolvedResponse = response
@@ -1345,6 +1857,7 @@ async function requestLiveConfig(structured: JsonRecord, allowCreate: boolean): 
     apiBase,
     uiPath: String(hidden?.uiPath || responseStructured.ui_path || structured.ui_path || "/ui"),
     liveId: String(hidden?.liveId || responseStructured.live_id || structured.live_id || ""),
+    sessionId: String(responseStructured.session_id || structured.session_id || ""),
     machine: String(responseStructured.machine || machine),
     cwd: String(responseStructured.cwd || cwd),
   }
@@ -1354,7 +1867,8 @@ function refreshLiveCredentials(structured: JsonRecord, allowCreate = false): Pr
   const machine = String(structured.machine || "local")
   const cwd = String(structured.cwd || ".")
   const liveId = String(structured.live_id || "")
-  const key = `${liveId}\u0000${machine}\u0000${cwd}\u0000${allowCreate ? "create" : "reattach"}`
+  const sessionId = String(structured.session_id || config?.sessionId || "")
+  const key = `${liveId}\u0000${sessionId}\u0000${machine}\u0000${cwd}\u0000${allowCreate ? "create" : "reattach"}`
   const existing = credentialRefreshes.get(key)
   if (existing) return existing
   const refresh = (async () => {
@@ -1419,12 +1933,19 @@ async function configureFromToolResult(result: unknown): Promise<void> {
     apiBase,
     uiPath: String(hidden?.uiPath || structured.ui_path || "/ui"),
     liveId: String(hidden?.liveId || structured.live_id || ""),
+    sessionId: String(structured.session_id || ""),
     machine: String(structured.machine || "local"),
     cwd: String(structured.cwd || "."),
   })
 }
 
 async function enterPreferredDisplayMode(): Promise<void> {
+  if (isDshHost) {
+    displayMode = "fullscreen"
+    document.documentElement.dataset.displayMode = displayMode
+    updateChrome()
+    return
+  }
   const context = app.getHostContext()
   const available = context?.availableDisplayModes || []
   if (available.includes("pip")) {
@@ -1513,14 +2034,29 @@ app.onhostcontextchanged = (context) => applyHostContext(context)
 function stopLiveWorkspace(): void {
   if (shuttingDown) return
   shuttingDown = true
+  abortContinuationDispatch("Live Workspace closed during continuation dispatch")
   pollGeneration += 1
   config = null
   connected = false
   destroyTerminal()
   window.removeEventListener("openai:set_globals", onOpenAiGlobalsChanged)
+  window.removeEventListener("message", onDshPromptResult)
+  for (const [requestId, waiter] of dshPromptWaiters) {
+    dshPromptWaiters.delete(requestId)
+    window.clearTimeout(waiter.timer)
+    waiter.reject(new Error("Live Workspace closed before DSH accepted the message"))
+  }
   if (passiveRefreshTimer !== null) {
     window.clearInterval(passiveRefreshTimer)
     passiveRefreshTimer = null
+  }
+  if (planContinuationTimer !== null) {
+    window.clearInterval(planContinuationTimer)
+    planContinuationTimer = null
+  }
+  if (countdownRenderTimer !== null) {
+    window.clearInterval(countdownRenderTimer)
+    countdownRenderTimer = null
   }
 }
 
@@ -1529,12 +2065,20 @@ app.onteardown = async () => {
   return {}
 }
 
-window.addEventListener("openai:set_globals", onOpenAiGlobalsChanged)
+if (isDshHost) window.addEventListener("message", onDshPromptResult)
+else window.addEventListener("openai:set_globals", onOpenAiGlobalsChanged)
 
 shell()
 
 void (async () => {
   try {
+    if (isDshHost) {
+      bridgeReady = true
+      applyHostContext(currentHostContext())
+      await enterPreferredDisplayMode()
+      if (!shuttingDown) await recoverCredentialsForever({})
+      return
+    }
     await app.connect()
     if (shuttingDown) return
     bridgeReady = true
@@ -1558,7 +2102,18 @@ passiveRefreshTimer = window.setInterval(() => {
   if (!shuttingDown && config && Date.now() - lastPassiveRefresh > 6_000) void refreshAllCore()
 }, 6_000)
 
+planContinuationTimer = window.setInterval(() => {
+  if (!shuttingDown && config) void checkPlanContinuation()
+}, 30_000)
+
+countdownRenderTimer = window.setInterval(() => {
+  if (shuttingDown || !config || activeTab !== "activity") return
+  refreshAutoContinueCard()
+  const countdown = continuationCountdownState(plan)
+  if (countdown.visible && countdown.remainingSeconds <= 0) void checkPlanContinuation()
+}, 1_000)
+
 window.addEventListener("beforeunload", () => {
   stopLiveWorkspace()
-  void app.close()
+  if (!isDshHost) void app.close()
 })

@@ -56,8 +56,6 @@ _POSITIVE_INTEGER_SETTINGS = (
     "max_skill_path_bytes",
     "max_read_many_files",
     "max_read_many_total_bytes",
-    "max_todos",
-    "max_todo_bytes",
     "max_http_request_bytes",
     "max_job_log_bytes",
     "max_audit_tail_bytes",
@@ -354,8 +352,6 @@ if _PYDANTIC_AVAILABLE:
         max_skill_path_bytes: int = 200_000
         max_read_many_files: int = 100
         max_read_many_total_bytes: int = 5_000_000
-        max_todos: int = 1_000
-        max_todo_bytes: int = 1_000_000
         max_http_request_bytes: int = 16_000_000
         max_job_log_bytes: int = 10_000_000
         max_jobs: int = 1_000
@@ -585,8 +581,6 @@ else:
         max_skill_path_bytes: int = 200_000
         max_read_many_files: int = 100
         max_read_many_total_bytes: int = 5_000_000
-        max_todos: int = 1_000
-        max_todo_bytes: int = 1_000_000
         max_http_request_bytes: int = 16_000_000
         max_job_log_bytes: int = 10_000_000
         max_jobs: int = 1_000

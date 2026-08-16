@@ -1,6 +1,6 @@
 # REST API
 
-主要接口是 `/mcp` 上的 MCP。同時也提供 REST 面，用於健康檢查、文件鏈接、連接器式 search / fetch，以及部分工具調用。
+主要接口是 `/mcp` 上的 MCP。同時也提供 REST 面，用於健康檢查、文件鏈接和部分服務操作。
 
 ## 健康檢查
 
@@ -17,17 +17,6 @@ POST /mcp
 ```
 
 ChatGPT 和其它 MCP 客戶端使用的 streamable HTTP MCP 端點。
-
-## 連接器發現
-
-只讀連接器式操作：
-
-```text
-search
-fetch
-```
-
-這些操作用於常規 ChatGPT 連接器行爲，不暴露完整 coding-agent 工具面。
 
 ## 通過 REST 調用工具
 

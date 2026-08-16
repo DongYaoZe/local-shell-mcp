@@ -5,7 +5,7 @@ import { createImageAddon } from "./image-support"
 import { browserSelectionShortcut, browserShortcutSequence } from "./keyboard"
 import { measureTerminalCellAspect } from "./terminal-geometry"
 import { TerminalWriteBuffer, type TerminalWriteChunk } from "./terminal-write-buffer"
-import { todoTitle, visibleWorkloadCount } from "./web-data"
+import { visibleWorkloadCount } from "./web-data"
 import { hashForView, interfaceModeForView, oauthReturnView, viewFromHash, type WebViewName } from "./web-mode"
 import { createNativePage, isNativeView, type NativePageController, type NoticeTone } from "./web-native"
 import type { Machine as UiMachine } from "./types"
@@ -57,12 +57,9 @@ type Activity = {
   title?: string
   detail?: string
 }
-type Todo = Record<string, unknown>
-
 type BootstrapData = {
   version?: Record<string, unknown>
   machines?: { machines?: Machine[]; counts?: Record<string, number> }
-  todos?: { revision?: number; todos?: Todo[] }
   features?: Record<string, unknown>
 }
 
@@ -79,7 +76,6 @@ type DashboardData = {
   alerts?: Alert[]
   activity?: Activity[]
   audit_total_24h?: number
-  todo_counts?: { total?: number; open?: number }
 }
 
 const UI_PATH = (window.__LSM_UI_CONFIG__?.uiPath || "/ui").replace(/\/$/, "")
@@ -106,7 +102,6 @@ const interfaceButtons = Array.from(document.querySelectorAll<HTMLButtonElement>
 const updatedAt = document.querySelector<HTMLElement>("#updated-at")!
 const machineNavCount = document.querySelector<HTMLElement>("#machine-nav-count")!
 const workloadNavCount = document.querySelector<HTMLElement>("#workload-nav-count")!
-const todoNavCount = document.querySelector<HTMLElement>("#todo-nav-count")!
 const controllerStatus = document.querySelector<HTMLElement>("#controller-status")!
 const controllerUptime = document.querySelector<HTMLElement>("#controller-uptime")!
 const controllerVersion = document.querySelector<HTMLElement>("#controller-version")!
@@ -561,7 +556,6 @@ function overviewTemplate(data: DashboardData): string {
   const activeJobs = data.jobs?.length || 0
   const sessions = data.session_count ?? data.sessions?.length ?? 0
   const activeWorkloads = visibleWorkloadCount(data)
-  const openTodos = data.todo_counts?.open || 0
   const version = versionLabel(data.version)
   pushMetric(metricHistory.cpu, system.cpu_percent, 0)
   pushMetric(metricHistory.memory, system.memory_percent, 3)
@@ -580,7 +574,7 @@ function overviewTemplate(data: DashboardData): string {
   </section>
   <section class="dashboard-grid">
     <article class="panel machines-panel"><div class="panel-header"><div><h3>Machines</h3><p>Controller and connected remote workers</p></div><button class="text-button" type="button" data-view="remotes">Manage remotes →</button></div>${machineTable(data)}</article>
-    <article class="panel attention-panel"><div class="panel-header compact"><div><h3>Needs attention</h3><p>Alerts and open todos</p></div><span class="count-badge">${alerts.length + openTodos}</span></div><div class="attention-list">${alertItems(alerts)}</div><button class="full-width-link" type="button" data-view="activity">View all alerts</button></article>
+    <article class="panel attention-panel"><div class="panel-header compact"><div><h3>Needs attention</h3><p>Controller and worker alerts</p></div><span class="count-badge">${alerts.length}</span></div><div class="attention-list">${alertItems(alerts)}</div><button class="full-width-link" type="button" data-view="activity">View all alerts</button></article>
   </section>
   <section class="dashboard-grid lower-grid">
     <article class="panel workloads-panel"><div class="panel-header"><div><h3>Active workloads</h3><p>Tracked jobs and persistent shell sessions</p></div><button class="text-button" type="button" data-view="workloads">View all →</button></div><div class="workload-list">${workloadRows(data)}</div><button class="full-width-link" type="button" data-view="workloads">Manage ${activeWorkloads} active workloads</button></article>
@@ -606,17 +600,6 @@ function activityTemplate(data: DashboardData): string {
   return `<section class="page-stack"><article class="panel"><div class="panel-header"><div><h3>Alerts</h3><p>Conditions reported by the controller and workers</p></div><span class="count-badge">${alerts.length}</span></div><div class="alert-list-full">${alertCards}</div></article><article class="panel page-panel"><div class="panel-header"><div><h3>Recent MCP activity</h3><p>${data.audit_total_24h || 0} calls matched in the last 24 hours</p></div><button class="text-button" type="button" data-view="audit">Open audit →</button></div><div class="activity-list">${activityRows(data.activity || [], 100)}</div></article></section>`
 }
 
-function todosTemplate(data: BootstrapData | null): string {
-  const todos = data?.todos?.todos || []
-  const rows = todos.length ? todos.map((todo) => {
-    const status = stringValue(todo.status, "open")
-    const priority = stringValue(todo.priority, "normal")
-    const title = todoTitle(todo)
-    const detail = stringValue(todo.description) || stringValue(todo.notes) || status
-    return `<div class="todo-row ${status === "completed" ? "completed" : ""}"><div class="todo-check">${status === "completed" ? ICONS.check : '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/></svg>'}</div><div><strong>${escapeHtml(title)}</strong><small>${escapeHtml(detail)}</small></div><span class="priority-chip ${priority === "high" ? "high" : ""}">${escapeHtml(priority)}</span></div>`
-  }).join("") : '<div class="empty-state">No todos have been created.</div>'
-  return `<section class="page-stack"><article class="panel page-panel"><div class="panel-header"><div><h3>Todos</h3><p>Persistent operational notes shared with MCP</p></div><span class="count-badge">${todos.length}</span></div><div class="todo-list">${rows}</div></article></section>`
-}
 
 const PAGE_COPY: Record<Exclude<WebViewName, "console">, { name: string; title: string; description: string }> = {
   overview: { name: "Overview", title: "Control plane overview", description: "System health across your local and remote machines." },
@@ -624,7 +607,6 @@ const PAGE_COPY: Record<Exclude<WebViewName, "console">, { name: string; title: 
   terminals: { name: "Terminals", title: "Persistent terminals", description: "Low-latency interactive shells with session, machine, and mobile controls." },
   remotes: { name: "Remotes", title: "Remote workers", description: "Create invitations and manage persistent remote worker identities." },
   audit: { name: "Audit", title: "Audit records", description: "Filter MCP calls and inspect call results and inputs in a TUI-aligned layout." },
-  todos: { name: "Todos", title: "Operational todos", description: "Create and update persistent tasks shared between operators and MCP." },
   workloads: { name: "Workloads", title: "Active workloads", description: "Inspect all tracked jobs and persistent shell sessions." },
   activity: { name: "Activity", title: "Alerts and activity", description: "Review all active alerts and recent MCP activity." },
 }
@@ -731,7 +713,6 @@ function syncChrome(data: DashboardData): void {
   const activeWorkloadCount = visibleWorkloadCount(data)
   machineNavCount.textContent = String(remoteMachineCount)
   workloadNavCount.textContent = String(activeWorkloadCount)
-  todoNavCount.textContent = String(data.todo_counts?.open || 0)
   const version = versionLabel(data.version)
   controllerVersion.textContent = version
   controllerOrigin.textContent = location.host

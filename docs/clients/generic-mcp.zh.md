@@ -50,18 +50,12 @@ LOCAL_SHELL_MCP_WORKSPACE_ROOT=/path/to/workspace local-shell-mcp --mode stdio
 
 不同客户端 schema 不完全相同。有些叫 `mcpServers`，也有些使用其它名称。
 
-## 连接器式 search / fetch
-
-服务也暴露只读的连接器式 `search` 和 `fetch` 工具。它们适合基本文件发现，但不能替代完整 MCP 工具面。
-
-使用 `/mcp` 才能获得完整的 shell、文件系统、Git、浏览器、文件链接和远程 worker 工具。
-
 ## 第一次安全检查
 
 新客户端连接后，先执行：
 
 ```text
-调用 environment_info，然后对工作区根目录调用 tree_view。暂时不要修改文件。
+调用 environment_get，然后对工作区根目录调用 file_tree。暂时不要修改文件。
 ```
 
 之后再运行带有明确编辑、测试和 Git 规则的有边界任务。

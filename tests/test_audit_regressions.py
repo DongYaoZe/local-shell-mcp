@@ -20,7 +20,6 @@ import local_shell_mcp.jobs as jobs_module
 import local_shell_mcp.playwright_ops as playwright_module
 import local_shell_mcp.remote as remote_module
 import local_shell_mcp.tools as tools_module
-from local_shell_mcp.auth import required_scopes_for_http_tool
 from local_shell_mcp.fs_ops import edit_text, resolve_path
 from local_shell_mcp.http_app import build_http_app
 from local_shell_mcp.models import CommandResult
@@ -314,7 +313,7 @@ async def test_mcp_mutation_does_not_return_before_thread_finishes(tmp_path, mon
 
     monkeypatch.setattr(tools_module, "write_text", delayed_write)
     response = await build_mcp().call_tool(
-        "write_file", {"path": "target.txt", "content": "done"}
+        "file_write", {"path": "target.txt", "content": "done"}
     )
     payload = json.loads(response[0][0].text)
     assert payload["data"]["path"] == "target.txt"
@@ -380,7 +379,7 @@ async def test_python_and_playwright_tools_honor_configured_interpreter_and_clea
     assert not stale.exists()
 
 
-def test_rest_validation_readiness_and_todo_scope(tmp_path, monkeypatch):
+def test_rest_validation_and_readiness(tmp_path, monkeypatch):
     _configure_workspace(tmp_path, monkeypatch)
     client = TestClient(build_http_app())
 
@@ -400,11 +399,6 @@ def test_rest_validation_readiness_and_todo_scope(tmp_path, monkeypatch):
     assert invalid_integer.status_code == 400
     assert invalid_integer.json()["error"] == "validation_error"
 
-    assert required_scopes_for_http_tool("/tools/todo", "GET") == ("shell:read",)
-    assert required_scopes_for_http_tool("/tools/todo", "POST") == (
-        "shell:read",
-        "shell:write",
-    )
 
 
 def test_secret_scan_fallback_respects_gitignore(tmp_path, monkeypatch):
@@ -421,24 +415,6 @@ def test_secret_scan_fallback_respects_gitignore(tmp_path, monkeypatch):
 
     findings = tools_module._secret_scan_sync(".", None, 20)["findings"]
     assert {item["path"] for item in findings} == {"visible.txt"}
-
-
-@pytest.mark.asyncio
-async def test_fetch_reports_truncation_and_encoded_actual_file_uri(tmp_path, monkeypatch):
-    _configure_workspace(tmp_path, monkeypatch)
-    monkeypatch.setenv("LOCAL_SHELL_MCP_MAX_FILE_READ_BYTES", "5")
-    get_settings.cache_clear()
-    path = tmp_path / "a b#c.txt"
-    path.write_text("0123456789", encoding="utf-8")
-
-    response = await build_mcp().call_tool("fetch", {"id": "a b#c.txt"})
-    payload = json.loads(response[0][0].text)
-    assert payload["text"] == "01234"
-    assert payload["metadata"]["truncated"] is True
-    assert payload["metadata"]["truncated_bytes"] == 5
-    assert "%20" in payload["url"]
-    assert "%23" in payload["url"]
-    assert payload["url"] == path.resolve().as_uri()
 
 
 @pytest.mark.asyncio

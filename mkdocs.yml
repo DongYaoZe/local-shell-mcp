@@ -17,6 +17,7 @@ nav:
       - Stdio mode: installation/stdio.md
   - Client connections:
       - ChatGPT connector: getting-started/chatgpt-connector.md
+      - DeepSeek Harness (DSH): clients/deepseek-harness.md
       - Generic MCP clients: clients/generic-mcp.md
       - Network connectivity: clients/connectivity.md
   - Guides:
@@ -78,6 +79,7 @@ plugins:
             Stdio mode: stdio 模式
             Client connections: Client 接入
             ChatGPT connector: ChatGPT 连接器
+            DeepSeek Harness (DSH): DeepSeek Harness (DSH)
             Generic MCP clients: 通用 MCP Client
             Network connectivity: 网络连通性
             Guides: 指南
@@ -113,6 +115,7 @@ plugins:
             Stdio mode: stdio 模式
             Client connections: Client 連線
             ChatGPT connector: ChatGPT 連接器
+            DeepSeek Harness (DSH): DeepSeek Harness (DSH)
             Generic MCP clients: 通用 MCP Client
             Network connectivity: 網路連通性
             Guides: 指南
@@ -148,6 +151,7 @@ plugins:
             Stdio mode: stdio モード
             Client connections: Client 接続
             ChatGPT connector: ChatGPT コネクタ
+            DeepSeek Harness (DSH): DeepSeek Harness (DSH)
             Generic MCP clients: 汎用 MCP Client
             Network connectivity: ネットワーク接続
             Guides: ガイド
@@ -183,6 +187,7 @@ plugins:
             Stdio mode: stdio 모드
             Client connections: Client 연결
             ChatGPT connector: ChatGPT 커넥터
+            DeepSeek Harness (DSH): DeepSeek Harness (DSH)
             Generic MCP clients: 일반 MCP Client
             Network connectivity: 네트워크 연결
             Guides: 가이드
@@ -218,6 +223,7 @@ plugins:
             Stdio mode: Modo stdio
             Client connections: Conexiones de Client
             ChatGPT connector: Conector de ChatGPT
+            DeepSeek Harness (DSH): DeepSeek Harness (DSH)
             Generic MCP clients: Clientes MCP genéricos
             Network connectivity: Conectividad de red
             Guides: Guías
@@ -253,6 +259,7 @@ plugins:
             Stdio mode: Mode stdio
             Client connections: Connexions Client
             ChatGPT connector: Connecteur ChatGPT
+            DeepSeek Harness (DSH): DeepSeek Harness (DSH)
             Generic MCP clients: Clients MCP génériques
             Network connectivity: Connectivité réseau
             Guides: Guides
@@ -288,6 +295,7 @@ plugins:
             Stdio mode: stdio-Modus
             Client connections: Client-Verbindungen
             ChatGPT connector: ChatGPT-Connector
+            DeepSeek Harness (DSH): DeepSeek Harness (DSH)
             Generic MCP clients: Generische MCP-Clients
             Network connectivity: Netzwerkverbindung
             Guides: Anleitungen
@@ -323,6 +331,7 @@ plugins:
             Stdio mode: Режим stdio
             Client connections: Подключения Client
             ChatGPT connector: Коннектор ChatGPT
+            DeepSeek Harness (DSH): DeepSeek Harness (DSH)
             Generic MCP clients: Общие MCP-клиенты
             Network connectivity: Сетевая доступность
             Guides: Руководства
@@ -358,6 +367,7 @@ plugins:
             Stdio mode: Modo stdio
             Client connections: Conexões Client
             ChatGPT connector: Conector ChatGPT
+            DeepSeek Harness (DSH): DeepSeek Harness (DSH)
             Generic MCP clients: Clientes MCP genéricos
             Network connectivity: Conectividade de rede
             Guides: Guias
@@ -393,6 +403,7 @@ plugins:
             Stdio mode: Modalità stdio
             Client connections: Connessioni Client
             ChatGPT connector: Connettore ChatGPT
+            DeepSeek Harness (DSH): DeepSeek Harness (DSH)
             Generic MCP clients: Client MCP generici
             Network connectivity: Connettività di rete
             Guides: Guide
@@ -428,6 +439,7 @@ plugins:
             Stdio mode: وضع stdio
             Client connections: اتصالات Client
             ChatGPT connector: موصل ChatGPT
+            DeepSeek Harness (DSH): DeepSeek Harness (DSH)
             Generic MCP clients: عملاء MCP عامون
             Network connectivity: اتصال الشبكة
             Guides: الأدلة
@@ -463,6 +475,7 @@ plugins:
             Stdio mode: stdio मोड
             Client connections: Client कनेक्शन
             ChatGPT connector: ChatGPT कनेक्टर
+            DeepSeek Harness (DSH): DeepSeek Harness (DSH)
             Generic MCP clients: सामान्य MCP Client
             Network connectivity: नेटवर्क कनेक्टिविटी
             Guides: मार्गदर्शिकाएँ
@@ -498,6 +511,7 @@ plugins:
             Stdio mode: Mode stdio
             Client connections: Koneksi Client
             ChatGPT connector: Konektor ChatGPT
+            DeepSeek Harness (DSH): DeepSeek Harness (DSH)
             Generic MCP clients: Client MCP generik
             Network connectivity: Konektivitas jaringan
             Guides: Panduan
@@ -533,6 +547,7 @@ plugins:
             Stdio mode: Chế độ stdio
             Client connections: Kết nối Client
             ChatGPT connector: Trình kết nối ChatGPT
+            DeepSeek Harness (DSH): DeepSeek Harness (DSH)
             Generic MCP clients: Client MCP chung
             Network connectivity: Kết nối mạng
             Guides: Hướng dẫn
@@ -568,6 +583,7 @@ plugins:
             Stdio mode: stdio modu
             Client connections: Client bağlantıları
             ChatGPT connector: ChatGPT bağlayıcısı
+            DeepSeek Harness (DSH): DeepSeek Harness (DSH)
             Generic MCP clients: Genel MCP Client
             Network connectivity: Ağ bağlantısı
             Guides: Kılavuzlar
@@ -603,6 +619,7 @@ plugins:
             Stdio mode: Tryb stdio
             Client connections: Połączenia Client
             ChatGPT connector: Łącznik ChatGPT
+            DeepSeek Harness (DSH): DeepSeek Harness (DSH)
             Generic MCP clients: Ogólne klienty MCP
             Network connectivity: Łączność sieciowa
             Guides: Przewodniki

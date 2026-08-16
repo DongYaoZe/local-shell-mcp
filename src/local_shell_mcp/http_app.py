@@ -48,7 +48,6 @@ from .skill_ops import (
     load_installed_skill,
     read_installed_skill_file,
 )
-from .todo_ops import todo_read, todo_write
 from .version import version_info
 
 PUBLIC_TOOL_TIMEOUT_S = PUBLIC_TOOL_WATCHDOG_TIMEOUT_S
@@ -59,7 +58,6 @@ NON_CANCELLABLE_HTTP_MUTATIONS = frozenset(
         "/tools/write_file",
         "/tools/edit_file",
         "/tools/delete",
-        "/tools/todo",
     }
 )
 
@@ -161,9 +159,7 @@ def _install_tool_timeout_middleware(app: FastAPI) -> None:
     async def tools_timeout_middleware(request: Request, call_next):  # noqa: ANN001
         if not request.url.path.startswith("/tools/"):
             return await call_next(request)
-        if request.url.path in NON_CANCELLABLE_HTTP_MUTATIONS and (
-            request.url.path != "/tools/todo" or request.method.upper() != "GET"
-        ):
+        if request.url.path in NON_CANCELLABLE_HTTP_MUTATIONS:
             return await call_next(request)
         try:
             return await asyncio.wait_for(call_next(request), timeout=PUBLIC_TOOL_TIMEOUT_S)
@@ -340,16 +336,6 @@ def _register_download_routes(app: FastAPI) -> None:
         return await asyncio.to_thread(revoke_download_link, body["token"])
 
 
-def _register_todo_routes(app: FastAPI) -> None:
-    @app.get("/tools/todo")
-    async def api_todo_read(_: Principal = PRINCIPAL_DEP):
-        return await asyncio.to_thread(todo_read)
-
-    @app.post("/tools/todo")
-    async def api_todo_write(body: dict, _: Principal = PRINCIPAL_DEP):
-        return await asyncio.to_thread(todo_write, body.get("todos", []))
-
-
 def _register_browser_routes(app: FastAPI) -> None:
     @app.post("/tools/browser/capture")
     async def api_browser_capture(body: dict, _: Principal = PRINCIPAL_DEP):
@@ -390,7 +376,6 @@ def build_http_app() -> FastAPI:
     _install_exception_handlers(app)
     _install_tool_timeout_middleware(app)
     _register_status_routes(app)
-    _register_todo_routes(app)
     if not settings.disable_local:
         _register_skill_routes(app, settings)
         _register_shell_routes(app)

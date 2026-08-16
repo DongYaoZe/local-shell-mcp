@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import subprocess
 
 import pytest
@@ -43,17 +42,17 @@ async def test_disable_local_requires_remote_targets_and_hides_local_only_tools(
     for name in tools.LOCAL_ONLY_TOOL_NAMES:
         assert name not in mcp._tool_manager._tools
 
-    local_result = await mcp._tool_manager._tools["run_shell_tool"].fn(command="pwd")
+    local_result = await mcp._tool_manager._tools["run_shell"].fn(command="pwd")
     assert local_result.isError is True
     assert "Local access is disabled" in local_result.structuredContent["message"]
 
-    explicit_local_result = await mcp._tool_manager._tools["run_shell_tool"].fn(
+    explicit_local_result = await mcp._tool_manager._tools["run_shell"].fn(
         command="pwd", machine="local"
     )
     assert explicit_local_result["ok"] is True
     assert manager.calls[-1][0:2] == ("local", "run_shell_tool")
 
-    remote_result = await mcp._tool_manager._tools["run_shell_tool"].fn(
+    remote_result = await mcp._tool_manager._tools["run_shell"].fn(
         command="pwd", machine="node"
     )
     assert remote_result["ok"] is True
@@ -204,8 +203,6 @@ async def test_all_public_tool_wrappers_local_and_remote(tmp_path, monkeypatch):
         "write_text",
         "edit_text",
         "delete_path",
-        "todo_read",
-        "todo_write",
     ):
         monkeypatch.setattr(tools, name, sync_value)
 
@@ -216,43 +213,41 @@ async def test_all_public_tool_wrappers_local_and_remote(tmp_path, monkeypatch):
 
     mcp = tools.build_mcp()
     local_cases = {
-        "search": {"query": "needle"},
-        "fetch": {"id": "found.txt"},
-        "open_live_workspace": {},
+        "workspace_open": {},
         "live_workspace_reconnect": {},
-        "environment_info": {},
-        "skills_list": {},
+        "environment_get": {},
+        "skill_list": {},
         "skill_load": {"name": "skill"},
-        "skill_read_file": {"name": "skill", "path": "guide.md"},
-        "run_shell_tool": {"command": "true", "purpose": "test", "explanation": "coverage"},
-        "run_python_tool": {"code": "print(1)", "purpose": "test"},
+        "skill_read": {"name": "skill", "path": "guide.md"},
+        "run_shell": {"command": "true", "purpose": "test", "explanation": "coverage"},
+        "run_python": {"code": "print(1)", "purpose": "test"},
         "shell_start": {"purpose": "test"},
         "shell_send": {"session_id": "s", "input_text": "x"},
         "shell_read": {"session_id": "s"},
-        "shell_kill": {"session_id": "s"},
+        "shell_stop": {"session_id": "s"},
         "shell_list": {},
         "job_start": {"command": "true", "purpose": "test"},
         "job_list": {},
         "job_tail": {"job_id": "j"},
         "job_stop": {"job_id": "j"},
         "job_retry": {"job_id": "j", "purpose": "test"},
-        "list_files": {},
-        "tree_view": {},
-        "glob_search": {"pattern": "*.py"},
-        "grep_search": {"query": "x"},
-        "read_file": {"path": "x"},
-        "view_image": {"path": "found.png"},
-        "create_file_link": {"path": "found.txt"},
-        "list_file_links": {},
-        "revoke_file_link": {"token": "t"},
-        "write_file": {"path": "x", "content": "y", "purpose": "test"},
-        "edit_file": {"path": "x", "edits": [], "purpose": "test"},
-        "delete_file_or_dir": {"path": "x", "purpose": "test"},
-        "apply_patch": {"patch": "diff", "purpose": "test"},
+        "file_list": {},
+        "file_tree": {},
+        "file_glob": {"pattern": "*.py"},
+        "file_grep": {"query": "x"},
+        "file_read": {"path": "x"},
+        "image_view": {"path": "found.png"},
+        "link_create": {"path": "found.txt"},
+        "link_list": {},
+        "link_revoke": {"token": "t"},
+        "file_write": {"path": "x", "content": "y", "purpose": "test"},
+        "file_edit": {"path": "x", "edits": [], "purpose": "test"},
+        "file_delete": {"path": "x", "purpose": "test"},
+        "file_patch": {"patch": "diff", "purpose": "test"},
         "remote_transfer": {"source_path": "a", "destination_path": "b", "destination_machine": "node", "purpose": "test"},
         "secret_scan": {},
-        "todo_read_tool": {},
-        "todo_write_tool": {"todos": []},
+        "session_manage": {"action": "list"},
+        "plan_manage": {"action": "get"},
         "mcp_manage": {"action": "list"},
         "mcp_tool_search": {},
         "mcp_tool_inspect": {"name": "missing:tool"},
@@ -269,9 +264,7 @@ async def test_all_public_tool_wrappers_local_and_remote(tmp_path, monkeypatch):
         result = await _raw_tool(mcp, name)(**kwargs)
         assert result is not None, name
 
-    search_payload = json.loads(await _raw_tool(mcp, "search")(query="needle"))
-    assert len(search_payload["results"]) == 1
-    assert search_payload["results"][0]["title"] == "found.txt:1"
+
 
     invite = await _raw_tool(mcp, "remote_manage")(
         action="invite", name="node", workdir="/workspace", ttl_s=120
@@ -291,29 +284,29 @@ async def test_all_public_tool_wrappers_local_and_remote(tmp_path, monkeypatch):
     assert _handled_error_data(invalid)["message"] == "new_name is required for action=rename"
 
     remote_cases = {
-        "environment_info": {},
-        "run_shell_tool": {"command": "true"},
-        "run_python_tool": {"code": "print(1)"},
+        "environment_get": {},
+        "run_shell": {"command": "true"},
+        "run_python": {"code": "print(1)"},
         "shell_start": {},
         "shell_send": {"session_id": "s", "input_text": "x"},
         "shell_read": {"session_id": "s"},
-        "shell_kill": {"session_id": "s"},
+        "shell_stop": {"session_id": "s"},
         "shell_list": {},
         "job_start": {"command": "true"},
         "job_list": {},
         "job_tail": {"job_id": "j"},
         "job_stop": {"job_id": "j"},
         "job_retry": {"job_id": "j"},
-        "list_files": {},
-        "tree_view": {},
-        "glob_search": {"pattern": "*"},
-        "grep_search": {"query": "x"},
-        "read_file": {"path": "x"},
-        "view_image": {"path": "x"},
-        "write_file": {"path": "x", "content": "y"},
-        "edit_file": {"path": "x", "edits": []},
-        "delete_file_or_dir": {"path": "x"},
-        "apply_patch": {"patch": "diff"},
+        "file_list": {},
+        "file_tree": {},
+        "file_glob": {"pattern": "*"},
+        "file_grep": {"query": "x"},
+        "file_read": {"path": "x"},
+        "image_view": {"path": "x"},
+        "file_write": {"path": "x", "content": "y"},
+        "file_edit": {"path": "x", "edits": []},
+        "file_delete": {"path": "x"},
+        "file_patch": {"patch": "diff"},
         "browser_session": {"action": "list"},
         "browser_snapshot": {"session_id": "s"},
         "browser_act": {"session_id": "s", "actions": [{"action": "wait"}]},
@@ -362,8 +355,6 @@ async def test_tool_wrapper_error_paths_and_remote_disabled(tmp_path, monkeypatc
     monkeypatch.setattr(tools, "_apply_patch_text", fail_async)
     monkeypatch.setattr(tools, "_start_transfer_job", fail_async)
     monkeypatch.setattr(tools, "_secret_scan", fail_async)
-    monkeypatch.setattr(tools, "todo_read", fail_sync)
-    monkeypatch.setattr(tools, "todo_write", fail_sync)
     monkeypatch.setattr(tools, "playwright_run_script", fail_async)
     monkeypatch.setattr(tools, "_read_audit_tail_entries", fail_sync)
     fake_remote = FakeRemoteManager()
@@ -371,45 +362,38 @@ async def test_tool_wrapper_error_paths_and_remote_disabled(tmp_path, monkeypatc
 
     mcp = tools.build_mcp()
     checks = [
-        ("search", {"query": "x"}),
-        ("fetch", {"id": "missing"}),
-        ("environment_info", {}),
-        ("skills_list", {}),
-        ("run_shell_tool", {"command": "x"}),
-        ("run_python_tool", {"code": "x"}),
+        ("environment_get", {}),
+        ("skill_list", {}),
+        ("run_shell", {"command": "x"}),
+        ("run_python", {"code": "x"}),
         ("shell_start", {}),
         ("shell_send", {"session_id": "s", "input_text": "x"}),
         ("shell_read", {"session_id": "s"}),
-        ("shell_kill", {"session_id": "s"}),
+        ("shell_stop", {"session_id": "s"}),
         ("shell_list", {}),
         ("job_start", {"command": "x"}),
         ("job_list", {}),
         ("job_tail", {"job_id": "j"}),
         ("job_stop", {"job_id": "j"}),
         ("job_retry", {"job_id": "j"}),
-        ("list_files", {}),
-        ("tree_view", {}),
-        ("glob_search", {"pattern": "*"}),
-        ("grep_search", {"query": "x"}),
-        ("read_file", {"path": "x"}),
-        ("write_file", {"path": "x", "content": "y"}),
-        ("edit_file", {"path": "x", "edits": []}),
-        ("delete_file_or_dir", {"path": "x"}),
-        ("apply_patch", {"patch": "x"}),
+        ("file_list", {}),
+        ("file_tree", {}),
+        ("file_glob", {"pattern": "*"}),
+        ("file_grep", {"query": "x"}),
+        ("file_read", {"path": "x"}),
+        ("file_write", {"path": "x", "content": "y"}),
+        ("file_edit", {"path": "x", "edits": []}),
+        ("file_delete", {"path": "x"}),
+        ("file_patch", {"patch": "x"}),
         ("remote_transfer", {"source_path": "a", "destination_path": "b"}),
         ("secret_scan", {}),
-        ("todo_read_tool", {}),
-        ("todo_write_tool", {"todos": []}),
         ("browser_run_script", {"script": "x"}),
         ("audit_tail", {}),
     ]
     for name, kwargs in checks:
         result = await _raw_tool(mcp, name)(**kwargs)
-        if name in {"search", "fetch"}:
-            assert isinstance(result, str)
-        else:
-            assert isinstance(result, CallToolResult), name
-            assert _handled_error_data(result)["status"] == "error", name
+        assert isinstance(result, CallToolResult), name
+        assert _handled_error_data(result)["status"] == "error", name
 
     _configure(tmp_path, monkeypatch, remote_enabled=False)
     disabled = tools.build_mcp()
@@ -471,10 +455,6 @@ def test_tool_helpers_audit_serialization_timeout_and_tail(tmp_path, monkeypatch
     with pytest.raises(ValueError, match="explanation"):
         tools._audit_tool_purpose("x", explanation="x" * 2001)
 
-    search = json.loads(tools._timeout_payload_for_tool("search", TimeoutError("x")))
-    assert search == {"results": []}
-    fetch = json.loads(tools._timeout_payload_for_tool("fetch", TimeoutError("x")))
-    assert fetch["metadata"]["error"] == "TimeoutError"
     generic = tools._timeout_payload_for_tool("other", TimeoutError("x"))
     assert isinstance(generic, CallToolResult)
     assert _handled_error_data(generic)["status"] == "error"
@@ -637,7 +617,7 @@ async def test_remote_shell_failure_returns_mcp_error(tmp_path, monkeypatch):
     monkeypatch.setattr(tools, "remote_manager", lambda: FailedRemoteManager())
 
     result = await tools.build_mcp().call_tool(
-        "run_shell_tool",
+        "run_shell",
         {"command": "echo ok", "machine": "node"},
     )
 

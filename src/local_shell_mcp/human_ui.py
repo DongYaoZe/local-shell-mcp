@@ -54,7 +54,6 @@ from .shell_ops import (
     tmux,
 )
 from .tmux_helper import resolve_tmux, tmux_socket_name
-from .todo_ops import TodoConflictError, todo_read, todo_write
 from .tui_runtime import materialize_embedded_tui
 from .ui_security import UI_LOCAL_TOKEN_ENV, get_or_create_ui_local_token
 from .version import version_info
@@ -362,19 +361,25 @@ def _record_live_human_action(
 
 _AUDIT_FILE_WRITE_TOOLS = frozenset(
     {
+        "file_write",
+        "file_edit",
+        "file_delete",
+        "file_patch",
         "write_file",
         "edit_file",
         "delete_file_or_dir",
         "apply_patch",
-        "todo_write_tool",
     }
 )
 _AUDIT_EXECUTE_TOOLS = frozenset(
     {
-        "run_shell_tool",
-        "run_python_tool",
+        "run_shell",
+        "run_python",
         "shell_start",
         "shell_send",
+        "shell_stop",
+        "run_shell_tool",
+        "run_python_tool",
         "shell_kill",
         "job_start",
         "job_stop",
@@ -382,7 +387,7 @@ _AUDIT_EXECUTE_TOOLS = frozenset(
     }
 )
 _AUDIT_FILE_SHARE_TOOLS = frozenset(
-    {"create_file_link", "list_file_links", "revoke_file_link"}
+    {"link_create", "link_list", "link_revoke", "create_file_link", "list_file_links", "revoke_file_link"}
 )
 
 
@@ -412,7 +417,7 @@ def _audit_view_image_detail(
     rows: int,
     cell_aspect: float,
 ) -> dict[str, Any]:
-    if str(entry.get("tool") or "") != "view_image":
+    if str(entry.get("tool") or "") not in {"image_view", "view_image"}:
         return entry
     output = entry.get("output")
     if not isinstance(output, dict):
@@ -730,15 +735,11 @@ async def api_bootstrap(request: Request) -> Response:
     if settings.remote_enabled:
         required.append("remote:use")
     _require_ui_scopes(request, *required)
-    machines, todos = await asyncio.gather(
-        asyncio.to_thread(_machine_rows),
-        asyncio.to_thread(todo_read),
-    )
+    machines = await asyncio.to_thread(_machine_rows)
     return _json_ok(
         {
             "version": version_info(),
             "machines": machines,
-            "todos": todos,
             "features": {
                 "remote": settings.remote_enabled,
                 "wallpaper": settings.ui_wallpaper,
@@ -761,19 +762,6 @@ async def api_dashboard(request: Request) -> Response:
     )
 
     source_alerts: list[dict[str, Any]] = []
-    try:
-        todos = await asyncio.to_thread(todo_read)
-    except Exception as exc:
-        _LOGGER.debug("Dashboard todo snapshot failed", exc_info=True)
-        todos = {"revision": 0, "todos": []}
-        source_alerts.append(
-            {
-                "severity": "warning",
-                "title": "Todo data unavailable",
-                "detail": f"{type(exc).__name__}: {exc}",
-                "node": "local",
-            }
-        )
     with suppress_audit():
         try:
             terminals = await _machine_dispatch(machine, list_shells, "shell_list", {})
@@ -847,7 +835,6 @@ async def api_dashboard(request: Request) -> Response:
     standalone_sessions = [
         session for session in sessions if str(session.get("session_id") or "") not in job_session_ids
     ]
-    open_todos = [item for item in list(todos.get("todos") or []) if item.get("status") != "completed"]
     severity_rank = {"info": 0, "warning": 1, "critical": 2}
     alerts.sort(
         key=lambda alert: severity_rank.get(str(alert.get("severity")), 0),
@@ -873,10 +860,6 @@ async def api_dashboard(request: Request) -> Response:
             "alerts": alerts[:12],
             "activity": _dashboard_activity(audit_entries),
             "audit_total_24h": int(audit_payload.get("total_matched") or 0),
-            "todo_counts": {
-                "total": len(list(todos.get("todos") or [])),
-                "open": len(open_todos),
-            },
         }
     )
 
@@ -1234,28 +1217,6 @@ async def api_terminal_action(request: Request) -> Response:
         return _json_error(exc)
 
 
-async def api_todos(request: Request) -> Response:
-    try:
-        if request.method == "GET":
-            _require_ui_scopes(request, "shell:read")
-            return _json_ok(await asyncio.to_thread(todo_read))
-        _require_ui_scopes(request, "shell:read", "shell:write")
-        live_id = _require_live_human_mutation(request)
-        body = await request.json()
-        expected_revision = body.get("expected_revision")
-        with suppress_audit():
-            result = await asyncio.to_thread(
-                todo_write,
-                list(body.get("todos") or []),
-                int(expected_revision) if expected_revision is not None else None,
-            )
-        _record_live_human_action(live_id, "todo.write")
-        return _json_ok(result)
-    except TodoConflictError as exc:
-        return _json_error(exc, status_code=409)
-    except Exception as exc:
-        return _json_error(exc)
-
 
 async def api_audit(request: Request) -> Response:
     params = request.query_params
@@ -1392,14 +1353,15 @@ def _websocket_principal(websocket: WebSocket) -> Principal | None:
     settings = get_settings()
     token = _websocket_token(websocket)
     if token:
-        channel = get_live_channel_manager().authenticate(token)
-        if channel is not None:
+        auth_context = get_live_channel_manager().authenticate_context(token)
+        if auth_context is not None:
+            channel, subject, scopes = auth_context
             principal = Principal(
                 email=None,
-                subject=channel.subject,
+                subject=subject,
                 claims={
                     "auth": "live-channel",
-                    "scope": " ".join(channel.scopes),
+                    "scope": " ".join(scopes),
                     "live_id": channel.live_id,
                 },
             )
@@ -2656,7 +2618,6 @@ def ui_routes() -> list[Any]:
         Route(UI_API_PREFIX + "/terminals", api_terminals, methods=["GET"]),
         Route(UI_API_PREFIX + "/terminals/read", api_terminal_read, methods=["GET"]),
         Route(UI_API_PREFIX + "/terminals/{action}", api_terminal_action, methods=["POST"]),
-        Route(UI_API_PREFIX + "/todos", api_todos, methods=["GET", "PUT"]),
         Route(UI_API_PREFIX + "/audit", api_audit, methods=["GET"]),
         Route(UI_API_PREFIX + "/audit/detail", api_audit_detail, methods=["GET"]),
         Route(UI_API_PREFIX + "/remotes", api_remotes, methods=["GET", "POST"]),

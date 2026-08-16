@@ -17,7 +17,7 @@
 ## 典型流程
 
 1. 在 `/workspace` 下生成或定位文件。
-2. 调用 `create_file_link`，设置 TTL 和可选下载次数限制。
+2. 调用 `link_create`，设置 TTL 和可选下载次数限制。
 3. 分享返回的 URL。
 4. 不再需要时撤销链接。
 
@@ -25,9 +25,9 @@
 
 | 工具 | 用途 |
 |---|---|
-| `create_file_link` | 为工作区文件创建带 token 的 URL。 |
-| `list_file_links` | 显示活动链接。 |
-| `revoke_file_link` | 在到期前禁用链接。 |
+| `link_create` | 为工作区文件创建带 token 的 URL。 |
+| `link_list` | 显示活动链接。 |
+| `link_revoke` | 在到期前禁用链接。 |
 
 ## 控制项
 

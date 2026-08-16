@@ -129,7 +129,7 @@ https://your-public-host.example.com/mcp
 复制设置提示词后，先从只读任务开始：
 
 ```text
-使用 local-shell-mcp。先调用 environment_info，并对工作区调用 tree_view。暂时不要修改文件。
+使用 local-shell-mcp。先调用 environment_get，并对工作区调用 file_tree。暂时不要修改文件。
 ```
 
 然后再进入有边界的编辑任务：

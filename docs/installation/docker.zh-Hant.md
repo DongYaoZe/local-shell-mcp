@@ -167,7 +167,7 @@ curl -i http://127.0.0.1:8765/healthz
 升級後，先讓客戶端執行只讀檢查：
 
 ```text
-使用 local-shell-mcp。調用 environment_info，並對工作區根目錄調用 list_files。不要修改文件。
+使用 local-shell-mcp。調用 environment_get，並對工作區根目錄調用 file_list。不要修改文件。
 ```
 
 ## 故障排查
@@ -178,5 +178,5 @@ curl -i http://127.0.0.1:8765/healthz
 | ChatGPT 無法發現工具 | 公開 URL 必須以 `/mcp` 結尾；`LOCAL_SHELL_MCP_PUBLIC_BASE_URL` 不能包含 `/mcp` |
 | OAuth 頁面失敗 | 公開 OAuth 部署必須設置 admin PIN 和 JWT secret |
 | 工具看不到文件 | 確認目標宿主機目錄已掛載到 `/workspace` |
-| 瀏覽器工具失敗 | 確認 Playwright 鏡像是最新的；可對目標瀏覽器嘗試 `run_shell_tool` |
+| 瀏覽器工具失敗 | 確認 Playwright 鏡像是最新的；可對目標瀏覽器嘗試 `run_shell` |
 | Git 認證消失 | 檢查憑據 volume，以及重建容器時是否使用了同一個 volume |

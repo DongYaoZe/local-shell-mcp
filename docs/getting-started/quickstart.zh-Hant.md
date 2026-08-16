@@ -78,15 +78,15 @@ https://your-public-host.example.com/mcp
 先讓模型執行：
 
 ```text
-Use local-shell-mcp. First call environment_info, then list the workspace root. Do not modify files yet.
+Use local-shell-mcp. First call environment_get, then list the workspace root. Do not modify files yet.
 ```
 
 預期只讀工具包括：
 
-- `environment_info`
-- `list_files`
-- `tree_view`
-- `read_file`
+- `environment_get`
+- `file_list`
+- `file_tree`
+- `file_read`
 
 ## 6. 從有邊界的任務開始
 

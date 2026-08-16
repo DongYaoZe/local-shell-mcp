@@ -123,7 +123,7 @@ local-shell-mcp --config /path/to/config.yaml
 3. 替換可執行文件。
 4. 重啓進程管理器。
 5. 檢查 `/healthz`。
-6. 讓客戶端先運行 `environment_info`，再繼續工作。
+6. 讓客戶端先運行 `environment_get`，再繼續工作。
 
 ## 安全說明
 

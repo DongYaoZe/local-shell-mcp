@@ -69,7 +69,7 @@ def test_webui_visual_regressions_are_packaged():
 
     assert "<strong>TUI</strong><small>Terminal interface</small>" in html
     assert "<strong>OpenTUI</strong><small>Terminal interface</small>" not in html
-    for view in ("files", "terminals", "remotes", "audit", "todos"):
+    for view in ("files", "terminals", "remotes", "audit"):
         assert f'data-view="{view}"' in html
     assert "Open TUI" in html
     assert "scrollbar-width:none!important" in css
@@ -78,7 +78,7 @@ def test_webui_visual_regressions_are_packaged():
     assert {"width:0", "height:0", "display:none"}.issubset(scrollbar_rule.split(";"))
     dark_mode = "@media (prefers-color-scheme:dark)"
     assert dark_mode in css
-    assert css.rindex(dark_mode) > css.rindex(".todo-row{display:grid")
+    assert css.rindex(dark_mode) > css.rindex(".alert-card{display:grid")
     assert ".files-layout{" in css
     assert ".file-parent-panel" in css
     assert ".terminal-touchbar{" in css
@@ -342,36 +342,6 @@ def test_remotes_api_honors_disabled_server_configuration(tmp_path, monkeypatch)
     assert rename.status_code == 400
     assert "disabled" in invite.json()["message"]
 
-
-def test_todo_api_rejects_stale_human_revision(tmp_path, monkeypatch):
-    _configure(tmp_path, monkeypatch)
-    client = TestClient(build_http_app())
-
-    initial = client.get("/api/ui/todos").json()["data"]
-    first = client.put(
-        "/api/ui/todos",
-        json={
-            "expected_revision": initial["revision"],
-            "todos": [{"id": "a", "content": "first", "status": "pending", "priority": "medium"}],
-        },
-    )
-    assert first.status_code == 200
-    assert first.json()["data"]["revision"] == 1
-
-    stale = client.put(
-        "/api/ui/todos",
-        json={
-            "expected_revision": initial["revision"],
-            "todos": [{"id": "b", "content": "stale", "status": "pending", "priority": "medium"}],
-        },
-    )
-    assert stale.status_code == 409
-    assert "changed from revision" in stale.json()["message"]
-
-    latest = client.get("/api/ui/todos").json()["data"]
-    assert latest["revision"] == 1
-    assert [item["id"] for item in latest["todos"]] == ["a"]
-    assert not list((tmp_path / ".state").glob(".todos.json.*.tmp"))
 
 
 def test_terminal_api_rejects_invalid_line_count(tmp_path, monkeypatch):

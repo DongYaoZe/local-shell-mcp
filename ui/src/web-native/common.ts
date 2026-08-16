@@ -1,6 +1,6 @@
 import type { FileEntry, FilePreview, Machine } from "../types"
 
-export type NativeViewName = "files" | "terminals" | "remotes" | "audit" | "todos"
+export type NativeViewName = "files" | "terminals" | "remotes" | "audit"
 export type NoticeTone = "info" | "success" | "warning" | "error"
 
 export interface NativeApi {

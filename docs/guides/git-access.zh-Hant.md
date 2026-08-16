@@ -1,6 +1,6 @@
 # Git 存取
 
-`local-shell-mcp` 透過 `run_shell_tool`、`shell_start` 或 `job_start` 使用標準 Git CLI，不再暴露專用 Git MCP 工具。這樣可以覆蓋完整 Git 功能，並避免為每個子命令維護重複工具。
+`local-shell-mcp` 透過 `run_shell`、`shell_start` 或 `job_start` 使用標準 Git CLI，不再暴露專用 Git MCP 工具。這樣可以覆蓋完整 Git 功能，並避免為每個子命令維護重複工具。
 
 ## 常見流程
 
@@ -17,7 +17,7 @@ git push origin HEAD
 
 建議流程：
 
-1. 用 `run_shell_tool` 執行 `git status --short --branch`。
+1. 用 `run_shell` 執行 `git status --short --branch`。
 2. 只讀取和修改相關檔案。
 3. 執行定向測試。
 4. 用 `git diff --check && git diff` 複查。

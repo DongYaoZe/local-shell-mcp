@@ -1,6 +1,6 @@
 # REST API
 
-The primary interface is MCP at `/mcp`. A REST surface is also available for health checks, file links, connector-style search/fetch, and some tool calls.
+The primary interface is MCP at `/mcp`. A REST surface is also available for health checks, file links, and selected service operations.
 
 ## Health
 
@@ -17,17 +17,6 @@ POST /mcp
 ```
 
 Streamable HTTP MCP endpoint used by ChatGPT and other MCP clients.
-
-## Connector discovery
-
-Read-only connector-style operations:
-
-```text
-search
-fetch
-```
-
-These are intended for regular ChatGPT connector behavior and do not expose the full coding-agent tool surface.
 
 ## Tool calls through REST
 

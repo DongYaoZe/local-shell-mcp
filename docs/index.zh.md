@@ -31,7 +31,7 @@ Docker、VS Code 扩展、二进制、Python 和 stdio 是运行时；ChatGPT �
 
 ## 它提供什么
 
-`local-shell-mcp` 会把一个受控的本地或容器工作区暴露给 ChatGPT 和其它 MCP 客户端。它提供 Shell、持久 Shell、文件系统、搜索、补丁、Git、Playwright、审计、todo、临时文件链接和远程节点工具，并支持 ChatGPT 兼容的 MCP over HTTP 与 OAuth。
+`local-shell-mcp` 会把一个受控的本地或容器工作区暴露给 ChatGPT 和其它 MCP 客户端。它提供 Shell、持久 Shell、文件系统、搜索、补丁、Git、Playwright、审计、持久逻辑会话与可选 Goal plan、临时文件链接和远程节点工具，并支持 ChatGPT 兼容的 MCP over HTTP 与 OAuth。
 
 适用场景包括：检查仓库、运行测试、修改代码、操作 Git、采集网页证据、生成可下载产物，或者控制只能主动连接控制端的远程机器。
 
@@ -54,6 +54,7 @@ Docker、VS Code 扩展、二进制、Python 和 stdio 是运行时；ChatGPT �
 | 第一次部署给 ChatGPT 使用 | [快速开始](getting-started/quickstart.md) | Docker Compose、OAuth 和 `/mcp` 基础路径 |
 | 选择运行时层 | [运行时选择](guides/deployment.md) | 把 Docker、VS Code、二进制、Python 和 stdio 与客户端接入分开说明 |
 | 把 ChatGPT 作为客户端接入 | [ChatGPT 连接器](getting-started/chatgpt-connector.md) | 端点、OAuth、首次安全提示和工具发现 |
+| 把 LSM 接入 DeepSeek Harness | [DeepSeek Harness 插件](clients/deepseek-harness.md) | 直接把本仓库作为 DSH bundle 安装，同时保留完整 LSM 工具面和 Remote Worker 能力 |
 | 从 VS Code 启动运行时 | [VS Code 扩展运行时](installation/vscode-extension.md) | 编辑器启动、设置和主机安全边界 |
 | 学习如何使用工具集 | [使用模式](guides/usage-patterns.md) | 提示词模板和工具选择建议 |
 | 理解所有工具 | [工具参考](reference/tools.md) | 每个工具的用途、参数、返回值、组合方式和注意事项 |
@@ -65,12 +66,13 @@ Docker、VS Code 扩展、二进制、Python 和 stdio 是运行时；ChatGPT �
 
 | 工具族 | 示例 | 用途 |
 |---|---|---|
-| Shell 和 Python | `run_shell_tool`, `run_python_tool`, `shell_start` | 构建、测试、脚本、长时间进程 |
-| 文件和搜索 | `tree_view`, `grep_search`, `read_file`, `apply_patch` | 仓库检查和精确修改 |
-| Git | `run_shell_tool`, `run_shell_tool`, `run_shell_tool`, `run_shell_tool` | 可审查的源码管理流程 |
+| Shell 和 Python | `run_shell`, `run_python`, `shell_start` | 构建、测试、脚本、长时间进程 |
+| 文件和搜索 | `file_tree`, `file_grep`, `file_read`, `file_patch` | 仓库检查和精确修改 |
+| Git | `run_shell`, `run_shell`, `run_shell`, `run_shell` | 可审查的源码管理流程 |
+| Session 与 Goal | `session_manage`, `plan_manage` | 持久任务继承、进展汇报和可选 Goal 模式 |
 | 浏览器 | `browser_session`, `browser_snapshot`, `browser_act`、`browser_run_script` | 持久交互、UI 检查、截图、渲染文档、页面文本 |
-| 文件链接 | `create_file_link`, `revoke_file_link` | 从聊天中下载生成产物 |
-| 远程节点 | `remote_manage`, `run_shell_tool`, `remote_transfer` | NAT、防火墙或集群登录流程后的机器 |
+| 文件链接 | `link_create`, `link_revoke` | 从聊天中下载生成产物 |
+| 远程节点 | `remote_manage`, `run_shell`, `remote_transfer` | NAT、防火墙或集群登录流程后的机器 |
 
 ## 典型工作流
 
@@ -87,7 +89,7 @@ Docker、VS Code 扩展、二进制、Python 和 stdio 是运行时；ChatGPT �
 
 1. 创建一次性远程节点邀请。
 2. 在远程主机上粘贴生成的命令。
-3. 通过普通工具的 `machine` 参数操作远程节点；Git 使用 `run_shell_tool`，路径传输使用 `remote_transfer`。
+3. 通过普通工具的 `machine` 参数操作远程节点；Git 使用 `run_shell`，路径传输使用 `remote_transfer`。
 4. 任务结束后撤销该节点。
 
 ### 产物生成
