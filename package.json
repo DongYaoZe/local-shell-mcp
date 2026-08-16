@@ -1,8 +1,15 @@
 {
   "name": "local-shell-mcp-dsh",
   "version": "4.0.0",
-  "description": "DeepSeek Harness bundle for the full local-shell-mcp MCP tool surface.",
+  "description": "DeepSeek Harness bridge for the full local-shell-mcp tool surface and per-session Live Workspace.",
   "private": true,
+  "type": "module",
+  "main": "./dsh/index.js",
+  "exports": {
+    ".": "./dsh/index.js",
+    "./client": "./dsh/client.js",
+    "./package.json": "./package.json"
+  },
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -19,10 +26,27 @@
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-conversation"
+      ],
+      "platform": "web"
     }
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "zod": "^4.4.3"
+  },
+  "engines": {
+    "node": ">=22"
   },
   "files": [
     "cordis.patch.yml",
+    "dsh/index.js",
+    "dsh/client.js",
+    "src/local_shell_mcp/ui_static/live-workspace.html",
     "LICENSE"
   ]
 }

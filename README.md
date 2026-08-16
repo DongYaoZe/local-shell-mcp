@@ -137,7 +137,7 @@ The repository root is also a DSH plugin bundle. With a normal LSM HTTP/MCP serv
 dsh plugin --profile web add 'github:fwerkor/local-shell-mcp#main'
 ```
 
-The bundle uses DSH's official MCP client and keeps the complete LSM tool surface, including `remote_manage`, `remote_transfer`, browser tools, and dynamic MCP tools. DSH sees them under the normal `mcp__lsm__*` namespace. For production, pin the Git spec to a reviewed release or commit.
+The bundle uses an LSM-aware Streamable HTTP bridge and keeps the complete LSM tool surface, including `remote_manage`, `remote_transfer`, browser tools, and Dynamic MCP tools. Each DSH Session receives a stable PR 162 session identity, so its Logical Session, active run, Activity, and native **Live Workspace** view stay isolated from other DSH conversations and survive DSH-side MCP transport recreation. DSH sees model tools under the normal `mcp__lsm__*` namespace. For production, pin the Git spec to a reviewed release or commit.
 
 See the [DeepSeek Harness integration guide](https://fwerkor.github.io/local-shell-mcp/clients/deepseek-harness/).
 

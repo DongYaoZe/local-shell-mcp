@@ -13,6 +13,7 @@ from mcp.server.fastmcp import FastMCP
 from mcp.types import CallToolResult
 from starlette.requests import Request
 
+import local_shell_mcp.auth as auth_module
 import local_shell_mcp.live_channel as live_channel_module
 import local_shell_mcp.live_channel_routes as live_routes
 import local_shell_mcp.session_runtime as session_runtime_module
@@ -24,6 +25,7 @@ from local_shell_mcp.live_channel import (
     LIVE_RESOURCE_TEMPLATE_URI,
     LIVE_RESOURCE_URI,
     LIVE_RESOURCE_VERSIONED_URI,
+    MCP_SESSION_AFFINITY_HEADER,
     LiveChannelManager,
 )
 from local_shell_mcp.main import _build_mcp_http_app
@@ -174,6 +176,29 @@ def test_mcp_session_key_supports_http_nonweak_and_weak_sessions():
     http = Mcp(RequestContext(WeakSession(), {"mcp-session-id": "transport-1"}))
     assert live_channel_module.mcp_session_key(http) == "mcp-http:transport-1"
 
+    affinity_a = Mcp(
+        RequestContext(
+            WeakSession(),
+            {
+                "mcp-session-id": "transport-a",
+                MCP_SESSION_AFFINITY_HEADER: "stable-dsh-session",
+            },
+        )
+    )
+    affinity_b = Mcp(
+        RequestContext(
+            WeakSession(),
+            {
+                "mcp-session-id": "transport-b",
+                MCP_SESSION_AFFINITY_HEADER: "stable-dsh-session",
+            },
+        )
+    )
+    assert live_channel_module.mcp_session_key(affinity_a).startswith("mcp-affinity:")
+    assert live_channel_module.mcp_session_key(affinity_a) == live_channel_module.mcp_session_key(
+        affinity_b
+    )
+
     nonweak = Mcp(RequestContext(NonWeakSession()))
     first_nonweak = live_channel_module.mcp_session_key(nonweak)
     assert first_nonweak.startswith("mcp-session:")
@@ -183,6 +208,49 @@ def test_mcp_session_key_supports_http_nonweak_and_weak_sessions():
     first_weak = live_channel_module.mcp_session_key(weak)
     assert first_weak.startswith("mcp-session:")
     assert live_channel_module.mcp_session_key(weak) == first_weak
+
+
+def test_mcp_session_affinity_is_scoped_to_authenticated_principal(monkeypatch):
+    class Session:
+        pass
+
+    class FakeMcp:
+        def get_context(self):
+            return type(
+                "Context",
+                (),
+                {
+                    "request_context": type(
+                        "RequestContext",
+                        (),
+                        {
+                            "session": Session(),
+                            "request": type(
+                                "Request",
+                                (),
+                                {"headers": {MCP_SESSION_AFFINITY_HEADER: "shared-affinity"}},
+                            )(),
+                        },
+                    )()
+                },
+            )()
+
+    monkeypatch.setattr(
+        auth_module,
+        "current_principal",
+        lambda: Principal(email="a@example.test", subject="principal-a", claims={}),
+    )
+    principal_a = live_channel_module.mcp_session_key(FakeMcp())
+    monkeypatch.setattr(
+        auth_module,
+        "current_principal",
+        lambda: Principal(email="b@example.test", subject="principal-b", claims={}),
+    )
+    principal_b = live_channel_module.mcp_session_key(FakeMcp())
+
+    assert principal_a.startswith("mcp-affinity:")
+    assert principal_b.startswith("mcp-affinity:")
+    assert principal_a != principal_b
 
 
 def test_app_reattach_does_not_shorten_shared_channel_expiry():
@@ -888,6 +956,26 @@ def test_mcp_session_key_uses_request_session_identity():
 
     assert live_channel_module.mcp_session_key(FakeMcp(Session(), {"mcp-session-id": "abc123"})) == (
         "mcp-http:abc123"
+    )
+    affinity_key = live_channel_module.mcp_session_key(
+        FakeMcp(
+            Session(),
+            {
+                "mcp-session-id": "transport-1",
+                MCP_SESSION_AFFINITY_HEADER: "dsh-session-a",
+            },
+        )
+    )
+    assert affinity_key.startswith("mcp-affinity:")
+    assert "dsh-session-a" not in affinity_key
+    assert affinity_key == live_channel_module.mcp_session_key(
+        FakeMcp(
+            Session(),
+            {
+                "mcp-session-id": "transport-2",
+                MCP_SESSION_AFFINITY_HEADER: "dsh-session-a",
+            },
+        )
     )
     first_session = Session()
     second_session = Session()

@@ -1,19 +1,16 @@
-# DeepSeek Harness bundle: bridge an already-running local-shell-mcp service
-# into DSH through the official MCP client. The full LSM tool surface is kept;
-# DSH profiles may narrow it later with their own ctx.tools restrictions.
+# DeepSeek Harness bundle: load the LSM-aware bridge rather than a generic
+# process-wide MCP client. The bridge keeps the full LSM model tool surface,
+# uses one upstream MCP transport per DSH Session so PR 162 logical-session
+# ownership stays isolated, and contributes a per-session Live Workspace view.
 -
   insert:
-    - id: mcp-local-shell
-      name: '@deepseek-ai/dsh-mcp-client'
+    - id: local-shell-mcp
+      name: local-shell-mcp-dsh
       config:
-        serverName: lsm
-        transport: streamable-http
         url: !!js process.env.DSH_LSM_MCP_URL ?? 'http://127.0.0.1:8765/mcp'
+        browserUrl: !!js process.env.DSH_LSM_BROWSER_URL
         headers: !!js "process.env.DSH_LSM_AUTHORIZATION ? { Authorization: process.env.DSH_LSM_AUTHORIZATION } : {}"
         toolCallTimeoutMs: !!js Number(process.env.DSH_LSM_TOOL_CALL_TIMEOUT_MS ?? 120000)
-        failOnStartupError: false
-        reconnect:
-          enabled: true
-          initialDelayMs: 500
-          maxDelayMs: 30000
-          maxAttempts: 10
+        keepAliveIntervalMs: !!js Number(process.env.DSH_LSM_KEEPALIVE_INTERVAL_MS ?? 30000)
+        reconnectInitialDelayMs: 500
+        reconnectMaxDelayMs: 30000
