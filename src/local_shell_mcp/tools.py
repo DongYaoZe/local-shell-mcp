@@ -598,32 +598,49 @@ def _install_session_run_arguments(mcp: FastMCP) -> None:
 
 
 _PENDING_SESSION_LEASE_CLEANUPS: set[asyncio.Task[None]] = set()
+_SESSION_LEASE_CLEANUP_TASKS: dict[tuple[int, str], asyncio.Task[None]] = {}
+_SESSION_LEASE_CLEANUP_QUEUES: dict[
+    tuple[int, str], dict[str, tuple[dict[str, Any], str, float]]
+] = {}
+_SESSION_LEASE_CLEANUP_MAX_PENDING_PER_SESSION = 128
 
 
-async def _retry_session_tool_cleanup(
+async def _retry_session_tool_cleanups(
     manager: Any,
-    lease: dict[str, Any],
     *,
-    tool_name: str,
-    call_id: str,
+    queue_key: tuple[int, str],
 ) -> None:
     delay_s = 0.25
-    while True:
-        try:
-            cleaned = await asyncio.to_thread(manager.retry_tool_call_cleanup, lease)
-        except Exception as exc:  # noqa: BLE001 - retry until durable state recovers.
-            with suppress(Exception):
-                audit(
-                    "session_lease_cleanup_retry_failed",
-                    tool=tool_name,
-                    call_id=call_id,
-                    error=f"{type(exc).__name__}: {exc}",
-                )
-        else:
-            if cleaned:
+    try:
+        while True:
+            queue = _SESSION_LEASE_CLEANUP_QUEUES.get(queue_key)
+            if not queue:
                 return
-        await asyncio.sleep(delay_s)
-        delay_s = min(30.0, delay_s * 2)
+            now = time.monotonic()
+            for call_id, (lease, tool_name, deadline) in list(queue.items()):
+                if now >= deadline:
+                    queue.pop(call_id, None)
+                    continue
+                try:
+                    cleaned = await asyncio.to_thread(manager.retry_tool_call_cleanup, lease)
+                except Exception as exc:  # noqa: BLE001 - retry while the lease can still block takeover.
+                    with suppress(Exception):
+                        audit(
+                            "session_lease_cleanup_retry_failed",
+                            tool=tool_name,
+                            call_id=call_id,
+                            error=f"{type(exc).__name__}: {exc}",
+                        )
+                else:
+                    if cleaned:
+                        queue.pop(call_id, None)
+            if not queue:
+                return
+            await asyncio.sleep(delay_s)
+            delay_s = min(30.0, delay_s * 2)
+    finally:
+        _SESSION_LEASE_CLEANUP_QUEUES.pop(queue_key, None)
+        _SESSION_LEASE_CLEANUP_TASKS.pop(queue_key, None)
 
 
 def _schedule_session_tool_cleanup_retry(
@@ -640,14 +657,26 @@ def _schedule_session_tool_cleanup_retry(
     # while the external operation was still running". In that failure mode the
     # persisted in-flight lease intentionally falls back to its bounded stale
     # timeout rather than permitting an unsafe early takeover.
-    task = asyncio.create_task(
-        _retry_session_tool_cleanup(
-            manager,
+    session_id = str(lease.get("session_id") or "")
+    if not session_id:
+        return
+    queue_key = (id(manager), session_id)
+    queue = _SESSION_LEASE_CLEANUP_QUEUES.setdefault(queue_key, {})
+    if call_id not in queue and len(queue) >= _SESSION_LEASE_CLEANUP_MAX_PENDING_PER_SESSION:
+        # Cleanup is an optimization: durable leases already have a stale
+        # timeout. Bound queued retries during a prolonged state-backend outage.
+        return
+    if call_id not in queue:
+        queue[call_id] = (
             lease,
-            tool_name=tool_name,
-            call_id=call_id,
+            tool_name,
+            time.monotonic() + SESSION_IN_FLIGHT_LEASE_S,
         )
-    )
+    existing = _SESSION_LEASE_CLEANUP_TASKS.get(queue_key)
+    if existing is not None and not existing.done():
+        return
+    task = asyncio.create_task(_retry_session_tool_cleanups(manager, queue_key=queue_key))
+    _SESSION_LEASE_CLEANUP_TASKS[queue_key] = task
     _PENDING_SESSION_LEASE_CLEANUPS.add(task)
     task.add_done_callback(_PENDING_SESSION_LEASE_CLEANUPS.discard)
 

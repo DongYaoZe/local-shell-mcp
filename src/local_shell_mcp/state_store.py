@@ -137,6 +137,7 @@ class RedisStateStore:
             ) from exc
         self._client = redis.Redis.from_url(url)
         self._prefix = prefix.strip(":") or "local-shell-mcp"
+        self._active_locks = threading.local()
 
     def _key(self, key: str) -> str:
         return f"{self._prefix}:{key}"
@@ -145,10 +146,19 @@ class RedisStateStore:
         value = self._client.get(self._key(key))
         return None if value is None else bytes(value)
 
+    def _refresh_active_locks(self) -> None:
+        for lock in getattr(self._active_locks, "stack", ()):
+            # Refresh immediately before a state mutation. Besides extending
+            # the TTL, redis-py verifies that the lock token is still ours and
+            # raises if another controller acquired the lock after expiry.
+            lock.reacquire()
+
     def write_bytes(self, key: str, value: bytes) -> None:
+        self._refresh_active_locks()
         self._client.set(self._key(key), value)
 
     def delete(self, key: str) -> None:
+        self._refresh_active_locks()
         self._client.delete(self._key(key))
 
     def list_keys(self, prefix: str = "") -> list[str]:
@@ -183,23 +193,33 @@ class RedisStateStore:
                 try:
                     lock.reacquire()
                 except Exception:
-                    # Redis operations inside the protected transaction will
-                    # surface backend failures. Do not let a telemetry thread
-                    # terminate the caller or accidentally release another
-                    # owner's lock token.
-                    return
+                    # A transient Redis outage must not permanently stop lock
+                    # renewal. Keep retrying until the protected transaction
+                    # ends; state operations in the transaction still surface
+                    # persistent backend failures to the caller.
+                    continue
 
         renewal = threading.Thread(
             target=renew,
             name="lsm-redis-state-lock-renewal",
             daemon=True,
         )
+        stack = getattr(self._active_locks, "stack", None)
+        if stack is None:
+            stack = []
+            self._active_locks.stack = stack
+        stack.append(lock)
         renewal.start()
         try:
             yield
         finally:
             stop_renewal.set()
             renewal.join(timeout=max(1.0, _REDIS_LOCK_RENEW_INTERVAL_S * 2))
+            if stack and stack[-1] is lock:
+                stack.pop()
+            else:  # pragma: no cover - defensive against malformed nested use.
+                with contextlib.suppress(ValueError):
+                    stack.remove(lock)
             with contextlib.suppress(Exception):
                 lock.release()
 

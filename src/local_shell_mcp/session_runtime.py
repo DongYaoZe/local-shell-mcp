@@ -27,6 +27,9 @@ PLAN_STEP_ID_LIMIT = 128
 PLAN_STEP_TEXT_LIMIT = 2_000
 PLAN_NOTE_LIMIT = 2_000
 PLAN_STEP_STATUSES = frozenset({"pending", "active", "completed", "skipped"})
+# Durable activity is bounded in raw events. A normal tool call contributes a
+# started and terminal event that the Live Workspace coalesces into one row, so
+# this intentionally yields roughly 100 visible tool rows after a reconnect.
 SESSION_ACTIVITY_LIMIT = 200
 SESSION_IN_FLIGHT_LEASE_S = 2 * 60 * 60
 SESSION_RUN_HISTORY_LIMIT = 100
@@ -728,6 +731,64 @@ class SessionRuntimeManager:
             in_flight_calls=self._in_flight_count_locked(session.session_id),
         )
 
+    def _prune_session_history_locked(
+        self,
+        subject: str,
+        *,
+        protected_session_ids: set[str] | None = None,
+    ) -> None:
+        """Keep retained Session history bounded without requiring manual cleanup."""
+        protected = set(protected_session_ids or ())
+        attached = {session_id for session_id, _run_id in self._attachments.values()}
+        retained = [item for item in self._sessions.values() if item.subject == subject]
+        excess = len(retained) - SESSION_HISTORY_LIMIT_PER_PRINCIPAL
+        if excess <= 0:
+            return
+
+        candidates = []
+        for item in retained:
+            if item.session_id in protected or item.session_id in attached:
+                continue
+            if self._in_flight_count_locked(item.session_id):
+                continue
+            active = item.active_run()
+            if active is not None and active.status == "active":
+                continue
+            candidates.append(item)
+        candidates.sort(
+            key=lambda item: (
+                0 if item.status in {"completed", "cancelled"} else 1,
+                item.updated_at,
+                item.created_at,
+            )
+        )
+
+        for candidate in candidates:
+            if excess <= 0:
+                break
+            session_id = candidate.session_id
+            if self._uses_shared_state_backend():
+                with self._shared_session_locks_locked([session_id]):
+                    self._refresh_session_locked(session_id)
+                    current = self._sessions.get(session_id)
+                    if current is None or current.subject != subject:
+                        continue
+                    if session_id in {
+                        attached_id for attached_id, _run_id in self._attachments.values()
+                    }:
+                        continue
+                    if self._in_flight_count_locked(session_id):
+                        continue
+                    active = current.active_run()
+                    if active is not None and active.status == "active":
+                        continue
+                    self._state_store().delete(f"sessions/{session_id}.json")
+                    self._sessions.pop(session_id, None)
+            else:
+                self._state_store().delete(f"sessions/{session_id}.json")
+                self._sessions.pop(session_id, None)
+            excess -= 1
+
     def manage(
         self,
         session_key: str,
@@ -787,13 +848,6 @@ class SessionRuntimeManager:
             if normalized_action == "start":
                 if self._uses_shared_state_backend():
                     self._refresh_all_sessions_locked()
-                retained = sum(
-                    1 for item in self._sessions.values() if item.subject == subject
-                )
-                if retained >= SESSION_HISTORY_LIMIT_PER_PRINCIPAL:
-                    raise ValueError(
-                        "Logical session history limit reached; delete an old detached or terminal session before starting another"
-                    )
                 previous_attachment = self._attachments.get(session_key)
                 previous_snapshot = None
                 if previous_attachment is not None:
@@ -843,6 +897,16 @@ class SessionRuntimeManager:
                     if rollback_errors:
                         exc.add_note("Session start rollback warnings: " + "; ".join(rollback_errors))
                     raise
+                # Retention cleanup is deliberately best-effort after the new
+                # Session is durable: a cleanup failure must not turn a
+                # successful start into an ambiguous client-visible failure.
+                with contextlib.suppress(Exception):
+                    self._prune_session_history_locked(
+                        subject,
+                        protected_session_ids=(
+                            {previous_attachment[0]} if previous_attachment is not None else set()
+                        ),
+                    )
                 return self._public_state_locked(logical)
 
             if normalized_action == "list":
@@ -1921,7 +1985,7 @@ class SessionRuntimeManager:
                 raise ValueError("No plan continuation is pending")
             if claim_id is not None and plan.continuation_claim_id != claim_id:
                 raise ValueError("Plan continuation claim is stale")
-            if not plan.continuation_reserved:
+            if not plan.continuation_reserved and accepted:
                 raise ValueError("Plan continuation was not reserved for dispatch")
             now = time.time()
             snapshot = copy.deepcopy(logical)

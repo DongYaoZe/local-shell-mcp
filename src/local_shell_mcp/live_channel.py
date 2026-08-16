@@ -436,6 +436,10 @@ class LiveChannelManager:
                 if self._session_channels.get(session_key) == channel.live_id:
                     self._session_channels.pop(session_key, None)
                 return None
+            already_bound = (
+                current_live_id == channel.live_id
+                and channel.logical_session_id == logical_session_id
+            )
             if exclusive_model_owner:
                 self._drop_other_model_session_mappings_locked(
                     channel.live_id, keep_session_key=session_key
@@ -461,12 +465,13 @@ class LiveChannelManager:
             self._session_channels[session_key] = channel.live_id
             self._set_logical_session_locked(channel, logical_session_id)
             self._consume_recovery_claim_locked(subject, channel.live_id)
-            self._publish_locked(
-                channel,
-                "session.attached",
-                actor="system",
-                data={"session_id": logical_session_id},
-            )
+            if not already_bound:
+                self._publish_locked(
+                    channel,
+                    "session.attached",
+                    actor="system",
+                    data={"session_id": logical_session_id},
+                )
             return channel
 
     def _consume_recovery_claim_locked(self, subject: str, live_id: str) -> None:

@@ -280,6 +280,25 @@ def test_live_workspace_logical_session_binding_replaces_old_mapping():
     assert manager._logical_session_channels["s_second"] == channel.live_id
 
 
+def test_live_workspace_repeated_same_session_binding_is_idempotent():
+    manager = LiveChannelManager()
+    channel, _ = manager.open(
+        session_key="mcp:model",
+        subject="user",
+        scopes=tuple(ALL_OAUTH_SCOPES),
+    )
+    assert manager.bind_logical_session("mcp:model", "s_first", "user") is channel
+    seq = channel.seq
+    events = list(channel.events)
+
+    assert manager.bind_logical_session(
+        "mcp:model", "s_first", "user", exclusive_model_owner=True
+    ) is channel
+
+    assert channel.seq == seq
+    assert list(channel.events) == events
+
+
 def test_live_workspace_session_rebind_drops_prior_operational_events():
     manager = LiveChannelManager()
     channel, _ = manager.open(
@@ -1337,6 +1356,36 @@ async def test_completed_tool_retries_durable_lease_cleanup(tmp_path, monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_session_lease_cleanup_retry_queue_is_bounded(monkeypatch):
+    class BrokenManager:
+        def retry_tool_call_cleanup(self, _lease):  # noqa: ANN001, ANN201
+            raise OSError("state backend unavailable")
+
+    manager = BrokenManager()
+    monkeypatch.setattr(tools_module, "SESSION_IN_FLIGHT_LEASE_S", 0.0)
+    session_id = "s_bounded"
+    for index in range(tools_module._SESSION_LEASE_CLEANUP_MAX_PENDING_PER_SESSION + 40):
+        call_id = f"call-{index}"
+        tools_module._schedule_session_tool_cleanup_retry(
+            manager,
+            {"session_id": session_id, "run_id": "r_test", "call_id": call_id},
+            tool_name="file_write",
+            call_id=call_id,
+        )
+
+    queue_key = (id(manager), session_id)
+    assert len(tools_module._SESSION_LEASE_CLEANUP_QUEUES[queue_key]) == (
+        tools_module._SESSION_LEASE_CLEANUP_MAX_PENDING_PER_SESSION
+    )
+    assert len(tools_module._SESSION_LEASE_CLEANUP_TASKS) == 1
+    pending = list(tools_module._PENDING_SESSION_LEASE_CLEANUPS)
+    assert len(pending) == 1
+    await asyncio.gather(*pending)
+    assert queue_key not in tools_module._SESSION_LEASE_CLEANUP_QUEUES
+    assert queue_key not in tools_module._SESSION_LEASE_CLEANUP_TASKS
+
+
+@pytest.mark.asyncio
 async def test_mcp_run_lease_blocks_stale_same_transport_agent(tmp_path, monkeypatch):
     _configure(tmp_path, monkeypatch, auth="none")
     mcp = build_mcp()
@@ -1632,6 +1681,56 @@ async def test_live_workspace_keeps_model_and_human_mutations_collaborative(tmp_
     assert live_channel_module.get_live_channel_manager().authenticate(refreshed_live_token) is channel
     event_types = [event["type"] for event in channel.events]
     assert "tool.completed" in event_types
+
+
+def test_live_continuation_failed_before_validation_releases_claim(tmp_path, monkeypatch):
+    _configure(tmp_path, monkeypatch, auth="oauth")
+    live_manager = live_channel_module.get_live_channel_manager()
+    session_manager = session_runtime_module.get_session_runtime_manager()
+    logical = session_manager.manage(
+        "mcp:http-prevalidate", "user", action="start", objective="Continue safely"
+    )
+    session_manager.manage_plan(
+        "mcp:http-prevalidate",
+        action="start",
+        objective="Continue safely",
+        steps=[{"id": "work", "text": "Work"}],
+    )
+    logical_state = session_manager._sessions[logical["session_id"]]
+    assert logical_state.plan is not None
+    logical_state.plan.last_agent_activity -= session_runtime_module.PLAN_EXECUTION_LEASE_S + 1
+    _channel, token = live_manager.open(
+        session_key="mcp:http-prevalidate",
+        subject="user",
+        scopes=tuple(ALL_OAUTH_SCOPES),
+        logical_session_id=logical["session_id"],
+    )
+    headers = {"Authorization": f"Bearer {token}"}
+    app = _build_mcp_http_app(build_mcp())
+
+    with TestClient(app, base_url="http://testserver") as client:
+        claimed = client.post(
+            "/api/live/plan/continuation",
+            headers=headers,
+            json={"action": "claim"},
+        )
+        claim_id = claimed.json()["data"]["claim_id"]
+        reported = client.post(
+            "/api/live/plan/continuation",
+            headers=headers,
+            json={
+                "action": "report",
+                "claim_id": claim_id,
+                "accepted": False,
+                "error": "updateModelContext failed",
+            },
+        )
+
+    assert reported.status_code == 200
+    plan = reported.json()["data"]["plan"]
+    assert plan["continuation_pending"] is False
+    assert plan["continuation_reserved"] is False
+    assert plan["continuation_count"] == 0
 
 
 def test_live_http_token_cors_and_collaborative_human_mutation(tmp_path, monkeypatch):

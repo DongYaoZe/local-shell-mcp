@@ -555,6 +555,10 @@ function planProgress(): { completed: number; total: number; percent: number; ac
 
 function renderActivity(): void {
   const visible = coalesceActivityEvents(durableSessionEvents())
+  // Durable Session history keeps 200 raw lifecycle events. Since a normal
+  // started/completed pair coalesces into one row, reconnects intentionally
+  // restore roughly 100 tool rows; the larger slice also leaves room for
+  // live-only and semantic Session/Plan events.
   const recent = [...visible].reverse().slice(0, 200)
   const running = currentRunningEvent()
   const progress = planProgress()

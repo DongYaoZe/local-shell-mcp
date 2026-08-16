@@ -444,6 +444,39 @@ def test_plan_continuation_waits_for_inflight_and_backs_off(tmp_path):
     assert manager.claim_plan_continuation(session_id, subject="user") is not None
 
 
+def test_unreserved_failed_continuation_report_releases_claim(tmp_path):
+    manager = SessionRuntimeManager(tmp_path / ".state")
+    started = manager.manage("mcp:a", "user", action="start", objective="Task")
+    session_id = started["session_id"]
+    run_id = started["active_run"]["run_id"]
+    manager.manage_plan(
+        "mcp:a",
+        action="start",
+        session_run_id=run_id,
+        objective="Task",
+        steps=[{"id": "work", "text": "Work"}],
+    )
+    logical = manager._sessions[session_id]
+    assert logical.plan is not None
+    logical.plan.last_agent_activity = time.time() - PLAN_EXECUTION_LEASE_S - 1
+    claim = manager.claim_plan_continuation(session_id, subject="user")
+    assert claim is not None
+    assert logical.plan.continuation_reserved is False
+
+    failed = manager.report_plan_continuation(
+        session_id,
+        accepted=False,
+        error="model context update failed",
+        claim_id=claim["claim_id"],
+        subject="user",
+    )
+
+    assert failed["continuation_pending"] is False
+    assert failed["continuation_reserved"] is False
+    assert failed["continuation_count"] == 0
+    assert failed["continuation_retry_after"] is not None
+
+
 def test_tool_start_persistence_failure_fails_closed(tmp_path, monkeypatch):
     manager = SessionRuntimeManager(tmp_path / ".state")
     started = manager.manage("mcp:a", "user", action="start", objective="Task")
@@ -869,7 +902,7 @@ def test_new_transport_requires_explicit_resume_before_execution(tmp_path):
         )
 
 
-def test_session_history_is_bounded_and_delete_frees_capacity(tmp_path):
+def test_session_history_auto_prunes_oldest_detached_session(tmp_path):
     manager = SessionRuntimeManager(tmp_path / ".state")
     session_ids: list[str] = []
     for index in range(SESSION_HISTORY_LIMIT_PER_PRINCIPAL):
@@ -878,24 +911,21 @@ def test_session_history_is_bounded_and_delete_frees_capacity(tmp_path):
         )
         session_ids.append(started["session_id"])
 
-    with pytest.raises(ValueError, match="history limit"):
-        manager.manage("mcp:a", "user", action="start", objective="Too many")
-
-    with pytest.raises(ValueError, match="active agent run"):
-        manager.manage(
-            "mcp:cleanup", "user", action="delete", session_id=session_ids[-1]
-        )
-    deleted = manager.manage(
-        "mcp:cleanup", "user", action="delete", session_id=session_ids[0]
-    )
-    assert deleted == {"session_id": session_ids[0], "deleted": True}
-
     replacement = manager.manage("mcp:a", "user", action="start", objective="Replacement")
     assert replacement["session_id"] not in session_ids
     listed = manager.manage("mcp:reader", "user", action="list")["sessions"]
     assert len(listed) == SESSION_HISTORY_LIMIT_PER_PRINCIPAL
     with pytest.raises(ValueError, match="Unknown logical session"):
         manager.get(session_ids[0], subject="user")
+
+
+def test_session_delete_still_rejects_active_run(tmp_path):
+    manager = SessionRuntimeManager(tmp_path / ".state")
+    started = manager.manage("mcp:a", "user", action="start", objective="Task")
+    with pytest.raises(ValueError, match="active agent run"):
+        manager.manage(
+            "mcp:cleanup", "user", action="delete", session_id=started["session_id"]
+        )
 
 
 def test_session_initial_load_retries_after_transient_scan_failure(tmp_path, monkeypatch):

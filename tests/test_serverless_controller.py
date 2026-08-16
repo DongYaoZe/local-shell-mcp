@@ -150,10 +150,11 @@ def test_file_and_memory_state_store_round_trip(tmp_path):
 
 def test_redis_state_store_round_trip_and_lock(monkeypatch):
     class FakeLock:
-        def __init__(self, acquired: bool = True):
+        def __init__(self, acquired: bool = True, reacquire_failures: int = 0):
             self.acquired = acquired
             self.released = False
             self.reacquired = 0
+            self.reacquire_failures = reacquire_failures
 
         def acquire(self, *, blocking: bool):
             assert blocking is True
@@ -164,6 +165,9 @@ def test_redis_state_store_round_trip_and_lock(monkeypatch):
 
         def reacquire(self):
             self.reacquired += 1
+            if self.reacquire_failures:
+                self.reacquire_failures -= 1
+                raise OSError("temporary redis outage")
             return True
 
     class FakeClient:
@@ -212,6 +216,22 @@ def test_redis_state_store_round_trip_and_lock(monkeypatch):
     assert client.last_lock_args == ("test-prefix:locks:jobs", 30.0, 5, False)
     assert client.next_lock.reacquired >= 1
     assert client.next_lock.released is True
+
+    client.next_lock = FakeLock(reacquire_failures=1)
+    with (
+        pytest.raises(OSError, match="temporary redis outage"),
+        store.lock("guarded-write"),
+    ):
+        store.write_bytes("jobs/guarded", b"must-not-write")
+    assert store.read_bytes("jobs/guarded") is None
+    assert client.next_lock.released is True
+
+    client.next_lock = FakeLock(reacquire_failures=1)
+    with store.lock("flaky-renewal"):
+        time.sleep(0.02)
+    assert client.next_lock.reacquired >= 2
+    assert client.next_lock.released is True
+
     store.delete("jobs/one")
     assert store.read_bytes("jobs/one") is None
 
