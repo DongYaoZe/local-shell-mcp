@@ -389,7 +389,7 @@ async function handleAction(action: string, target: HTMLElement): Promise<void> 
       const tool = target.dataset.tool || ""
       fileMachine = target.dataset.machine || "local"
       if (path) {
-        if (["list_files", "tree_view", "glob_search", "grep_search", "search"].includes(tool)) {
+        if (["file_list", "file_tree", "file_glob", "file_grep", "list_files", "tree_view", "glob_search", "grep_search", "search"].includes(tool)) {
           filePath = path
           selectedFile = ""
         } else {

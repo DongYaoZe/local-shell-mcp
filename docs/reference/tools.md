@@ -2,50 +2,26 @@
 
 This page is generated from the actual MCP tool schemas. Run `python scripts/generate-tools-reference.py` after changing the public tool surface.
 
-Most tools return a structured `ToolResult` containing `ok`, `message`, and `data`. Connector-style `search` and `fetch` use connector-compatible results, while `open_live_workspace` returns the model-visible state used to render the MCP App. Most execution and file tools accept an optional `machine`; omit it for the controller workspace and provide it for a connected worker. Git operations intentionally use `run_shell_tool` or another shell tool rather than dedicated Git wrappers.
+Most tools return a structured `ToolResult` containing `ok`, `message`, and `data`. `workspace_open` returns the model-visible state used to render the MCP App. Most execution and file tools accept an optional `machine`; omit it for the controller workspace and provide it for a connected worker. Git operations intentionally use `run_shell` or another shell tool rather than dedicated Git wrappers.
 
 ## Selection guide
 
 | Need | Preferred tools |
 |---|---|
-| Monitor or collaborate with execution in ChatGPT | `open_live_workspace` |
-| Inspect an environment | `environment_info`, `tree_view`, `read_file` |
-| Run a short command or Git operation | `run_shell_tool` |
+| Monitor or collaborate with execution in ChatGPT | `workspace_open` |
+| Inspect an environment | `environment_get`, `file_tree`, `file_read` |
+| Run a short command or Git operation | `run_shell` |
 | Run an interactive or long task | `shell_start` or `job_start` |
-| Make exact file changes | `edit_file` or `apply_patch` |
+| Make exact file changes | `file_edit` or `file_patch` |
 | Transfer a file or directory | `remote_transfer` |
 | Discover an external MCP capability | `mcp_tool_search`, then `mcp_tool_inspect` |
 | Interact with a page | `browser_session`, `browser_snapshot`, then `browser_act` |
 | Run custom browser logic | `browser_run_script` |
 | Work on a remote machine | use the same tool with `machine`; use `remote_*` only for worker administration |
 
-## Connector and discovery
-
-### `search`
-
-Search workspace files and return ChatGPT connector-compatible results.
-
-| Parameter | Type | Required/default | Description |
-|---|---|---|---|
-| `query` | `string` | required |  |
-| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
-
-OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
-
-### `fetch`
-
-Fetch a workspace file by id returned from search.
-
-| Parameter | Type | Required/default | Description |
-|---|---|---|---|
-| `id` | `string` | required |  |
-| `session_run_id` | `string \| null` | `null` | Run lease returned as active_run.run_id by session_manage. Required for tool calls while a logical session is attached; use the new value after resume/takeover. |
-
-OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
-
 ## Interactive workspace
 
-### `open_live_workspace`
+### `workspace_open`
 
 Open or reuse the interactive Live Workspace for real-time human/agent collaboration. Call it once for an active task and reuse the self-reconnecting floating workspace instead of reopening it repeatedly. Use it when terminal output, files/diffs, jobs, remotes, or audit activity would materially improve the workflow.
 
@@ -61,7 +37,7 @@ When `machine` is supplied, the call additionally requires `remote:use` and runs
 
 ## Environment, skills, and task state
 
-### `environment_info`
+### `environment_get`
 
 Return version, workspace, auth, policy, and environment information locally or on a remote machine.
 
@@ -74,7 +50,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 
 When `machine` is supplied, the call additionally requires `remote:use` and runs through the remote worker protocol.
 
-### `skills_list`
+### `skill_list`
 
 List installed agent skills without loading their instructions. The MCP tool surface stays fixed; adding or removing skill directories is reflected on the next call.
 
@@ -86,7 +62,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 
 ### `skill_load`
 
-Load one installed agent skill by the exact name returned from skills_list. Returns SKILL.md instructions plus related file paths.
+Load one installed agent skill by the exact name returned from skill_list. Returns SKILL.md instructions plus related file paths.
 
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
@@ -95,7 +71,7 @@ Load one installed agent skill by the exact name returned from skills_list. Retu
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
-### `skill_read_file`
+### `skill_read`
 
 Read one related text file from an installed Skill.
 
@@ -169,7 +145,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 
 ## Shells and jobs
 
-### `run_shell_tool`
+### `run_shell`
 
 Run one non-interactive shell command locally or on a remote machine. Use for build, test, package-manager, Git, and inspection commands that should finish promptly. For long-running, interactive, or streaming processes, use shell_start or job_start. Optional purpose/explanation fields let agents state why the command is being run.
 
@@ -188,7 +164,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 
 When `machine` is supplied, the call additionally requires `remote:use` and runs through the remote worker protocol.
 
-### `run_python_tool`
+### `run_python`
 
 Write and run a short Python script locally or on a remote machine.
 
@@ -255,7 +231,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 
 When `machine` is supplied, the call additionally requires `remote:use` and runs through the remote worker protocol.
 
-### `shell_kill`
+### `shell_stop`
 
 Terminate a persistent local or remote shell session.
 
@@ -361,7 +337,7 @@ When `machine` is supplied, the call additionally requires `remote:use` and runs
 
 ## Files and transfer
 
-### `list_files`
+### `file_list`
 
 List files and directories locally or on a remote machine.
 
@@ -377,7 +353,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 
 When `machine` is supplied, the call additionally requires `remote:use` and runs through the remote worker protocol.
 
-### `tree_view`
+### `file_tree`
 
 Return a compact directory tree locally or on a remote machine.
 
@@ -393,7 +369,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 
 When `machine` is supplied, the call additionally requires `remote:use` and runs through the remote worker protocol.
 
-### `glob_search`
+### `file_glob`
 
 Find paths by glob locally or on a remote machine.
 
@@ -409,7 +385,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 
 When `machine` is supplied, the call additionally requires `remote:use` and runs through the remote worker protocol.
 
-### `grep_search`
+### `file_grep`
 
 Search file contents locally or on a remote machine.
 
@@ -428,7 +404,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 
 When `machine` is supplied, the call additionally requires `remote:use` and runs through the remote worker protocol.
 
-### `read_file`
+### `file_read`
 
 Read one file or a list of files locally or on a remote machine.
 
@@ -446,9 +422,9 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 
 When `machine` is supplied, the call additionally requires `remote:use` and runs through the remote worker protocol.
 
-### `view_image`
+### `image_view`
 
-View a PNG, JPEG, GIF, or WebP file as native MCP image content locally or on a remote machine. Use this instead of read_file when visual inspection is needed. Remote images reuse the existing file-transfer protocol, so the worker does not need a new image-specific RPC.
+View a PNG, JPEG, GIF, or WebP file as native MCP image content locally or on a remote machine. Use this instead of file_read when visual inspection is needed. Remote images reuse the existing file-transfer protocol, so the worker does not need a new image-specific RPC.
 
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
@@ -460,7 +436,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 
 When `machine` is supplied, the call additionally requires `remote:use` and runs through the remote worker protocol.
 
-### `write_file`
+### `file_write`
 
 Write a UTF-8 text file locally or on a remote machine.
 
@@ -478,7 +454,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 
 When `machine` is supplied, the call additionally requires `remote:use` and runs through the remote worker protocol.
 
-### `edit_file`
+### `file_edit`
 
 Apply one or more exact-text edits to one local or remote file. Each edits entry contains old, new, and optional replace_all; old must match exactly, including whitespace and indentation.
 
@@ -495,7 +471,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 
 When `machine` is supplied, the call additionally requires `remote:use` and runs through the remote worker protocol.
 
-### `delete_file_or_dir`
+### `file_delete`
 
 Delete a local or remote file or directory. recursive=false deletes files or empty directories; recursive=true is required for non-empty directories and should be used carefully.
 
@@ -512,7 +488,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 
 When `machine` is supplied, the call additionally requires `remote:use` and runs through the remote worker protocol.
 
-### `apply_patch`
+### `file_patch`
 
 Check and apply a unified diff or an apply_patch envelope locally or remotely.
 
@@ -549,7 +525,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 
 At least one of `source_machine` and `destination_machine` must be supplied. Omitted endpoints refer to the controller workspace; the source may be either a file or a directory.
 
-### `create_file_link`
+### `link_create`
 
 Create a temporary browser-accessible URL for a local file. By default the response is an attachment download; set inline=true when the file should render directly in a browser or Markdown image. Links are public bearer URLs protected by a high-entropy token, TTL, optional download-count limit, and explicit revocation.
 
@@ -564,7 +540,7 @@ Create a temporary browser-accessible URL for a local file. By default the respo
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
-### `list_file_links`
+### `link_list`
 
 List generated local file download URLs.
 
@@ -575,7 +551,7 @@ List generated local file download URLs.
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
-### `revoke_file_link`
+### `link_revoke`
 
 Revoke a generated local file download URL.
 

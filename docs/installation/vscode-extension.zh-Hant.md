@@ -129,7 +129,7 @@ https://your-public-host.example.com/mcp
 複製設置提示詞後，先從只讀任務開始：
 
 ```text
-使用 local-shell-mcp。先調用 environment_info，並對工作區調用 tree_view。暫時不要修改文件。
+使用 local-shell-mcp。先調用 environment_get，並對工作區調用 file_tree。暫時不要修改文件。
 ```
 
 然後再進入有邊界的編輯任務：

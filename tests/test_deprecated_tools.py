@@ -33,7 +33,7 @@ async def test_deprecated_tools_are_tombstones_not_listed_tools() -> None:
         assert result["data"] == {
             "status": "stale_tool_snapshot",
             "deprecated_tool": "version_info",
-            "replacement": "environment_info",
+            "replacement": "environment_get",
             "removed_in": "3.0.0",
             "help_url": DEPRECATED_TOOL_HELP_URL,
             "assistant_instruction": (
@@ -41,7 +41,7 @@ async def test_deprecated_tools_are_tombstones_not_listed_tools() -> None:
                 "a stale local-shell-mcp tool snapshot and ask them to refresh the LSM App's "
                 "tools, or remove and re-add the App if refresh is unavailable. Refer them to "
                 f"{DEPRECATED_TOOL_HELP_URL}. After the cache is updated, use the replacement "
-                "tool 'environment_info'."
+                "tool 'environment_get'."
             ),
         }
 
@@ -56,7 +56,7 @@ async def test_remote_tombstone_points_to_unified_machine_tool() -> None:
     result = await mcp.call_tool("remote_run_shell_tool", {"machine": "worker"})
 
     assert result["data"]["status"] == "stale_tool_snapshot"
-    assert result["data"]["replacement"] == "run_shell_tool"
+    assert result["data"]["replacement"] == "run_shell"
     assert "refresh the LSM App's tools" in result["data"]["assistant_instruction"]
 
 
@@ -107,4 +107,38 @@ async def test_todo_tombstones_point_to_plan_manage() -> None:
     for name in ("todo_read_tool", "todo_write_tool"):
         result = await mcp.call_tool(name, {})
         assert result["data"]["replacement"] == "plan_manage"
+        assert result["data"]["removed_in"] == "4.0.0"
+
+
+async def test_v4_tool_rename_tombstones_point_to_canonical_surface() -> None:
+    mcp = DeprecatedToolFastMCP("test")
+    replacements = {
+        "search": "file_grep",
+        "fetch": "file_read",
+        "open_live_workspace": "workspace_open",
+        "environment_info": "environment_get",
+        "skills_list": "skill_list",
+        "skill_read_file": "skill_read",
+        "run_shell_tool": "run_shell",
+        "run_python_tool": "run_python",
+        "shell_kill": "shell_stop",
+        "list_files": "file_list",
+        "tree_view": "file_tree",
+        "glob_search": "file_glob",
+        "grep_search": "file_grep",
+        "read_file": "file_read",
+        "view_image": "image_view",
+        "create_file_link": "link_create",
+        "list_file_links": "link_list",
+        "revoke_file_link": "link_revoke",
+        "write_file": "file_write",
+        "edit_file": "file_edit",
+        "delete_file_or_dir": "file_delete",
+        "apply_patch": "file_patch",
+    }
+
+    for old_name, replacement in replacements.items():
+        result = await mcp.call_tool(old_name, {})
+        assert result["data"]["status"] == "stale_tool_snapshot"
+        assert result["data"]["replacement"] == replacement
         assert result["data"]["removed_in"] == "4.0.0"

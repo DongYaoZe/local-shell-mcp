@@ -353,6 +353,10 @@ def _record_live_human_action(
 
 _AUDIT_FILE_WRITE_TOOLS = frozenset(
     {
+        "file_write",
+        "file_edit",
+        "file_delete",
+        "file_patch",
         "write_file",
         "edit_file",
         "delete_file_or_dir",
@@ -361,10 +365,13 @@ _AUDIT_FILE_WRITE_TOOLS = frozenset(
 )
 _AUDIT_EXECUTE_TOOLS = frozenset(
     {
-        "run_shell_tool",
-        "run_python_tool",
+        "run_shell",
+        "run_python",
         "shell_start",
         "shell_send",
+        "shell_stop",
+        "run_shell_tool",
+        "run_python_tool",
         "shell_kill",
         "job_start",
         "job_stop",
@@ -372,7 +379,7 @@ _AUDIT_EXECUTE_TOOLS = frozenset(
     }
 )
 _AUDIT_FILE_SHARE_TOOLS = frozenset(
-    {"create_file_link", "list_file_links", "revoke_file_link"}
+    {"link_create", "link_list", "link_revoke", "create_file_link", "list_file_links", "revoke_file_link"}
 )
 
 
@@ -402,7 +409,7 @@ def _audit_view_image_detail(
     rows: int,
     cell_aspect: float,
 ) -> dict[str, Any]:
-    if str(entry.get("tool") or "") != "view_image":
+    if str(entry.get("tool") or "") not in {"image_view", "view_image"}:
         return entry
     output = entry.get("output")
     if not isinstance(output, dict):

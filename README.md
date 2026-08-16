@@ -116,7 +116,7 @@ For full shell, filesystem, remote-worker, and Playwright tools, use ChatGPT Dev
 
 `session_manage` provides a durable logical task context for agent work. A Session is deliberately independent of machine and working directory: it stores the task objective, semantic progress reports, recent execution activity, agent-run history, and an optional Plan. A later ChatGPT run can call `session_manage(action="resume", session_id=..., takeover=true)` to inherit that context; takeover supersedes a still-active older run so stale agents cannot continue mutating the same Session. Agents should report meaningful checkpoints with `session_manage(action="report", ...)` rather than copying every tool result into the Session summary.
 
-When the client supports MCP Apps, `open_live_workspace` opens the execution view for the current Session as a floating MCP App and can expand to fullscreen. The Live Workspace is a reconnectable view and collaboration transport, not the owner of task state: closing it, reconnecting MCP, or handing the Session to another ChatGPT run does not discard Session progress or its Plan. Ordinary MCP tools remain the execution API, while the app adds live operational activity, persistent terminals, file/diff inspection, jobs, remotes, audit data, and the active Session id. Clients that do not render MCP Apps continue to use the normal tool surface unchanged.
+When the client supports MCP Apps, `workspace_open` opens the execution view for the current Session as a floating MCP App and can expand to fullscreen. The Live Workspace is a reconnectable view and collaboration transport, not the owner of task state: closing it, reconnecting MCP, or handing the Session to another ChatGPT run does not discard Session progress or its Plan. Ordinary MCP tools remain the execution API, while the app adds live operational activity, persistent terminals, file/diff inspection, jobs, remotes, audit data, and the active Session id. Clients that do not render MCP Apps continue to use the normal tool surface unchanged.
 
 `plan_manage` optionally enables **Goal mode** on the current Session for substantial multi-step work. An active Plan is the goal: its steps can be revised as execution changes and, while a Live Workspace is attached, the app can request continuation after 15 minutes without agent tool activity. Automatic continuation is capped at 10 continuation attempts (accepted or rejected) and resumes the same Session before continuing. Blocked, completed, and cancelled Plan statuses are never nudged; an active Plan whose steps are all completed or skipped remains eligible for cleanup continuation so a resumed agent can call `plan_manage(action="finish")`. A Session does not require a Plan.
 
@@ -157,7 +157,7 @@ See the [remote workers guide](https://fwerkor.github.io/local-shell-mcp/guides/
 
 Skills are discovered from three ordered sources: project-level `/workspace/.agents/skills`, the LSM-managed `/workspace/.local-shell-mcp/agent_config/skills`, and global `~/.config/agents/skills`. Higher-priority sources override lower-priority Skills with the same name, and symlinked Skill directories and files are supported.
 
-This makes the universal Skills CLI layout work directly, for example `npx skills add owner/repo --agent universal -y`. Use `skills_list` to discover installed Skills, `skill_load` to load one instruction set, and `skill_read_file` to read a related file by the returned Skill-relative path. Changes are detected on the next call; no per-Skill MCP tools are registered and no client reconnect is required.
+This makes the universal Skills CLI layout work directly, for example `npx skills add owner/repo --agent universal -y`. Use `skill_list` to discover installed Skills, `skill_load` to load one instruction set, and `skill_read` to read a related file by the returned Skill-relative path. Changes are detected on the next call; no per-Skill MCP tools are registered and no client reconnect is required.
 
 See the [Agent Skills guide](https://fwerkor.github.io/local-shell-mcp/guides/skills/).
 
@@ -165,17 +165,18 @@ See the [Agent Skills guide](https://fwerkor.github.io/local-shell-mcp/guides/sk
 
 The public MCP surface includes:
 
-- Shell and jobs: `run_shell_tool`, `run_python_tool`, persistent `shell_*`, and tracked `job_*` tools. Use `run_shell_tool` for Git CLI operations.
-- Filesystem: `list_files`, `tree_view`, `glob_search`, `grep_search`, unified `read_file`, native-vision `view_image`, `write_file`, unified `edit_file`, `delete_file_or_dir`, and `apply_patch`.
+- Live Workspace: `workspace_open` opens the reconnectable MCP App for the current logical Session.
+- Shell and jobs: `run_shell`, `run_python`, persistent `shell_*`, and tracked `job_*` tools. Use `run_shell` for Git CLI operations.
+- Filesystem: `file_list`, `file_tree`, `file_glob`, `file_grep`, unified `file_read`, native-vision `image_view`, `file_write`, unified `file_edit`, `file_delete`, and `file_patch`.
 - Transfer: `remote_transfer` for files or directories across controller and worker endpoints.
 - Dynamic MCP: `mcp_manage`, `mcp_tool_search`, `mcp_tool_inspect`, and `mcp_tool_call`. External tools are discovered progressively and never expand LSM's own `tools/list` surface.
 - Browser: persistent high-level `browser_session`, `browser_snapshot`, and `browser_act`; `browser_run_script` is the low-level Playwright escape hatch.
-- File links: `create_file_link`, `list_file_links`, `revoke_file_link`.
+- File links: `link_create`, `link_list`, `link_revoke`.
 - Remote workers: `remote_manage` with `invite`, `list`, `rename`, and `revoke` actions; normal execution tools accept optional `machine`.
-- Agent Skills: `skills_list`, `skill_load`, `skill_read_file`.
+- Agent Skills: `skill_list`, `skill_load`, `skill_read`.
 - Sessions: `session_manage` for durable task context, progress handoff, agent-run takeover, and cross-run inheritance.
 - Planning: `plan_manage` for optional Session-owned Goal mode and automatic continuation.
-- Diagnostics: `environment_info` (including version information), `secret_scan`, and `audit_tail`.
+- Diagnostics: `environment_get` (including version information), `secret_scan`, and `audit_tail`.
 
 The detailed tool reference, including purpose, inputs, returns, combinations, and notes for every tool, is available in the [docs](https://fwerkor.github.io/local-shell-mcp/reference/tools/).
 

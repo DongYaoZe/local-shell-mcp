@@ -17,7 +17,7 @@ local-shell-mcp --mode mcp
 
 ## ChatGPT Live Workspace
 
-When ChatGPT renders MCP Apps, `open_live_workspace` opens a floating collaborative view for the currently attached logical Session. The Session owns durable task state; the Live Workspace only presents live activity and human controls. Reconnecting the app or changing ChatGPT/MCP transport therefore does not reset the Session.
+When ChatGPT renders MCP Apps, `workspace_open` opens a floating collaborative view for the currently attached logical Session. The Session owns durable task state; the Live Workspace only presents live activity and human controls. Reconnecting the app or changing ChatGPT/MCP transport therefore does not reset the Session.
 
 A typical handoff is:
 
@@ -28,7 +28,7 @@ session_manage(action="start", objective=...)
 new agent run
 session_manage(action="resume", session_id=..., takeover=true)
         -> inherited progress, Plan, and recent activity
-open_live_workspace()
+workspace_open()
         -> reconnectable view of that Session
 ```
 

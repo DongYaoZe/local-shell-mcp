@@ -259,7 +259,7 @@ export function activityEventKey(event: LiveEvent): string {
 export function isOperationalActivityEvent(event: LiveEvent): boolean {
   if (event.type === "channel.opened") return false
   if (event.type === "human.action" && event.data.action === "terminal.input") return false
-  return !["open_live_workspace", "live_workspace_reconnect"].includes(String(event.data.tool || ""))
+  return !["workspace_open", "open_live_workspace", "live_workspace_reconnect"].includes(String(event.data.tool || ""))
 }
 
 export function activityIntent(event: LiveEvent): string {
@@ -268,22 +268,22 @@ export function activityIntent(event: LiveEvent): string {
   const path = typeof event.data.path === "string" ? event.data.path : ""
   const name = typeof event.data.name === "string" ? event.data.name : ""
   if (purpose) return purpose
-  if (tool === "run_shell_tool") return "Running command"
+  if (["run_shell", "run_shell_tool"].includes(tool)) return "Running command"
   if (tool === "shell_start") return name ? `Opening ${name}` : "Opening terminal"
   if (tool === "shell_send") return "Sending terminal input"
   if (tool === "shell_read") return "Reading terminal output"
-  if (tool === "shell_kill") return "Closing terminal"
+  if (["shell_stop", "shell_kill"].includes(tool)) return "Closing terminal"
   if (tool === "job_start") return name ? `Starting ${name}` : "Starting background job"
   if (tool === "job_tail") return "Reading job output"
   if (tool === "job_stop") return "Stopping background job"
   if (tool === "job_retry") return "Retrying background job"
   if (tool === "remote_transfer") return "Transferring files"
-  if (tool === "read_file") return path ? `Reading ${basename(path)}` : "Reading file"
-  if (tool === "write_file") return path ? `Writing ${basename(path)}` : "Writing file"
-  if (tool === "edit_file") return path ? `Editing ${basename(path)}` : "Editing file"
-  if (tool === "delete_file_or_dir") return path ? `Deleting ${basename(path)}` : "Deleting file"
-  if (tool === "apply_patch") return "Applying patch"
-  if (tool === "grep_search" || tool === "glob_search" || tool === "tree_view" || tool === "search") return "Searching workspace"
+  if (["file_read", "read_file"].includes(tool)) return path ? `Reading ${basename(path)}` : "Reading file"
+  if (["file_write", "write_file"].includes(tool)) return path ? `Writing ${basename(path)}` : "Writing file"
+  if (["file_edit", "edit_file"].includes(tool)) return path ? `Editing ${basename(path)}` : "Editing file"
+  if (["file_delete", "delete_file_or_dir"].includes(tool)) return path ? `Deleting ${basename(path)}` : "Deleting file"
+  if (["file_patch", "apply_patch"].includes(tool)) return "Applying patch"
+  if (["file_grep", "file_glob", "file_tree", "file_list", "grep_search", "glob_search", "tree_view", "list_files", "search"].includes(tool)) return "Searching workspace"
   if (tool === "browser_session" || tool === "browser_act" || tool === "browser_snapshot" || tool === "browser_run_script") return "Using browser"
   if (tool === "remote_manage") return "Managing remote machines"
   if (tool === "audit_tail") return "Reading audit log"
@@ -295,15 +295,15 @@ export type ActivityDestination = "terminal" | "jobs" | "files" | "diff" | "remo
 
 export function activityDestination(event: LiveEvent): ActivityDestination {
   const tool = String(event.data.tool || "")
-  if (["shell_start", "shell_send", "shell_read", "shell_kill"].includes(tool)) {
+  if (["shell_start", "shell_send", "shell_read", "shell_stop", "shell_kill"].includes(tool)) {
     return event.data.session_id ? "terminal" : event.data.call_id ? "detail" : null
   }
   if (["job_start", "job_list", "job_tail", "job_stop", "job_retry", "remote_transfer"].includes(tool)) return "jobs"
-  if (["read_file", "write_file", "edit_file", "delete_file_or_dir", "list_files", "glob_search", "grep_search", "tree_view", "search"].includes(tool)) return "files"
-  if (tool === "apply_patch") return "diff"
+  if (["file_read", "file_write", "file_edit", "file_delete", "file_list", "file_glob", "file_grep", "file_tree", "read_file", "write_file", "edit_file", "delete_file_or_dir", "list_files", "glob_search", "grep_search", "tree_view", "search"].includes(tool)) return "files"
+  if (["file_patch", "apply_patch"].includes(tool)) return "diff"
   if (tool === "remote_manage") return "remotes"
   if (tool === "audit_tail") return "audit"
-  if (tool === "run_shell_tool" || tool === "run_python_tool") return "detail"
+  if (["run_shell", "run_python", "run_shell_tool", "run_python_tool"].includes(tool)) return "detail"
   return event.data.call_id ? "detail" : null
 }
 

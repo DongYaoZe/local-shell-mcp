@@ -610,6 +610,21 @@ def audit(event: str, **fields: Any) -> None:
 _TOOL_OPERATION_GROUPS: dict[str, frozenset[str]] = {
     "files": frozenset(
         {
+            "file_list",
+            "file_tree",
+            "file_glob",
+            "file_grep",
+            "file_read",
+            "image_view",
+            "file_write",
+            "file_edit",
+            "file_delete",
+            "file_patch",
+            "link_create",
+            "link_list",
+            "link_revoke",
+            "secret_scan",
+            # Historical names remain classified for retained audit records.
             "search",
             "fetch",
             "list_files",
@@ -622,7 +637,6 @@ _TOOL_OPERATION_GROUPS: dict[str, frozenset[str]] = {
             "edit_file",
             "delete_file_or_dir",
             "apply_patch",
-            "secret_scan",
             "create_file_link",
             "list_file_links",
             "revoke_file_link",
@@ -630,13 +644,16 @@ _TOOL_OPERATION_GROUPS: dict[str, frozenset[str]] = {
     ),
     "shell": frozenset(
         {
-            "run_shell_tool",
-            "run_python_tool",
+            "run_shell",
+            "run_python",
             "shell_start",
             "shell_send",
             "shell_read",
-            "shell_kill",
+            "shell_stop",
             "shell_list",
+            "run_shell_tool",
+            "run_python_tool",
+            "shell_kill",
         }
     ),
     "jobs": frozenset({"job_start", "job_list", "job_tail", "job_stop", "job_retry"}),
@@ -659,9 +676,12 @@ _TOOL_OPERATION_GROUPS: dict[str, frozenset[str]] = {
     ),
     "agent": frozenset(
         {
+            "environment_get",
+            "skill_list",
+            "skill_load",
+            "skill_read",
             "environment_info",
             "skills_list",
-            "skill_load",
             "skill_read_file",
             "mcp_manage",
             "mcp_tool_search",

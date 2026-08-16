@@ -287,13 +287,11 @@ def _oauth_security_scheme(scopes: list[str] | tuple[str, ...]) -> dict[str, Any
     return {"type": "oauth2", "scopes": list(ALL_OAUTH_SCOPES)}
 
 
-OAUTH_SECURITY_SCHEMES = [_oauth_security_scheme(ALL_OAUTH_SCOPES)]
-NOAUTH_SECURITY_SCHEMES = [{"type": "noauth"}]
 PUBLIC_TOOL_TIMEOUT_S = PUBLIC_TOOL_WATCHDOG_TIMEOUT_S
 MCP_INSTRUCTIONS = (
-    "When a task may benefit from an installed Agent Skill, call skills_list first "
+    "When a task may benefit from an installed Agent Skill, call skill_list first "
     "to discover the exact Skill name and description. Before following a Skill's "
-    "workflow, call skill_load with that exact name. Call skill_read_file only when "
+    "workflow, call skill_load with that exact name. Call skill_read only when "
     "a related file returned by skill_load is needed. Skills use this fixed tool "
     "surface; do not expect per-Skill MCP tools. When a registered external MCP may "
     "provide a capability, use mcp_tool_search, then mcp_tool_inspect, then mcp_tool_call; "
@@ -320,13 +318,13 @@ class PublicToolTimeoutError(TimeoutError):
 
 NON_CANCELLABLE_TOOL_NAMES = frozenset(
     {
-        "create_file_link",
-        "revoke_file_link",
-        "view_image",
-        "write_file",
-        "edit_file",
-        "delete_file_or_dir",
-        "apply_patch",
+        "link_create",
+        "link_revoke",
+        "image_view",
+        "file_write",
+        "file_edit",
+        "file_delete",
+        "file_patch",
         "remote_transfer",
         "mcp_tool_call",
     }
@@ -342,9 +340,6 @@ def _security_meta(schemes: list[dict[str, Any]]) -> dict[str, Any]:
 def _oauth_meta(scopes: list[str]) -> dict[str, Any]:
     return _security_meta([_oauth_security_scheme(scopes)])
 
-
-def _public_read_meta() -> dict[str, Any]:
-    return _security_meta([*NOAUTH_SECURITY_SCHEMES, _oauth_security_scheme(ALL_OAUTH_SCOPES)])
 
 
 def _live_workspace_api_base() -> str:
@@ -442,7 +437,7 @@ def _serialize_audit_value(value: Any) -> Any:
 
 def _safe_audit_result(tool_name: str, value: Any) -> Any:
     serialized = _serialize_audit_value(value)
-    if tool_name not in {"open_live_workspace", "live_workspace_reconnect"} or not isinstance(
+    if tool_name not in {"workspace_open", "live_workspace_reconnect"} or not isinstance(
         serialized, dict
     ):
         return serialized
@@ -520,8 +515,6 @@ def _live_event_arguments(tool_name: str, arguments: dict[str, Any]) -> dict[str
             data[key] = value
         elif isinstance(value, list):
             data[key] = [str(item)[:160] for item in value[:8]]
-    if tool_name == "search" and "cwd" not in data:
-        data["cwd"] = "."
     command = arguments.get("command")
     if isinstance(command, str) and command:
         data["command"] = command[:500]
@@ -577,20 +570,7 @@ def _audit_tool_purpose(
     return details
 
 
-def _timeout_payload_for_tool(tool_name: str, exc: Exception) -> dict | str:
-    if tool_name == "search":
-        return json.dumps({"results": []}, ensure_ascii=False)
-    if tool_name == "fetch":
-        return json.dumps(
-            {
-                "id": "",
-                "title": "",
-                "text": str(exc),
-                "url": "file:///workspace/",
-                "metadata": {"source": "workspace", "error": type(exc).__name__},
-            },
-            ensure_ascii=False,
-        )
+def _timeout_payload_for_tool(_tool_name: str, exc: Exception) -> CallToolResult:
     return _handled_error(exc)
 
 
@@ -862,7 +842,7 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
                         stage="started",
                         error=str(logical_lease["persistence_error"]),
                     )
-                if __tool_name not in {"open_live_workspace", "live_workspace_reconnect"}:
+                if __tool_name not in {"workspace_open", "live_workspace_reconnect"}:
                     live_subject = _current_principal_subject()
                     attached_live = None
                     if logical_lease and logical_lease.get("session_id"):
@@ -1120,29 +1100,29 @@ def _remove_remote_tools_when_disabled(mcp: FastMCP) -> None:
 
 
 MACHINE_CAPABLE_TOOL_NAMES = {
-    "environment_info",
-    "run_shell_tool",
-    "run_python_tool",
+    "environment_get",
+    "run_shell",
+    "run_python",
     "shell_start",
     "shell_send",
     "shell_read",
-    "shell_kill",
+    "shell_stop",
     "shell_list",
     "job_start",
     "job_list",
     "job_tail",
     "job_stop",
     "job_retry",
-    "list_files",
-    "tree_view",
-    "glob_search",
-    "grep_search",
-    "read_file",
-    "view_image",
-    "write_file",
-    "edit_file",
-    "delete_file_or_dir",
-    "apply_patch",
+    "file_list",
+    "file_tree",
+    "file_glob",
+    "file_grep",
+    "file_read",
+    "image_view",
+    "file_write",
+    "file_edit",
+    "file_delete",
+    "file_patch",
     "browser_session",
     "browser_snapshot",
     "browser_act",
@@ -1150,14 +1130,12 @@ MACHINE_CAPABLE_TOOL_NAMES = {
 }
 
 LOCAL_ONLY_TOOL_NAMES = {
-    "search",
-    "fetch",
-    "skills_list",
+    "skill_list",
     "skill_load",
-    "skill_read_file",
-    "create_file_link",
-    "list_file_links",
-    "revoke_file_link",
+    "skill_read",
+    "link_create",
+    "link_list",
+    "link_revoke",
     "secret_scan",
 }
 
@@ -1188,8 +1166,8 @@ def _remove_local_only_tools_when_disabled(mcp: FastMCP) -> None:
 
 OPEN_WORLD_TOOL_NAMES = {
     *MACHINE_CAPABLE_TOOL_NAMES,
-    "create_file_link",
-    "revoke_file_link",
+    "link_create",
+    "link_revoke",
     "remote_transfer",
     "mcp_manage",
     "mcp_tool_call",
@@ -1200,8 +1178,8 @@ READ_ONLY_OPEN_WORLD_TOOL_NAMES = {
 }
 
 NON_DESTRUCTIVE_MUTATION_TOOL_NAMES = {
-    "create_file_link",
-    "open_live_workspace",
+    "link_create",
+    "workspace_open",
 }
 
 
@@ -2375,93 +2353,13 @@ async def _remote_call(
         return _handled_error(exc)
 
 
-def _register_connector_tools(mcp: FastMCP, read_only_tool: ToolAnnotations) -> None:
-    read_only_meta = _public_read_meta()
-
-    @mcp.tool(structured_output=True, annotations=read_only_tool, meta=read_only_meta)
-    async def search(query: str) -> str:
-        """Search workspace files and return ChatGPT connector-compatible results."""
-        try:
-            result = await grep(
-                query,
-                cwd=".",
-                regex=False,
-                case_sensitive=False,
-                max_results=20,
-            )
-            seen: set[str] = set()
-            rows = []
-            for match in result.get("matches", []):
-                path = match.get("path")
-                if not path or path in seen:
-                    continue
-                seen.add(path)
-                line = match.get("line")
-                suffix = f":{line}" if line else ""
-                resolved = resolve_path(path, must_exist=True)
-                rows.append(
-                    {
-                        "id": path,
-                        "title": f"{path}{suffix}",
-                        "url": resolved.as_uri(),
-                    }
-                )
-            return json.dumps({"results": rows}, ensure_ascii=False)
-        except Exception as exc:
-            audit("tool_error", error=repr(exc))
-            return json.dumps({"results": []})
-
-    @mcp.tool(structured_output=True, annotations=read_only_tool, meta=read_only_meta)
-    async def fetch(id: str) -> str:
-        """Fetch a workspace file by id returned from search."""
-        try:
-            data = await asyncio.to_thread(read_text, id)
-            path = data.get("path") or id
-            binary = bool(data.get("binary"))
-            resolved = resolve_path(id, must_exist=True)
-            return json.dumps(
-                {
-                    "id": path,
-                    "title": path,
-                    "text": data.get("content")
-                    if not binary
-                    else data.get("message", "Binary file omitted"),
-                    "url": resolved.as_uri(),
-                    "metadata": {
-                        "source": "workspace",
-                        "binary": binary,
-                        "bytes": data.get("bytes"),
-                        "bytes_read": data.get("bytes_read"),
-                        "truncated": bool(data.get("truncated", False)),
-                        "truncated_bytes": data.get("truncated_bytes", 0),
-                    },
-                },
-                ensure_ascii=False,
-            )
-        except Exception as exc:
-            audit("tool_error", error=repr(exc))
-            return json.dumps(
-                {
-                    "id": id,
-                    "title": id,
-                    "text": f"Unable to fetch file: {type(exc).__name__}: {exc}",
-                    "url": f"file:///workspace/{id}",
-                    "metadata": {
-                        "source": "workspace",
-                        "error": type(exc).__name__,
-                    },
-                },
-                ensure_ascii=False,
-            )
-
-
 def _register_environment_tools(
     mcp: FastMCP, settings: Any, read_only_tool: ToolAnnotations
 ) -> None:
     shell_read_meta = _oauth_meta(["shell:read"])
 
     @mcp.tool(structured_output=True, annotations=read_only_tool, meta=shell_read_meta)
-    async def environment_info(machine: str | None = None) -> ToolResult:
+    async def environment_get(machine: str | None = None) -> ToolResult:
         """Return version, workspace, auth, policy, and environment information locally or on a remote machine."""
         if machine:
             return await _remote_call(settings, machine, "environment_info", {})
@@ -2489,17 +2387,17 @@ def _register_environment_tools(
             return _handled_error(exc)
 
     @mcp.tool(structured_output=True, annotations=read_only_tool, meta=shell_read_meta)
-    async def skills_list() -> ToolResult:
+    async def skill_list() -> ToolResult:
         """List installed agent skills without loading their instructions. The MCP tool surface stays fixed; adding or removing skill directories is reflected on the next call."""
         return await _tool_call(asyncio.to_thread, list_installed_skills, settings)
 
     @mcp.tool(structured_output=True, annotations=read_only_tool, meta=shell_read_meta)
     async def skill_load(name: str) -> ToolResult:
-        """Load one installed agent skill by the exact name returned from skills_list. Returns SKILL.md instructions plus related file paths."""
+        """Load one installed agent skill by the exact name returned from skill_list. Returns SKILL.md instructions plus related file paths."""
         return await _tool_call(asyncio.to_thread, load_installed_skill, name, settings)
 
     @mcp.tool(structured_output=True, annotations=read_only_tool, meta=shell_read_meta)
-    async def skill_read_file(name: str, path: str) -> ToolResult:
+    async def skill_read(name: str, path: str) -> ToolResult:
         """Read one related text file from an installed Skill."""
         return await _tool_call(asyncio.to_thread, read_installed_skill_file, name, path, settings)
 
@@ -2508,7 +2406,7 @@ def _register_command_tools(mcp: FastMCP, settings: Any) -> None:
     shell_execute_meta = _oauth_meta(["shell:read", "shell:execute"])
 
     @mcp.tool(structured_output=True, meta=shell_execute_meta)
-    async def run_shell_tool(
+    async def run_shell(
         command: str,
         cwd: str = ".",
         timeout_s: int | None = None,
@@ -2518,7 +2416,7 @@ def _register_command_tools(mcp: FastMCP, settings: Any) -> None:
         machine: str | None = None,
     ) -> ToolResult:
         """Run one non-interactive shell command locally or on a remote machine. Use for build, test, package-manager, Git, and inspection commands that should finish promptly. For long-running, interactive, or streaming processes, use shell_start or job_start. Optional purpose/explanation fields let agents state why the command is being run."""
-        _audit_tool_purpose("run_shell_tool", purpose, explanation)
+        _audit_tool_purpose("run_shell", purpose, explanation)
         if machine:
             return await _remote_call(
                 settings,
@@ -2540,7 +2438,7 @@ def _register_command_tools(mcp: FastMCP, settings: Any) -> None:
             return _handled_error(exc)
 
     @mcp.tool(structured_output=True, meta=shell_execute_meta)
-    async def run_python_tool(
+    async def run_python(
         code: str,
         cwd: str = ".",
         timeout_s: int = 60,
@@ -2549,7 +2447,7 @@ def _register_command_tools(mcp: FastMCP, settings: Any) -> None:
         machine: str | None = None,
     ) -> ToolResult:
         """Write and run a short Python script locally or on a remote machine."""
-        _audit_tool_purpose("run_python_tool", purpose, explanation)
+        _audit_tool_purpose("run_python", purpose, explanation)
         if machine:
             return await _remote_call(
                 settings,
@@ -2619,7 +2517,7 @@ def _register_shell_tools(mcp: FastMCP, settings: Any, read_only_tool: ToolAnnot
         return await _tool_call(read_shell, session_id, lines)
 
     @mcp.tool(structured_output=True, meta=shell_execute_meta)
-    async def shell_kill(
+    async def shell_stop(
         session_id: str,
         machine: str | None = None,
     ) -> ToolResult:
@@ -2721,7 +2619,7 @@ def _register_workspace_read_tools(
     shell_read_meta = _oauth_meta(["shell:read"])
 
     @mcp.tool(structured_output=True, annotations=read_only_tool, meta=shell_read_meta)
-    async def list_files(
+    async def file_list(
         path: str = ".",
         recursive: bool = False,
         max_entries: int = 500,
@@ -2742,7 +2640,7 @@ def _register_workspace_read_tools(
         return await _tool_call(asyncio.to_thread, list_dir, path, recursive, max_entries)
 
     @mcp.tool(structured_output=True, annotations=read_only_tool, meta=shell_read_meta)
-    async def tree_view(
+    async def file_tree(
         cwd: str = ".",
         depth: int = 3,
         max_entries: int = 500,
@@ -2759,7 +2657,7 @@ def _register_workspace_read_tools(
         return await _tool_call(tree, cwd, depth, max_entries)
 
     @mcp.tool(structured_output=True, annotations=read_only_tool, meta=shell_read_meta)
-    async def glob_search(
+    async def file_glob(
         pattern: str,
         cwd: str = ".",
         max_results: int = 500,
@@ -2779,7 +2677,7 @@ def _register_workspace_read_tools(
             return _handled_error(exc)
 
     @mcp.tool(structured_output=True, annotations=read_only_tool, meta=shell_read_meta)
-    async def grep_search(
+    async def file_grep(
         query: str,
         cwd: str = ".",
         glob: str | None = None,
@@ -2806,7 +2704,7 @@ def _register_workspace_read_tools(
         return await _tool_call(grep, query, cwd, glob, regex, case_sensitive, max_results)
 
     @mcp.tool(structured_output=True, annotations=read_only_tool, meta=shell_read_meta)
-    async def read_file(
+    async def file_read(
         path: str | list[str],
         start_line: int | None = None,
         end_line: int | None = None,
@@ -2835,11 +2733,11 @@ def _register_workspace_read_tools(
         )
 
     @mcp.tool(structured_output=True, annotations=read_only_tool, meta=shell_read_meta)
-    async def view_image(
+    async def image_view(
         path: str,
         machine: str | None = None,
     ) -> ViewImageResult:
-        """View a PNG, JPEG, GIF, or WebP file as native MCP image content locally or on a remote machine. Use this instead of read_file when visual inspection is needed. Remote images reuse the existing file-transfer protocol, so the worker does not need a new image-specific RPC."""
+        """View a PNG, JPEG, GIF, or WebP file as native MCP image content locally or on a remote machine. Use this instead of file_read when visual inspection is needed. Remote images reuse the existing file-transfer protocol, so the worker does not need a new image-specific RPC."""
         return cast(ViewImageResult, await _view_image_result(path, machine))
 
 
@@ -2847,7 +2745,7 @@ def _register_download_tools(mcp: FastMCP, read_only_tool: ToolAnnotations) -> N
     file_share_meta = _oauth_meta(["shell:read", "file:share"])
 
     @mcp.tool(structured_output=True, meta=file_share_meta)
-    async def create_file_link(
+    async def link_create(
         path: str,
         ttl_s: int | None = None,
         filename: str | None = None,
@@ -2866,12 +2764,12 @@ def _register_download_tools(mcp: FastMCP, read_only_tool: ToolAnnotations) -> N
         )
 
     @mcp.tool(structured_output=True, annotations=read_only_tool, meta=file_share_meta)
-    async def list_file_links(include_expired: bool = False) -> ToolResult:
+    async def link_list(include_expired: bool = False) -> ToolResult:
         """List generated local file download URLs."""
         return await _tool_call(asyncio.to_thread, list_share_links, include_expired)
 
     @mcp.tool(structured_output=True, meta=file_share_meta)
-    async def revoke_file_link(token: str) -> ToolResult:
+    async def link_revoke(token: str) -> ToolResult:
         """Revoke a generated local file download URL."""
         return await _tool_call(asyncio.to_thread, revoke_share_link, token)
 
@@ -2882,7 +2780,7 @@ def _register_workspace_write_tools(mcp: FastMCP, settings: Any) -> None:
     transfer_meta = _oauth_meta(["remote:use", "shell:read", "shell:write"])
 
     @mcp.tool(structured_output=True, meta=shell_write_meta)
-    async def write_file(
+    async def file_write(
         path: str,
         content: str,
         overwrite: bool = True,
@@ -2891,7 +2789,7 @@ def _register_workspace_write_tools(mcp: FastMCP, settings: Any) -> None:
         machine: str | None = None,
     ) -> ToolResult:
         """Write a UTF-8 text file locally or on a remote machine."""
-        _audit_tool_purpose("write_file", purpose, explanation)
+        _audit_tool_purpose("file_write", purpose, explanation)
         if machine:
             return await _remote_call(
                 settings,
@@ -2902,7 +2800,7 @@ def _register_workspace_write_tools(mcp: FastMCP, settings: Any) -> None:
         return await _tool_call(asyncio.to_thread, write_text, path, content, overwrite)
 
     @mcp.tool(structured_output=True, meta=shell_write_meta)
-    async def edit_file(
+    async def file_edit(
         path: str,
         edits: list[TextEdit],
         purpose: str | None = None,
@@ -2910,7 +2808,7 @@ def _register_workspace_write_tools(mcp: FastMCP, settings: Any) -> None:
         machine: str | None = None,
     ) -> ToolResult:
         """Apply one or more exact-text edits to one local or remote file. Each edits entry contains old, new, and optional replace_all; old must match exactly, including whitespace and indentation."""
-        _audit_tool_purpose("edit_file", purpose, explanation)
+        _audit_tool_purpose("file_edit", purpose, explanation)
         edit_payloads = [edit.model_dump() for edit in edits]
         if machine:
             return await _remote_call(
@@ -2922,7 +2820,7 @@ def _register_workspace_write_tools(mcp: FastMCP, settings: Any) -> None:
         return await _tool_call(asyncio.to_thread, edit_text, path, edit_payloads)
 
     @mcp.tool(structured_output=True, meta=shell_write_meta)
-    async def delete_file_or_dir(
+    async def file_delete(
         path: str,
         recursive: bool = False,
         purpose: str | None = None,
@@ -2930,7 +2828,7 @@ def _register_workspace_write_tools(mcp: FastMCP, settings: Any) -> None:
         machine: str | None = None,
     ) -> ToolResult:
         """Delete a local or remote file or directory. recursive=false deletes files or empty directories; recursive=true is required for non-empty directories and should be used carefully."""
-        _audit_tool_purpose("delete_file_or_dir", purpose, explanation)
+        _audit_tool_purpose("file_delete", purpose, explanation)
         if machine:
             return await _remote_call(
                 settings,
@@ -2941,7 +2839,7 @@ def _register_workspace_write_tools(mcp: FastMCP, settings: Any) -> None:
         return await _tool_call(asyncio.to_thread, delete_path, path, recursive)
 
     @mcp.tool(structured_output=True, meta=patch_meta)
-    async def apply_patch(
+    async def file_patch(
         patch: str,
         cwd: str = ".",
         purpose: str | None = None,
@@ -2949,7 +2847,7 @@ def _register_workspace_write_tools(mcp: FastMCP, settings: Any) -> None:
         machine: str | None = None,
     ) -> ToolResult:
         """Check and apply a unified diff or an apply_patch envelope locally or remotely."""
-        _audit_tool_purpose("apply_patch", purpose, explanation)
+        _audit_tool_purpose("file_patch", purpose, explanation)
         if machine:
             return await _remote_call(
                 settings,
@@ -3423,7 +3321,7 @@ def _register_live_workspace_tools(
         ),
         meta=tool_meta,
     )
-    async def open_live_workspace(
+    async def workspace_open(
         machine: str | None = None,
         cwd: str = ".",
     ) -> LiveChannelResult:
@@ -3483,7 +3381,6 @@ def build_mcp() -> FastMCP:
         openWorldHint=False,
     )
 
-    _register_connector_tools(mcp, read_only_tool)
     if settings.ui_enabled and settings.mode != "stdio":
         _register_live_workspace_tools(mcp, settings)
     _register_environment_tools(mcp, settings, read_only_tool)

@@ -65,13 +65,13 @@ The intended isolation boundary is the container or VM running the service.
 
 | Family | Examples | Use for |
 |---|---|---|
-| Shell and Python | `run_shell_tool`, `run_python_tool`, `shell_start` | Builds, tests, scripts, long-running processes |
-| Files and search | `tree_view`, `grep_search`, `read_file`, `apply_patch` | Repository inspection and precise edits |
-| Git | `run_shell_tool`, `run_shell_tool`, `run_shell_tool`, `run_shell_tool` | Reviewable source-control workflows |
+| Shell and Python | `run_shell`, `run_python`, `shell_start` | Builds, tests, scripts, long-running processes |
+| Files and search | `file_tree`, `file_grep`, `file_read`, `file_patch` | Repository inspection and precise edits |
+| Git | `run_shell`, `run_shell`, `run_shell`, `run_shell` | Reviewable source-control workflows |
 | Sessions and goals | `session_manage`, `plan_manage` | Durable task handoff, progress reports, optional Goal mode |
 | Browser | `browser_session`, `browser_snapshot`, `browser_act`, `browser_run_script` | Persistent interaction, UI checks, screenshots, rendered docs, page text |
-| File links | `create_file_link`, `revoke_file_link` | Downloading generated artifacts from chat |
-| Remote workers | `remote_manage`, `run_shell_tool`, `remote_transfer` | Machines behind NAT, firewalls, or cluster login flows |
+| File links | `link_create`, `link_revoke` | Downloading generated artifacts from chat |
+| Remote workers | `remote_manage`, `run_shell`, `remote_transfer` | Machines behind NAT, firewalls, or cluster login flows |
 
 ## Typical workflows
 
@@ -88,7 +88,7 @@ The intended isolation boundary is the container or VM running the service.
 
 1. Create a one-time remote worker invite.
 2. Paste the generated command on the remote host.
-3. Use normal tools with `machine`; run Git through `run_shell_tool` and transfer paths with `remote_transfer`.
+3. Use normal tools with `machine`; run Git through `run_shell` and transfer paths with `remote_transfer`.
 4. Revoke the worker after the task.
 
 ### Artifact generation

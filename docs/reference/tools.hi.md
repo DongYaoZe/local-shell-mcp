@@ -4,25 +4,26 @@
 
 ## टूल समूह
 
-### Connector / discovery
+### Live Workspace
 
-`search`, `fetch`
+`workspace_open`
+
 
 ### Environment / audit / task state
 
-`environment_info`, `audit_tail`, `session_manage`, `plan_manage`, `secret_scan`
+`environment_get`, `audit_tail`, `session_manage`, `plan_manage`, `secret_scan`
 
 ### Skills
 
-`skills_list`, `skill_load`, `skill_read_file`
+`skill_list`, `skill_load`, `skill_read`
 
 ### Filesystem
 
-`list_files`, `read_file`, `write_file`, `edit_file`, `delete_file_or_dir`, `remote_transfer`, `tree_view`, `glob_search`, `grep_search`
+`file_list`, `file_read`, `image_view`, `file_write`, `file_edit`, `file_delete`, `remote_transfer`, `file_tree`, `file_glob`, `file_grep`
 
 ### Shell and jobs
 
-`run_shell_tool`, `run_python_tool`, `shell_start`, `shell_read`, `shell_send`, `shell_kill`, `shell_list`, `job_start`, `job_list`, `job_tail`, `job_stop`, `job_retry`
+`run_shell`, `run_python`, `shell_start`, `shell_read`, `shell_send`, `shell_stop`, `shell_list`, `job_start`, `job_list`, `job_tail`, `job_stop`, `job_retry`
 
 ### Browser automation
 
@@ -30,7 +31,7 @@
 
 ### File links
 
-`create_file_link`, `list_file_links`, `revoke_file_link`
+`link_create`, `link_list`, `link_revoke`
 
 ### Remote workers
 

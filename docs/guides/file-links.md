@@ -17,7 +17,7 @@ Do not use file links for secrets, private keys, credential stores, or unrelated
 ## Typical flow
 
 1. Generate or locate a file under `/workspace`.
-2. Call `create_file_link` with a TTL and optional download limit. Set `inline=true` when the file should render directly in a browser or Markdown image; the default is `false`, which forces attachment download behavior.
+2. Call `link_create` with a TTL and optional download limit. Set `inline=true` when the file should render directly in a browser or Markdown image; the default is `false`, which forces attachment download behavior.
 3. Share the returned URL.
 4. Revoke the link when no longer needed.
 
@@ -25,9 +25,9 @@ Do not use file links for secrets, private keys, credential stores, or unrelated
 
 | Tool | Purpose |
 |---|---|
-| `create_file_link` | Create a tokenized URL for a workspace file. |
-| `list_file_links` | Show active links. |
-| `revoke_file_link` | Disable a link before expiry. |
+| `link_create` | Create a tokenized URL for a workspace file. |
+| `link_list` | Show active links. |
+| `link_revoke` | Disable a link before expiry. |
 
 ## Controls
 

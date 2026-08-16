@@ -27,7 +27,7 @@ describe("live workspace utilities", () => {
     const source = await Bun.file(new URL("./live-workspace.ts", import.meta.url)).text()
     expect(source).toContain("app.onteardown = async")
     expect(source).toContain('name: "live_workspace_reconnect"')
-    expect(source).not.toContain('name: "open_live_workspace"')
+    expect(source).not.toContain('name: "workspace_open"')
   })
 
   test("Live Workspace clears live-only activity when the Logical Session changes", async () => {
@@ -112,14 +112,14 @@ describe("live workspace utilities", () => {
       ts: 1,
       type: "tool.started",
       actor: "agent",
-      data: { tool: "run_shell_tool", call_id: "call-1", cwd: "/workspace" },
+      data: { tool: "run_shell", call_id: "call-1", cwd: "/workspace" },
     }
     const completed: LiveEvent = {
       seq: 41,
       ts: 2,
       type: "tool.completed",
       actor: "agent",
-      data: { tool: "run_shell_tool", call_id: "call-1", duration_ms: 1000 },
+      data: { tool: "run_shell", call_id: "call-1", duration_ms: 1000 },
     }
 
     const rows = coalesceActivityEvents([started, completed])
@@ -140,28 +140,28 @@ describe("live workspace utilities", () => {
       ts: 201,
       type: "tool.completed",
       actor: "agent",
-      data: { tool: "read_file", call_id: "aged-out-start", path: "/workspace/old.txt", duration_ms: 500 },
+      data: { tool: "file_read", call_id: "aged-out-start", path: "/workspace/old.txt", duration_ms: 500 },
     }
     const started: LiveEvent = {
       seq: 202,
       ts: 202,
       type: "tool.started",
       actor: "agent",
-      data: { tool: "run_shell_tool", call_id: "paired", cwd: "/workspace" },
+      data: { tool: "run_shell", call_id: "paired", cwd: "/workspace" },
     }
     const completed: LiveEvent = {
       seq: 203,
       ts: 203,
       type: "tool.completed",
       actor: "agent",
-      data: { tool: "run_shell_tool", call_id: "paired", duration_ms: 1000 },
+      data: { tool: "run_shell", call_id: "paired", duration_ms: 1000 },
     }
     const running: LiveEvent = {
       seq: 204,
       ts: 204,
       type: "tool.started",
       actor: "agent",
-      data: { tool: "grep_search", call_id: "still-running" },
+      data: { tool: "file_grep", call_id: "still-running" },
     }
 
     const rows = coalesceActivityEvents([oldestCompletion, started, completed, running])
@@ -178,9 +178,9 @@ describe("live workspace utilities", () => {
       ts: 1,
       type: "tool.completed",
       actor: "agent",
-      data: { tool: "run_shell_tool", cwd: "/workspace", duration_ms: 1420 },
+      data: { tool: "run_shell", cwd: "/workspace", duration_ms: 1420 },
     }
-    expect(eventTitle(event)).toBe("run_shell_tool completed")
+    expect(eventTitle(event)).toBe("run_shell completed")
     expect(activityIntent(event)).toBe("Running command")
     expect(activityDestination(event)).toBe("detail")
     expect(eventDetail(event)).toContain("/workspace")
@@ -189,10 +189,10 @@ describe("live workspace utilities", () => {
 
   test("activity hides workspace bootstrap noise and routes useful operations", () => {
     const opened: LiveEvent = { seq: 1, ts: 1, type: "channel.opened", actor: "system", data: {} }
-    const bootstrap: LiveEvent = { seq: 2, ts: 1, type: "tool.completed", actor: "agent", data: { tool: "open_live_workspace" } }
+    const bootstrap: LiveEvent = { seq: 2, ts: 1, type: "tool.completed", actor: "agent", data: { tool: "workspace_open" } }
     const reconnect: LiveEvent = { seq: 3, ts: 1, type: "tool.completed", actor: "agent", data: { tool: "live_workspace_reconnect" } }
     const terminalInput: LiveEvent = { seq: 4, ts: 1, type: "human.action", actor: "human", data: { action: "terminal.input", bytes: 1 } }
-    const edit: LiveEvent = { seq: 5, ts: 1, type: "tool.completed", actor: "agent", data: { tool: "edit_file", path: "/workspace/src/app.ts" } }
+    const edit: LiveEvent = { seq: 5, ts: 1, type: "tool.completed", actor: "agent", data: { tool: "file_edit", path: "/workspace/src/app.ts" } }
     const job: LiveEvent = { seq: 6, ts: 1, type: "tool.completed", actor: "agent", data: { tool: "job_start", name: "tests" } }
     const shellStarted: LiveEvent = { seq: 7, ts: 1, type: "tool.started", actor: "agent", data: { tool: "shell_start", call_id: "shell-1" } }
     const shellReady: LiveEvent = { seq: 8, ts: 1, type: "tool.completed", actor: "agent", data: { tool: "shell_start", call_id: "shell-1", session_id: "session-1" } }
@@ -210,6 +210,28 @@ describe("live workspace utilities", () => {
     expect(activityDestination(shellReady)).toBe("terminal")
   })
 
+  test("activity keeps historical pre-v4 tool names usable", () => {
+    const legacyShell: LiveEvent = {
+      seq: 9,
+      ts: 1,
+      type: "tool.completed",
+      actor: "agent",
+      data: { tool: "run_shell_tool", call_id: "legacy-shell" },
+    }
+    const legacyFile: LiveEvent = {
+      seq: 10,
+      ts: 1,
+      type: "tool.completed",
+      actor: "agent",
+      data: { tool: "read_file", path: "/workspace/old.txt" },
+    }
+
+    expect(activityIntent(legacyShell)).toBe("Running command")
+    expect(activityDestination(legacyShell)).toBe("detail")
+    expect(activityIntent(legacyFile)).toBe("Reading old.txt")
+    expect(activityDestination(legacyFile)).toBe("files")
+  })
+
   test("activity merges durable tool events with live-only human events", () => {
     const durableStarted: LiveEvent = {
       seq: 1,
@@ -223,14 +245,14 @@ describe("live workspace utilities", () => {
       ts: 12,
       type: "tool.completed",
       actor: "agent",
-      data: { call_id: "call-1", tool: "write_file", path: "a.txt", durable: true },
+      data: { call_id: "call-1", tool: "file_write", path: "a.txt", durable: true },
     }
     const liveDuplicate: LiveEvent = {
       seq: 20,
       ts: 11.9,
       type: "tool.completed",
       actor: "agent",
-      data: { call_id: "call-1", tool: "write_file", path: "a.txt" },
+      data: { call_id: "call-1", tool: "file_write", path: "a.txt" },
     }
     const humanDiff: LiveEvent = {
       seq: 21,
