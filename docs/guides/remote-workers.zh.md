@@ -1,32 +1,33 @@
-# 远程 worker
+<!-- i18n-source-sha256: 52e5f445beaf4c30bd298c59399005f01fe5563591b8a0285c97b46243f342fe -->
+# 远程 workers
 
-远程 worker 适用于能够发起出站 HTTP(S)、但无法接收入站 SSH 的机器。
+Remote worker 让 `local-shell-mcp` 可以控制只能发起出站 HTTP(S) 请求、但无法接受入站 SSH 连接的机器。
 
 ```text
-MCP 客户端 -> 控制服务 -> 出站轮询 worker -> 远程机器
+MCP client -> control server -> outbound polling worker -> remote machine
 ```
 
-## 基本流程
+## 基本工作流
 
 1. 使用 `remote_manage(action="invite", ...)` 创建一次性邀请。
-2. 在远程机器上执行生成的命令。
-3. 使用 `remote_manage(action="list")` 确认注册成功。
-4. 在普通工具中指定 `machine="<worker-name>"`，例如 `environment_get`、`run_shell`、`file_read` 或 `browser_run_script`。
-5. 使用 `remote_transfer` 处理控制端到 worker、worker 到控制端以及 worker 到 worker 的文件或目录传输。
-6. 使用 `remote_manage(action="rename", ...)` 重命名，或用 `remote_manage(action="revoke", ...)` 撤销 worker。
+2. 在远程机器上运行生成的命令。
+3. 使用 `remote_manage(action="list")` 确认注册。
+4. 调用普通工具并指定 `machine="<worker-name>"`，例如 `environment_get`、`run_shell`、`file_read` 或 `browser_run_script`。
+5. 使用 `remote_transfer` 启动受跟踪的 controller-to-worker、worker-to-controller 或 worker-to-worker 文件/目录传输。随后使用 `job_list` 或 `job_tail` 查看进度，并用 `job_stop` 或 `job_retry` 停止或重试。
+6. 使用 `remote_manage(action="rename", ...)` 或 `remote_manage(action="revoke", ...)` 重命名或撤销 worker。
 
-只有 worker 管理继续使用 `remote_*` 名称。执行、shell、job、文件、patch 和浏览器操作在本地与远程使用同一 Schema。指定 `machine` 时会额外要求 `remote:use` OAuth scope。
+只有 worker 管理使用 `remote_*` 名称。执行、shell、job、filesystem、patch 和 browser 操作在本地和远程使用相同 schema。指定 machine 时还需要 `remote:use` OAuth scope。
 
 ## 持久化 worker
 
-邀请结果会同时返回适用于不同平台的命令：
+邀请结果包含平台特定命令：
 
-- `persistent_command` 在 Linux 或 macOS 上安装并启动用户服务。
-- `powershell_persistent_command` 通过 PowerShell 在 Windows 上安装并启动用户计划任务。
+- `persistent_command` 在 Linux 或 macOS 上安装并启动用户级服务。
+- `powershell_persistent_command` 从 PowerShell 在 Windows 上安装并启动用户级任务。
 
-在 Windows 上，`local-shell-mcp worker install-service` 会为当前用户注册 `local-shell-mcp-worker` 计划任务。任务会立即启动，并在重启后该用户登录时再次启动；它允许电池供电运行、忽略重复启动，并在异常退出后重试。该方式不需要管理员权限，但不会在用户登录前运行。
+在 Windows 上，`local-shell-mcp worker install-service` 会为当前用户注册 `local-shell-mcp-worker` 任务。该任务会立即启动、重启后在该用户登录时再次启动、允许电池供电、忽略重复启动并重试失败运行。不需要管理员权限，也不会在用户登录前运行。
 
-所有平台使用相同的生命周期命令：
+所有平台都使用相同的 lifecycle 命令：
 
 ```text
 local-shell-mcp worker status
@@ -36,14 +37,16 @@ local-shell-mcp worker restart
 local-shell-mcp worker uninstall-service
 ```
 
-worker 日志位于 worker 状态目录中的 `worker.log`。
+worker 日志保存在 worker state directory 下的 `worker.log`。
 
-## 能力与安全
+## 能力
 
-worker 支持 shell、持久终端、tracked job、文件操作、传输、Python、patch，以及已安装依赖时的 Playwright。Git 通过 `run_shell(machine=...)` 执行标准 CLI。
+Worker 支持 shell 和 persistent shell session、tracked job、filesystem 操作、transfer internals、Python 执行、patch，以及在依赖已安装时使用 Playwright。Git 通过 `run_shell(machine=...)` 执行标准命令。
 
-加入 worker 相当于允许 MCP 客户端控制其配置环境。应使用较短邀请 TTL、专用工作目录或账户，保留审计日志，并在任务结束后撤销 worker。生成的邀请会安装与控制服务匹配的 worker 版本。
+## 安全与版本
+
+已加入的 worker 会让 MCP client 获得对其配置环境的控制能力。请使用较短的 invite TTL、专用工作目录或账号，检查 audit log，并在任务完成后撤销 worker。生成的邀请会安装与 control server 版本匹配的 worker code。
 
 ## 故障排查
 
-如果 worker 未出现，检查出站 HTTPS、公开 base URL、邀请是否过期、系统时间以及控制服务日志。
+worker 未出现时，检查出站 HTTPS 访问、public base URL 可达性、邀请是否过期、系统时间以及 control-server log。

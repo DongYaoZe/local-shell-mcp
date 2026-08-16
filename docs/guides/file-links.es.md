@@ -1,38 +1,47 @@
+<!-- i18n-source-sha256: d758caead1c922385409aceebf498662f25f4cbf252a48d65b29d91f07e5a173 -->
 # Enlaces de archivos
 
-Esta página describe el escenario “Enlaces de archivos” y mantiene la estructura Runtime/Client común del sitio.
+`local-shell-mcp` puede exponer archivos del workspace controlado mediante bearer URL de alta entropía. Es útil cuando la IA genera reportes, archivos comprimidos, PDF, screenshots u otros artifacts que deben descargarse o mostrarse en el chat.
 
-## Resumen
+## Cuándo usar enlaces de archivos
 
-Runtime define cómo se ejecuta el proceso del servidor y qué espacio de trabajo controla. Client define cómo se conecta ChatGPT u otro cliente MCP. Docker, la extensión de VS Code, los binarios independientes, las instalaciones desde Python/pipx/código fuente y stdio son opciones de Runtime; el conector de ChatGPT, el cliente MCP HTTP genérico y el cliente MCP stdio son conexiones de Client.
+Use enlaces de archivos para:
 
-## Cuándo usarlo
+- PDF o reportes generados.
+- Screenshots y artifacts del navegador.
+- Resultados de build.
+- Logs demasiado grandes para pegarlos.
+- Archivos preparados para inspección manual.
 
-- Usa esta página cuando la ruta de Runtime o Client elegida coincida con el título.
-- Mantén coherentes la raíz del espacio de trabajo, la base URL pública, el MCP endpoint, el modo de autenticación y las herramientas disponibles del host.
-- Para ChatGPT web/app, expón un MCP endpoint HTTPS que termine en `/mcp`.
-- Para clientes MCP locales, usa HTTP localhost o `local-shell-mcp --mode stdio` según lo que admita el cliente.
+No use enlaces de archivos para secrets, private keys, almacenes de credentials ni datos personales no relacionados.
 
-## Pasos
+## Flujo típico
 
-1. Elige primero la página de instalación del Runtime.
-2. Inicia el Runtime y verifica `/healthz` cuando uses el modo HTTP.
-3. Elige después la página de conexión del Client.
-4. Registra el MCP endpoint o el comando stdio en el Client.
-5. Llama a `environment_get` para comprobar el espacio de trabajo y los ajustes efectivos.
+1. Genere o localice un archivo bajo `/workspace`.
+2. Llame a `link_create` con un TTL y un límite de descargas opcional. Defina `inline=true` cuando el archivo deba mostrarse directamente en un navegador o como imagen Markdown; el valor predeterminado es `false`, que fuerza la descarga como attachment.
+3. Comparta la URL devuelta.
+4. Revoque el enlace cuando ya no sea necesario.
 
-```text
-Runtime: Docker / VS Code extension / binary / Python / stdio
-Client:  ChatGPT connector / generic HTTP MCP / generic stdio MCP
-Endpoint: https://your-host.example.com/mcp
-```
+## Herramientas relevantes
 
-## Verificación
+| Tool | Propósito |
+|---|---|
+| `link_create` | Crear una URL tokenizada para un archivo del workspace. |
+| `link_list` | Mostrar enlaces activos. |
+| `link_revoke` | Deshabilitar un enlace antes de su expiración. |
 
-- `environment_get` confirma los ajustes del Runtime y el espacio de trabajo.
-- `file_tree` confirma los archivos visibles.
-- `run_shell` confirma el entorno de comandos.
+## Controles
 
-## Notas
+Las opciones de configuración incluyen:
 
-Prefiere pasos pequeños y verificables: inspeccionar, editar, revisar el diff, probar, escanear y confirmar. Las tareas grandes también deben dividirse en llamadas de herramientas auditables.
+- `LOCAL_SHELL_MCP_FILE_DOWNLOAD_ENABLED`
+- `LOCAL_SHELL_MCP_FILE_DOWNLOAD_DEFAULT_TTL_S`
+- `LOCAL_SHELL_MCP_FILE_DOWNLOAD_MAX_TTL_S`
+- `LOCAL_SHELL_MCP_FILE_DOWNLOAD_DEFAULT_MAX_DOWNLOADS`
+- `LOCAL_SHELL_MCP_FILE_DOWNLOAD_MAX_FILE_BYTES`
+
+Use TTL más cortos para artifacts sensibles y establezca un maximum download count cuando el enlace esté destinado a un único destinatario.
+
+## Notas de seguridad
+
+Los enlaces de archivos son bearer URL. Cualquier persona con la URL puede descargar el archivo hasta que expire, alcance su download limit o sea revocado. Trátelos como secrets temporales. Las respuestas inline incluyen un CSP sandbox y `X-Content-Type-Options: nosniff`, de modo que los formatos activos no puedan acceder al LSM origin ni ejecutarse como contenido same-origin sin sandbox.

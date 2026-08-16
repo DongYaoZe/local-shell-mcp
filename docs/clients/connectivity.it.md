@@ -1,38 +1,72 @@
+<!-- i18n-source-sha256: 3986da6ff877609189b0d88d363aff1f5f45445f0cfe5ffa608a31929078542c -->
 # Connettività di rete
 
-Questa pagina descrive lo scenario “Connettività di rete” e mantiene la struttura Runtime/Client comune del sito.
+Gli MCP client HTTP esterni alla macchina richiedono un HTTPS origin raggiungibile. Questa pagina riguarda il routing di rete, non la scelta del runtime.
 
-## Panoramica
-
-Runtime definisce come viene eseguito il processo server e quale workspace controlla. Client definisce come si collega ChatGPT o un altro client MCP. Docker, l’estensione VS Code, i binari autonomi, le installazioni Python/pipx/sorgente e stdio sono opzioni Runtime; il connettore ChatGPT, il client MCP HTTP generico e il client MCP stdio sono connessioni Client.
-
-## Quando usarlo
-
-- Usa questa pagina quando il percorso Runtime o Client scelto corrisponde al titolo.
-- Mantieni coerenti radice del workspace, base URL pubblica, MCP endpoint, modalità di autenticazione e strumenti disponibili sull’host.
-- Per ChatGPT web/app, esponi un MCP endpoint HTTPS che termini con `/mcp`.
-- Per client MCP locali, usa HTTP localhost o `local-shell-mcp --mode stdio` in base al supporto del client.
-
-## Passaggi
-
-1. Scegli prima la pagina di installazione del Runtime.
-2. Avvia il Runtime e verifica `/healthz` quando usi la modalità HTTP.
-3. Poi scegli la pagina di connessione Client.
-4. Registra il MCP endpoint o il comando stdio nel Client.
-5. Chiama `environment_get` per verificare workspace e impostazioni effettive.
+Il client endpoint termina normalmente con `/mcp`:
 
 ```text
-Runtime: Docker / VS Code extension / binary / Python / stdio
-Client:  ChatGPT connector / generic HTTP MCP / generic stdio MCP
-Endpoint: https://your-host.example.com/mcp
+https://your-public-host.example.com/mcp
 ```
 
-## Verifica
+L’impostazione public base URL del server contiene solo l’origin:
 
-- `environment_get` conferma impostazioni Runtime e workspace.
-- `file_tree` conferma i file visibili.
-- `run_shell` conferma l’ambiente dei comandi.
+```env
+LOCAL_SHELL_MCP_PUBLIC_BASE_URL=https://your-public-host.example.com
+```
 
-## Note
+Non includere `/mcp` in questa base URL.
 
-Preferisci passaggi piccoli e verificabili: ispezionare, modificare, controllare il diff, testare, scansionare e fare commit. Anche le attività grandi dovrebbero essere divise in chiamate di strumenti auditabili.
+## Opzioni di connettività
+
+| Opzione | Quando usarla |
+|---|---|
+| Compose tunnel sidecar | Docker Compose con il profile `tunnel` integrato |
+| Tunnel esterno | Qualsiasi runtime che debba essere raggiungibile fuori dalla rete locale |
+| Caddy | TLS automatico semplice |
+| Nginx o Nginx Proxy Manager | Infrastruttura Nginx esistente |
+| Traefik | Routing container-native esistente |
+
+## Percorsi
+
+Inoltra l’intero origin al server in esecuzione. I percorsi importanti includono:
+
+| Percorso | Scopo |
+|---|---|
+| `/mcp` | MCP Streamable HTTP endpoint |
+| `/healthz`, `/readyz` | Controlli di stato |
+| `/.well-known/...` | Metadati di discovery del client |
+| `/oauth/...` | Flusso di autorizzazione del client |
+| `/downloads/...` | Link opzionali ai file generati |
+| `/join/...`, `/remote/...` | Flusso remote-worker opzionale |
+
+## Comportamento del proxy
+
+Il proxy deve preservare i percorsi, inoltrare i request bodies, supportare responses lunghe ed evitare timeout troppo brevi.
+
+## Controlli
+
+```bash
+curl -i http://127.0.0.1:8765/healthz
+curl -i https://your-public-host.example.com/healthz
+```
+
+## Errori comuni
+
+| Errore | Correzione |
+|---|---|
+| Usare `https://host` in ChatGPT invece di `https://host/mcp` | Aggiungere `/mcp` solo al client endpoint |
+| Impostare `LOCAL_SHELL_MCP_PUBLIC_BASE_URL=https://host/mcp` | Impostare solo l’origin |
+| Inoltrare solo `/mcp` | Inoltrare tutto l’origin in modo che funzionino anche discovery e autorizzazione |
+| Eseguire un host runtime con workspace troppo ampio | Usare un workspace ristretto o Docker |
+
+## Abbinamento consigliato
+
+| Runtime | Schema di rete |
+|---|---|
+| Docker Compose su server | Reverse proxy esistente o Compose tunnel profile |
+| Docker Compose su macchina domestica | Outbound tunnel |
+| VS Code extension su laptop | Tunnel temporaneo per la sessione |
+| Binary su VM | Reverse proxy sulla VM o al bordo della rete |
+| Server di sviluppo Python/source | Di solito solo localhost |
+| Stdio mode | Nessun percorso HTTP; usare un MCP client locale |

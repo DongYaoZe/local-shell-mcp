@@ -1,38 +1,47 @@
+<!-- i18n-source-sha256: d758caead1c922385409aceebf498662f25f4cbf252a48d65b29d91f07e5a173 -->
 # Dosya bağlantıları
 
-Bu sayfa “Dosya bağlantıları” senaryosunu açıklar ve sitenin ortak Runtime/Client yapısını korur.
+`local-shell-mcp`, kontrollü workspace içindeki dosyaları yüksek entropili bearer URL’ler üzerinden sunabilir. AI raporlar, arşivler, PDF’ler, screenshots veya chat’ten indirilmesi ya da görüntülenmesi gereken başka artifacts oluşturduğunda yararlıdır.
 
-## Genel bakış
+## Dosya bağlantıları ne zaman kullanılır
 
-Runtime, sunucu sürecinin nasıl çalıştığını ve hangi workspace’i kontrol ettiğini belirler. Client, ChatGPT veya başka bir MCP istemcisinin nasıl bağlandığını belirler. Docker, VS Code eklentisi, bağımsız ikililer, Python/pipx/kaynak kurulumları ve stdio Runtime seçenekleridir; ChatGPT bağlayıcısı, genel HTTP MCP istemcisi ve stdio MCP istemcisi Client bağlantılarıdır.
+Şunlar için kullanın:
 
-## Ne zaman kullanılır
+- Oluşturulan PDF veya raporlar.
+- Screenshots ve browser artifacts.
+- Build çıktıları.
+- Chat’e yapıştırmak için çok büyük logs.
+- Elle inceleme için hazırlanmış arşivler.
 
-- Seçilen Runtime veya Client yolu bu başlıkla eşleştiğinde bu sayfayı kullanın.
-- Workspace kökü, public base URL, MCP endpoint, kimlik doğrulama modu ve kullanılabilir host araçlarını tutarlı tutun.
-- ChatGPT web/app için `/mcp` ile biten bir HTTPS MCP endpoint yayımlayın.
-- Yerel MCP istemcileri için istemci desteğine göre HTTP localhost veya `local-shell-mcp --mode stdio` kullanın.
+Secrets, private keys, credential depoları veya ilgisiz kişisel veriler için dosya bağlantısı kullanmayın.
 
-## Adımlar
+## Tipik akış
 
-1. Önce Runtime kurulum sayfasını seçin.
-2. Runtime’ı başlatın ve HTTP modu kullanılıyorsa `/healthz` değerini doğrulayın.
-3. Sonra Client bağlantı sayfasını seçin.
-4. Client içinde MCP endpoint veya stdio komutunu kaydedin.
-5. Etkin workspace ve ayarları doğrulamak için `environment_get` çağırın.
+1. `/workspace` altında bir dosya oluşturun veya bulun.
+2. TTL ve isteğe bağlı download limit ile `link_create` çağırın. Dosya tarayıcıda veya Markdown image olarak doğrudan render edilmeliyse `inline=true` ayarlayın; varsayılan `false` olup attachment download zorlar.
+3. Dönen URL’yi paylaşın.
+4. Artık gerekmediğinde bağlantıyı revoke edin.
 
-```text
-Runtime: Docker / VS Code extension / binary / Python / stdio
-Client:  ChatGPT connector / generic HTTP MCP / generic stdio MCP
-Endpoint: https://your-host.example.com/mcp
-```
+## İlgili araçlar
 
-## Doğrulama
+| Tool | Amaç |
+|---|---|
+| `link_create` | Workspace dosyası için tokenized URL oluşturmak. |
+| `link_list` | Aktif bağlantıları göstermek. |
+| `link_revoke` | Süresi dolmadan bağlantıyı devre dışı bırakmak. |
 
-- `environment_get` Runtime ayarlarını ve workspace’i doğrular.
-- `file_tree` görünen dosyaları doğrular.
-- `run_shell` komut ortamını doğrular.
+## Kontroller
 
-## Notlar
+Yapılandırma seçenekleri şunları içerir:
 
-Küçük ve doğrulanabilir adımları tercih edin: incele, düzenle, diff kontrol et, test et, tara ve commit yap. Büyük görevler de denetlenebilir araç çağrılarına bölünmelidir.
+- `LOCAL_SHELL_MCP_FILE_DOWNLOAD_ENABLED`
+- `LOCAL_SHELL_MCP_FILE_DOWNLOAD_DEFAULT_TTL_S`
+- `LOCAL_SHELL_MCP_FILE_DOWNLOAD_MAX_TTL_S`
+- `LOCAL_SHELL_MCP_FILE_DOWNLOAD_DEFAULT_MAX_DOWNLOADS`
+- `LOCAL_SHELL_MCP_FILE_DOWNLOAD_MAX_FILE_BYTES`
+
+Hassas artifacts için daha kısa TTL kullanın ve bağlantı tek bir alıcıya yönelikse maximum download count belirleyin.
+
+## Güvenlik notları
+
+Dosya bağlantıları bearer URL’lerdir. URL’ye sahip herkes dosyayı bağlantı süresi dolana, download limit’e ulaşana veya revoke edilene kadar indirebilir. Bunları geçici secrets gibi ele alın. Inline response’lar CSP sandbox ve `X-Content-Type-Options: nosniff` içerir; böylece aktif formatlar LSM origin’e erişemez veya unsandboxed same-origin content olarak çalışamaz.

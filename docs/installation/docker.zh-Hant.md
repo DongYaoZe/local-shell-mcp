@@ -1,3 +1,4 @@
+<!-- i18n-source-sha256: 56d5f11100a1906c167afd36354f29742515a26289c62a03f044f3852ce2eaed -->
 # Docker Compose 運行時
 
 Docker Compose 是大多數用戶的推薦運行時。它爲模型提供受控 Linux 工作區、可重複工具鏈、持久憑據、瀏覽器自動化支持，以及簡單的升級路徑。

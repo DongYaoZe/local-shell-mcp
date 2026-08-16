@@ -1,38 +1,133 @@
-# Binario autonomo
+<!-- i18n-source-sha256: 42daa6d3dd931530a1d2e86d6a36fc6424b7494ff078626157c158b38b1f4b1e -->
+# Runtime binario autonomo
 
-Questa pagina descrive lo scenario “Binario autonomo” e mantiene la struttura Runtime/Client comune del sito.
+I release binaries eseguono `local-shell-mcp` senza Docker e senza un ambiente Python. Usa questo runtime quando Docker non è disponibile o quando una VM dedicata, un container host, un server di laboratorio o un account utente limitato fornisce già il confine di sicurezza.
 
-## Panoramica
+Questa è una scelta di runtime. L’accesso ChatGPT viene configurato separatamente tramite un endpoint HTTPS `/mcp`.
 
-Runtime definisce come viene eseguito il processo server e quale workspace controlla. Client definisce come si collega ChatGPT o un altro client MCP. Docker, l’estensione VS Code, i binari autonomi, le installazioni Python/pipx/sorgente e stdio sono opzioni Runtime; il connettore ChatGPT, il client MCP HTTP generico e il client MCP stdio sono connessioni Client.
+## Artifact di release
 
-## Quando usarlo
+GitHub Releases costruisce executables autonomi per le piattaforme comuni:
 
-- Usa questa pagina quando il percorso Runtime o Client scelto corrisponde al titolo.
-- Mantieni coerenti radice del workspace, base URL pubblica, MCP endpoint, modalità di autenticazione e strumenti disponibili sull’host.
-- Per ChatGPT web/app, esponi un MCP endpoint HTTPS che termini con `/mcp`.
-- Per client MCP locali, usa HTTP localhost o `local-shell-mcp --mode stdio` in base al supporto del client.
+| Platform artifact | Archive |
+|---|---|
+| `local-shell-mcp-linux-x86_64` | `.tar.gz` |
+| `local-shell-mcp-linux-aarch64` | `.tar.gz` |
+| `local-shell-mcp-macos-x86_64` | `.tar.gz` |
+| `local-shell-mcp-macos-aarch64` | `.tar.gz` |
+| `local-shell-mcp-windows-x86_64` | `.zip` |
 
-## Passaggi
+Ogni archive contiene executable, README, license e un breve file quickstart.
 
-1. Scegli prima la pagina di installazione del Runtime.
-2. Avvia il Runtime e verifica `/healthz` quando usi la modalità HTTP.
-3. Poi scegli la pagina di connessione Client.
-4. Registra il MCP endpoint o il comando stdio nel Client.
-5. Chiama `environment_get` per verificare workspace e impostazioni effettive.
+## Installazione
 
-```text
-Runtime: Docker / VS Code extension / binary / Python / stdio
-Client:  ChatGPT connector / generic HTTP MCP / generic stdio MCP
-Endpoint: https://your-host.example.com/mcp
+1. Scarica da GitHub Releases l’archive per la tua piattaforma.
+2. Estrailo.
+3. Metti l’executable nel `PATH` o annota il percorso assoluto.
+4. Esegui `local-shell-mcp --help` per verificare che il binary si avvii.
+
+Linux e macOS richiedono normalmente l’executable bit:
+
+```bash
+chmod +x local-shell-mcp
+./local-shell-mcp --help
 ```
 
-## Verifica
+Su Windows esegui `local-shell-mcp.exe` da PowerShell o aggiungi la directory che lo contiene al `PATH`.
 
-- `environment_get` conferma impostazioni Runtime e workspace.
-- `file_tree` conferma i file visibili.
-- `run_shell` conferma l’ambiente dei comandi.
+## Esecuzione locale minima
 
-## Note
+```bash
+mkdir -p ~/local-shell-mcp-workspace
+export LOCAL_SHELL_MCP_WORKSPACE_ROOT=~/local-shell-mcp-workspace
+local-shell-mcp --mode mcp
+```
 
-Preferisci passaggi piccoli e verificabili: ispezionare, modificare, controllare il diff, testare, scansionare e fare commit. Anche le attività grandi dovrebbero essere divise in chiamate di strumenti auditabili.
+In un altro terminal:
+
+```bash
+curl -i http://127.0.0.1:8765/healthz
+```
+
+## Esecuzione pubblica HTTP MCP
+
+Per ChatGPT o un public HTTP MCP client, configura queste categorie:
+
+| Setting | Purpose |
+|---|---|
+| `LOCAL_SHELL_MCP_WORKSPACE_ROOT` | Directory controllata dagli strumenti |
+| `LOCAL_SHELL_MCP_HOST` and `LOCAL_SHELL_MCP_PORT` | Indirizzo bind e porta locali |
+| `LOCAL_SHELL_MCP_PUBLIC_BASE_URL` | Public HTTPS origin, senza `/mcp` |
+| `LOCAL_SHELL_MCP_AUTH_MODE` | Usa `oauth` per deployment pubblici |
+| OAuth PIN and JWT secret settings | Necessari per autorizzazione OAuth pubblica |
+
+Esponi la porta HTTP locale tramite reverse proxy o tunnel. L’endpoint pubblico è:
+
+```text
+https://your-public-host.example.com/mcp
+```
+
+## Configurazione YAML
+
+Un YAML config può contenere default runtime non segreti:
+
+```yaml
+host: 127.0.0.1
+port: 8765
+mode: mcp
+workspace_root: /srv/local-shell-mcp/workspace
+auth_mode: oauth
+public_base_url: https://your-public-host.example.com
+```
+
+Esegui:
+
+```bash
+local-shell-mcp --config /path/to/config.yaml
+```
+
+Le environment variables con prefisso `LOCAL_SHELL_MCP_` sovrascrivono i valori YAML.
+
+## Responsabilità del host toolchain
+
+Il binary include l’applicazione Python, non ogni strumento di sviluppo. Gli strumenti MCP chiamano programmi disponibili sull’host.
+
+Installa ciò che serve alle tue attività:
+
+| Capability | Host packages to consider |
+|---|---|
+| Search and shell ergonomics | `ripgrep`, `tree`, `jq`, `curl`, `wget`; le release Linux includono già static tmux helper |
+| Git workflows | `git`, `gh`, OpenSSH client, credential helpers |
+| Python projects | Python, pip, venv, project-specific compilers and headers |
+| Node projects | Node.js, npm, pnpm, yarn |
+| Rust/Go/Java/C++ | Cargo/rustc, Go, JDK, Maven/Gradle, compilers, CMake, Ninja |
+| Browser automation | Playwright browser binaries and OS dependencies |
+| Document conversion | LibreOffice, Pandoc, Poppler utilities |
+
+Se non vuoi mantenere questo host toolchain, usa Docker Compose.
+
+## Servizio persistente
+
+Per un deployment pubblico persistente, esegui il binary sotto il process supervisor del sistema operativo. Mantieni queste pratiche:
+
+- Usa un account OS dedicato con pochi privilegi.
+- Usa un workspace directory dedicato.
+- Conserva i valori sensibili fuori dai file world-readable.
+- Riavvia automaticamente in caso di errore.
+- Controlla `/healthz` dopo ogni riavvio.
+- Mantieni i log disponibili per troubleshooting.
+
+## Aggiornamenti
+
+1. Scarica il nuovo release archive per la piattaforma.
+2. Verifica i checksum se vuoi.
+3. Sostituisci l’executable.
+4. Riavvia il process manager.
+5. Controlla `/healthz`.
+6. Chiedi al client di eseguire `environment_get` prima di continuare.
+
+## Note di sicurezza
+
+Il binary viene eseguito con i privilegi del suo utente del sistema operativo. Per deployment pubblici usa un utente dedicato a bassi privilegi, un workspace dedicato e, se possibile, un confine VM/container.
+
+Non impostare `LOCAL_SHELL_MCP_ALLOW_FULL_CONTAINER=true` per un binary eseguito direttamente sul tuo host personale. Questa impostazione è destinata a containers o VM usa e getta.

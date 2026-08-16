@@ -1,17 +1,52 @@
-# Uzak worker’lar
+<!-- i18n-source-sha256: 52e5f445beaf4c30bd298c59399005f01fe5563591b8a0285c97b46243f342fe -->
+# Uzak workers
 
-Remote workers connect outbound to the control server and expose normal tools with an optional `machine` argument to the MCP client.
+Remote workers, `local-shell-mcp`’nin dışarıya HTTP(S) isteği gönderebilen ancak gelen SSH bağlantısı kabul edemeyen makineleri kontrol etmesini sağlar.
 
 ```text
-ChatGPT -> local-shell-mcp -> outbound polling worker -> remote machine
+MCP client -> control server -> outbound polling worker -> remote machine
 ```
 
-Basic flow:
+## Temel workflow
 
-1. Create an invite with `remote_manage`.
-2. Run the generated command on the remote machine.
-3. Check `remote_manage`.
-4. Use remote shell, file, transfer, Git, and browser tools.
-5. Revoke the worker when done.
+1. `remote_manage(action="invite", ...)` ile tek kullanımlık davet oluşturun.
+2. Oluşturulan komutu uzak makinede çalıştırın.
+3. `remote_manage(action="list")` ile kaydı doğrulayın.
+4. `machine="<worker-name>"` ile normal araçları çağırın; örneğin `environment_get`, `run_shell`, `file_read` veya `browser_run_script`.
+5. `remote_transfer` ile izlenen controller-to-worker, worker-to-controller veya worker-to-worker dosya/dizin aktarımı başlatın. `job_list` ya da `job_tail` ile takip edin; `job_stop` veya `job_retry` ile durdurun ya da yeniden deneyin.
+6. `remote_manage(action="rename", ...)` veya `remote_manage(action="revoke", ...)` ile worker’ı yeniden adlandırın veya iptal edin.
 
-Herkese açık dağıtımda OAuth etkin olsun; Docker socket, host root veya uzun ömürlü kimlik bilgilerini bağlamayın.
+Yalnızca worker yönetimi `remote_*` adlarını kullanır. Execution, shell, job, filesystem, patch ve browser işlemleri local ve remote aynı schema’yı paylaşır. Machine vermek ayrıca `remote:use` OAuth scope gerektirir.
+
+## Kalıcı workers
+
+Davet sonucu platforma özel komutlar içerir:
+
+- `persistent_command` Linux/macOS üzerinde user service kurup başlatır.
+- `powershell_persistent_command` PowerShell üzerinden Windows user task kurup başlatır.
+
+Windows’ta `local-shell-mcp worker install-service`, mevcut kullanıcı için `local-shell-mcp-worker` görevini kaydeder. Hemen başlar, reboot sonrasında bu kullanıcı giriş yaptığında yeniden başlar, pilde çalışmaya izin verir, yinelenen başlatmaları yok sayar ve başarısız çalışmaları yeniden dener. Administrator yetkisi gerektirmez ve kullanıcı giriş yapmadan önce çalışmaz.
+
+Her platformda aynı lifecycle commands kullanılır:
+
+```text
+local-shell-mcp worker status
+local-shell-mcp worker start
+local-shell-mcp worker stop
+local-shell-mcp worker restart
+local-shell-mcp worker uninstall-service
+```
+
+Worker log, worker state directory altında `worker.log` olarak saklanır.
+
+## Yetenekler
+
+Workers shell/persistent shell sessions, tracked jobs, filesystem operations, transfer internals, Python execution, patches ve bağımlılıklar kuruluysa Playwright destekler. Git, `run_shell(machine=...)` üzerinden standart komutları kullanır.
+
+## Güvenlik ve sürümleme
+
+Bağlanan worker, MCP client’a yapılandırılmış ortam üzerinde kontrol verir. Kısa invite TTL, özel work directory/account kullanın, audit log’ları inceleyin ve görev sonrasında worker’ı revoke edin. Oluşturulan davet control server sürümüyle eşleşen worker code kurar.
+
+## Sorun giderme
+
+Worker görünmüyorsa outbound HTTPS access, public base URL erişilebilirliği, invite expiry, system time ve control-server log’larını kontrol edin.

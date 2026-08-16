@@ -1,12 +1,8 @@
+<!-- i18n-source-sha256: 1f30fc9935125c84fb0838d17ec894d78aaa6253fe3903356414aac716ba2adc -->
 # Keamanan
 
-Untuk deployment publik, aktifkan OAuth dan jangan mount Docker socket, root host, atau kredensial jangka panjang.
+Gunakan OAuth untuk deployment publik. Pastikan `LOCAL_SHELL_MCP_OAUTH_ADMIN_PIN` dan `LOCAL_SHELL_MCP_OAUTH_JWT_SECRET` kuat dan tetap rahasia.
 
-Mandatory rules:
+Secara default, operasi path dibatasi pada workspace dan fragmen path sensitif diblokir. Mode Full-container menonaktifkan pembatasan workspace dan path bawaan, sehingga hanya ditujukan untuk container atau VM yang dapat dibuang.
 
-1. Keep OAuth enabled for public deployments.
-2. Do not mount `/var/run/docker.sock`.
-3. Do not mount the host root filesystem.
-4. Do not expose unauthenticated MCP tools on the public internet.
-5. Treat file links and credential volumes as sensitive.
-6. Use disposable containers or VMs when granting broad authority.
+Tautan unduhan file yang dibuat merupakan bearer URL publik. Keamanannya bergantung pada token berentropi tinggi, TTL, batas jumlah unduhan opsional, batas ukuran opsional, dan pencabutan.

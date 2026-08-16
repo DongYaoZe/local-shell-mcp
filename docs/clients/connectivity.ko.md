@@ -1,38 +1,72 @@
+<!-- i18n-source-sha256: 3986da6ff877609189b0d88d363aff1f5f45445f0cfe5ffa608a31929078542c -->
 # 네트워크 연결
 
-이 페이지는 “네트워크 연결” 시나리오를 설명하며 문서 사이트의 공통 Runtime/Client 구조를 따릅니다.
+머신 외부의 HTTP MCP client가 연결하려면 접근 가능한 HTTPS origin이 필요합니다. 이 페이지는 네트워크 라우팅을 설명하며 어떤 runtime을 선택할지는 다루지 않습니다.
 
-## 개요
-
-Runtime은 서버 프로세스가 어떻게 실행되고 어떤 워크스페이스를 제어하는지 정합니다. Client는 ChatGPT 또는 다른 MCP 클라이언트가 어떻게 연결되는지 정합니다. Docker, VS Code 확장, 독립 실행 바이너리, Python/pipx/소스 설치, stdio는 Runtime 선택지입니다. ChatGPT 커넥터, 일반 HTTP MCP 클라이언트, stdio MCP 클라이언트는 Client 연결입니다.
-
-## 사용 시점
-
-- 선택한 Runtime 또는 Client 경로가 이 페이지 제목과 일치할 때 사용합니다.
-- 워크스페이스 루트, 공개 base URL, MCP endpoint, 인증 모드, 호스트에서 사용할 수 있는 도구를 일관되게 유지합니다.
-- ChatGPT 웹/App에는 `/mcp`로 끝나는 HTTPS MCP endpoint를 노출합니다.
-- 로컬 MCP 클라이언트는 지원 범위에 따라 HTTP localhost 또는 `local-shell-mcp --mode stdio`를 사용합니다.
-
-## 단계
-
-1. 먼저 Runtime 설치 페이지를 선택합니다.
-2. Runtime을 시작하고 HTTP 모드에서는 `/healthz`를 확인합니다.
-3. 그다음 Client 연결 페이지를 선택합니다.
-4. Client에 MCP endpoint 또는 stdio 명령을 등록합니다.
-5. `environment_get`를 호출해 실제 워크스페이스와 설정을 확인합니다.
+client endpoint는 보통 `/mcp`로 끝납니다.
 
 ```text
-Runtime: Docker / VS Code extension / binary / Python / stdio
-Client:  ChatGPT connector / generic HTTP MCP / generic stdio MCP
-Endpoint: https://your-host.example.com/mcp
+https://your-public-host.example.com/mcp
 ```
 
-## 검증
+서버의 public base URL 설정에는 origin만 넣습니다.
 
-- `environment_get`는 Runtime 설정과 워크스페이스를 확인합니다.
-- `file_tree`는 보이는 파일을 확인합니다.
-- `run_shell`은 명령 실행 환경을 확인합니다.
+```env
+LOCAL_SHELL_MCP_PUBLIC_BASE_URL=https://your-public-host.example.com
+```
 
-## 참고
+이 base URL에 `/mcp`를 포함하지 마십시오.
 
-작고 검증 가능한 단계, 즉 확인, 편집, diff, 테스트, 스캔, 커밋을 우선합니다. 큰 작업도 감사 가능한 도구 호출로 나눕니다.
+## 연결 옵션
+
+| 옵션 | 사용 시점 |
+|---|---|
+| Compose tunnel sidecar | 내장 `tunnel` profile을 사용하는 Docker Compose |
+| 외부 tunnel | 로컬 네트워크 밖에서 접근해야 하는 모든 runtime |
+| Caddy | 간단한 자동 TLS가 필요할 때 |
+| Nginx 또는 Nginx Proxy Manager | 기존 Nginx 인프라가 있을 때 |
+| Traefik | 기존 container-native 라우팅을 사용할 때 |
+
+## 경로
+
+전체 origin을 실행 중인 서버로 전달하십시오. 중요한 경로는 다음과 같습니다.
+
+| 경로 | 용도 |
+|---|---|
+| `/mcp` | MCP Streamable HTTP endpoint |
+| `/healthz`, `/readyz` | 상태 확인 |
+| `/.well-known/...` | client discovery metadata |
+| `/oauth/...` | client 인증 흐름 |
+| `/downloads/...` | 선택적 생성 파일 링크 |
+| `/join/...`, `/remote/...` | 선택적 remote-worker 흐름 |
+
+## 프록시 동작
+
+프록시는 경로를 보존하고 request body를 전달하며 긴 response를 지원하고 지나치게 짧은 timeout을 피해야 합니다.
+
+## 확인
+
+```bash
+curl -i http://127.0.0.1:8765/healthz
+curl -i https://your-public-host.example.com/healthz
+```
+
+## 흔한 실수
+
+| 실수 | 해결 |
+|---|---|
+| ChatGPT에서 `https://host/mcp` 대신 `https://host` 사용 | client endpoint에만 `/mcp` 추가 |
+| `LOCAL_SHELL_MCP_PUBLIC_BASE_URL=https://host/mcp` 설정 | origin만 설정 |
+| `/mcp`만 라우팅 | discovery 및 인증 경로도 작동하도록 전체 origin 라우팅 |
+| host runtime에서 너무 넓은 workspace 사용 | 좁은 workspace 또는 Docker 사용 |
+
+## 권장 조합
+
+| Runtime | 네트워크 패턴 |
+|---|---|
+| 서버의 Docker Compose | 기존 reverse proxy 또는 Compose tunnel profile |
+| 가정용 머신의 Docker Compose | outbound tunnel |
+| 노트북의 VS Code extension | 세션용 임시 tunnel |
+| VM의 binary | VM 또는 네트워크 경계의 reverse proxy |
+| Python/source 개발 서버 | 보통 localhost 전용 |
+| Stdio mode | HTTP 경로 없음. 로컬 MCP client 사용 |

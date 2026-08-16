@@ -1,38 +1,110 @@
-# Pola penggunaan
+<!-- i18n-source-sha256: 0b086e03bb7fd910e016db31a703908be74f7858846c091c8e784a62e00ec6ca -->
+# Pola penggunaan dan panduan prompting
 
-Halaman ini menjelaskan skenario “Pola penggunaan” dan mengikuti struktur Runtime/Client yang sama di situs.
+`local-shell-mcp` menyediakan tools yang kuat. Hasil yang baik bergantung pada meminta model menginspeksi terlebih dahulu, bertindak dalam langkah kecil, melakukan verifikasi, dan melaporkan perubahan.
 
-## Ringkasan
+## Loop operasi umum
 
-Runtime menentukan bagaimana proses server berjalan dan workspace mana yang dikendalikan. Client menentukan bagaimana ChatGPT atau client MCP lain terhubung. Docker, ekstensi VS Code, biner mandiri, instalasi Python/pipx/sumber, dan stdio adalah pilihan Runtime; konektor ChatGPT, client MCP HTTP generik, dan client MCP stdio adalah koneksi Client.
+Gunakan loop ini untuk sebagian besar task coding:
 
-## Kapan digunakan
+1. Inspect: `environment_get`, `file_tree`, `file_grep`, `file_read`, dan `run_shell` untuk command seperti `git status`.
+2. Plan: minta model mengidentifikasi file dan tests minimal yang terlibat.
+3. Edit: gunakan `file_edit`, `file_patch`, atau shell commands.
+4. Verify: jalankan targeted tests/builds dengan `run_shell` atau persistent shells.
+5. Review: jalankan `git diff` melalui `run_shell`, lalu gunakan `secret_scan` dan `audit_tail` bila diperlukan.
+6. Commit/export: gunakan explicit Git CLI commands melalui `run_shell` atau `link_create`.
 
-- Gunakan halaman ini ketika jalur Runtime atau Client yang dipilih cocok dengan judulnya.
-- Jaga agar root workspace, base URL publik, MCP endpoint, mode autentikasi, dan alat host yang tersedia tetap konsisten.
-- Untuk ChatGPT web/app, ekspos MCP endpoint HTTPS yang berakhir dengan `/mcp`.
-- Untuk client MCP lokal, gunakan HTTP localhost atau `local-shell-mcp --mode stdio` sesuai dukungan client.
+## Pemilihan tool
 
-## Langkah
+| Task | Utamakan | Hindari |
+|---|---|---|
+| One-shot command singkat | `run_shell` | Memulai persistent shell untuk setiap command |
+| Dev server, REPL, atau watch task lama | `shell_start` + `shell_read` + `shell_send` | Memblokir `run_shell` sampai timeout |
+| Structured analysis atau file generation | `run_python` | Shell pipeline rapuh untuk JSON/text kompleks |
+| Edit exact kecil | `file_edit` | Menulis ulang file penuh tanpa perlu |
+| Satu atau beberapa replacement dalam satu file | `file_edit` with an `edits` array | Mengulang stale edit tanpa membaca ulang |
+| Multi-file patch | `file_patch` | Ad hoc shell edit |
+| Mencari file | `file_tree`, `file_glob` | Recursive listing penuh pada repository besar |
+| Mencari code | `file_grep` | Membaca banyak file secara buta |
+| Browser evidence | `browser_snapshot`, `browser_run_script` | Menebak dari nama page/route |
+| Downloadable artifacts | `link_create` | Menempel binary content besar ke chat |
+| Remote machine work | normal tools with `machine`, plus `remote_transfer` | Membuka inbound SSH saat outbound worker sudah cukup |
 
-1. Pilih halaman instalasi Runtime terlebih dahulu.
-2. Mulai Runtime dan periksa `/healthz` saat menggunakan mode HTTP.
-3. Pilih halaman koneksi Client berikutnya.
-4. Daftarkan MCP endpoint atau perintah stdio di Client.
-5. Panggil `environment_get` untuk memeriksa workspace dan pengaturan efektif.
+## Template prompt
+
+### Orientasi read-only repository
 
 ```text
-Runtime: Docker / VS Code extension / binary / Python / stdio
-Client:  ChatGPT connector / generic HTTP MCP / generic stdio MCP
-Endpoint: https://your-host.example.com/mcp
+Gunakan local-shell-mcp. Inspeksi layout repository dan git status. Jangan ubah file. Rangkum component utama, test command yang dapat disimpulkan, dan risk yang jelas sebelum membuat perubahan.
 ```
 
-## Verifikasi
+### Focused bug fix
 
-- `environment_get` mengonfirmasi pengaturan Runtime dan workspace.
-- `file_tree` mengonfirmasi file yang terlihat.
-- `run_shell` mengonfirmasi lingkungan perintah.
+```text
+Gunakan local-shell-mcp untuk memperbaiki bug. Pertama reproduce atau locate dengan relevant command terkecil. Baca file sebelum edit. Buat minimal patch, jalankan targeted verification, lalu tampilkan git diff dan tests tepat yang dijalankan. Jangan commit sampai saya menyetujui.
+```
 
-## Catatan
+### Workflow commit dan push
 
-Utamakan langkah kecil yang dapat diverifikasi: inspeksi, edit, diff, test, scan, dan commit. Tugas besar juga harus dipecah menjadi panggilan alat yang dapat diaudit.
+```text
+Gunakan local-shell-mcp. Periksa git status dan diff, jalankan relevant tests dan secret_scan, buat satu focused commit dengan message ringkas, lalu push current branch. Jangan sertakan cache, build artifacts, atau unrelated formatting.
+```
+
+### Long-running process
+
+```text
+Mulai dev server dalam persistent shell session, baca output sampai ready, lalu gunakan browser tools untuk memverifikasi page. Simpan session id dan kill session setelah verifikasi.
+```
+
+### Remote worker task
+
+```text
+Gunakan remote worker terhubung bernama <machine>. Pertama panggil environment_get dengan machine=<machine>, lalu file_list dengan machine yang sama. Kerjakan hanya di configured remote workdir. Gunakan run_shell untuk command singkat dan shell_start atau job_start untuk pekerjaan lama.
+```
+
+## Bekerja dengan repositories
+
+Sequence yang disarankan untuk perubahan open-source:
+
+1. Jalankan `git status --short --branch` melalui `run_shell`.
+2. Fetch dan inspect branches dengan explicit Git CLI saat upstream state penting.
+3. Gunakan `file_grep` dan `file_read` sebelum edit.
+4. Buat minimal patch.
+5. Jalankan targeted tests dahulu, lalu broader tests jika praktis.
+6. Jalankan `secret_scan` sebelum commit atau push.
+7. Stage dan commit secara eksplisit dengan message ringkas.
+
+Minta satu commit per logical change bila maintainer membutuhkan history yang mudah direview.
+
+## Bekerja dengan generated artifacts
+
+Untuk PDF, report, screenshot, archive, atau log:
+
+1. Generate file di dalam workspace.
+2. Verifikasi file ada dan ukurannya sesuai.
+3. Gunakan `link_create` dengan TTL singkat dan optional `max_downloads`.
+4. Revoke link ketika tidak lagi dibutuhkan.
+
+Jangan buat public link untuk private key, credential directory, atau unrelated personal data.
+
+## Bekerja dengan remote machines
+
+Remote worker mode berguna ketika machine bisa melakukan outbound HTTPS tetapi tidak bisa menerima inbound SSH.
+
+Praktik baik:
+
+- Buat atau rename machine dengan `remote_manage(action="invite", ...)` atau `remote_manage(action="rename", ...)`.
+- Panggil `environment_get(machine=...)` sebelum bertindak.
+- Gunakan `remote_transfer` untuk memulai controller/worker atau worker/worker transfer jobs, lalu kelola dengan normal `job_*` tools.
+- Revoke worker setelah task dengan `remote_manage(action="revoke", ...)`.
+
+## Anti-patterns
+
+Hindari instruksi ini kecuali environment disposable dan konsekuensinya dipahami:
+
+- “Install apa pun yang diperlukan secara global” pada host-launched server.
+- “Jalankan sampai berhasil” tanpa time bound atau verification criteria.
+- “Commit semuanya” pada repository dengan generated artifacts.
+- “Expose seluruh home directory” demi kenyamanan.
+- “Buat file link untuk seluruh workspace”.
+- Menjalankan public deployment dengan `LOCAL_SHELL_MCP_AUTH_MODE=none`.

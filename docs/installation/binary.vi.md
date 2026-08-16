@@ -1,38 +1,133 @@
-# Tệp nhị phân độc lập
+<!-- i18n-source-sha256: 42daa6d3dd931530a1d2e86d6a36fc6424b7494ff078626157c158b38b1f4b1e -->
+# Runtime binary độc lập
 
-Trang này mô tả kịch bản “Tệp nhị phân độc lập” và giữ cấu trúc Runtime/Client chung của trang tài liệu.
+Release binary chạy `local-shell-mcp` mà không cần Docker hay môi trường Python. Dùng runtime này khi Docker không khả dụng hoặc khi dedicated VM, container host, lab server hay restricted user account đã cung cấp biên an toàn.
 
-## Tổng quan
+Đây là lựa chọn runtime. Truy cập ChatGPT được cấu hình riêng qua endpoint HTTPS `/mcp`.
 
-Runtime xác định tiến trình server chạy như thế nào và điều khiển workspace nào. Client xác định ChatGPT hoặc client MCP khác kết nối như thế nào. Docker, tiện ích VS Code, tệp nhị phân độc lập, cài đặt Python/pipx/mã nguồn và stdio là lựa chọn Runtime; trình kết nối ChatGPT, client MCP HTTP chung và client MCP stdio là kết nối Client.
+## Artifact release
 
-## Khi nào dùng
+GitHub Releases build executable tự chứa cho các nền tảng phổ biến:
 
-- Dùng trang này khi đường dẫn Runtime hoặc Client đã chọn khớp với tiêu đề.
-- Giữ nhất quán workspace root, public base URL, MCP endpoint, chế độ xác thực và các công cụ host khả dụng.
-- Với ChatGPT web/app, hãy công bố MCP endpoint HTTPS kết thúc bằng `/mcp`.
-- Với client MCP cục bộ, dùng HTTP localhost hoặc `local-shell-mcp --mode stdio` tùy khả năng hỗ trợ của client.
+| Platform artifact | Archive |
+|---|---|
+| `local-shell-mcp-linux-x86_64` | `.tar.gz` |
+| `local-shell-mcp-linux-aarch64` | `.tar.gz` |
+| `local-shell-mcp-macos-x86_64` | `.tar.gz` |
+| `local-shell-mcp-macos-aarch64` | `.tar.gz` |
+| `local-shell-mcp-windows-x86_64` | `.zip` |
 
-## Các bước
+Mỗi archive chứa executable, README, license và file quickstart ngắn.
 
-1. Trước tiên chọn trang cài đặt Runtime.
-2. Khởi động Runtime và kiểm tra `/healthz` khi dùng chế độ HTTP.
-3. Sau đó chọn trang kết nối Client.
-4. Đăng ký MCP endpoint hoặc lệnh stdio trong Client.
-5. Gọi `environment_get` để kiểm tra workspace và cấu hình thực tế.
+## Cài đặt
 
-```text
-Runtime: Docker / VS Code extension / binary / Python / stdio
-Client:  ChatGPT connector / generic HTTP MCP / generic stdio MCP
-Endpoint: https://your-host.example.com/mcp
+1. Download archive cho nền tảng của bạn từ GitHub Releases.
+2. Giải nén.
+3. Đặt executable trên `PATH` hoặc ghi lại absolute path.
+4. Chạy `local-shell-mcp --help` để xác nhận binary khởi động.
+
+Linux và macOS thường yêu cầu executable bit:
+
+```bash
+chmod +x local-shell-mcp
+./local-shell-mcp --help
 ```
 
-## Xác minh
+Người dùng Windows nên chạy `local-shell-mcp.exe` từ PowerShell hoặc thêm directory chứa nó vào `PATH`.
 
-- `environment_get` xác nhận cấu hình Runtime và workspace.
-- `file_tree` xác nhận các tệp nhìn thấy được.
-- `run_shell` xác nhận môi trường lệnh.
+## Minimal local run
 
-## Ghi chú
+```bash
+mkdir -p ~/local-shell-mcp-workspace
+export LOCAL_SHELL_MCP_WORKSPACE_ROOT=~/local-shell-mcp-workspace
+local-shell-mcp --mode mcp
+```
 
-Ưu tiên các bước nhỏ và có thể xác minh: kiểm tra, chỉnh sửa, diff, test, scan và commit. Tác vụ lớn cũng nên được chia thành các lời gọi công cụ có thể audit.
+Trong terminal khác:
+
+```bash
+curl -i http://127.0.0.1:8765/healthz
+```
+
+## Public HTTP MCP run
+
+Với ChatGPT hoặc public HTTP MCP client, cấu hình các nhóm sau:
+
+| Setting | Purpose |
+|---|---|
+| `LOCAL_SHELL_MCP_WORKSPACE_ROOT` | Directory do tool điều khiển |
+| `LOCAL_SHELL_MCP_HOST` and `LOCAL_SHELL_MCP_PORT` | Local bind address và port |
+| `LOCAL_SHELL_MCP_PUBLIC_BASE_URL` | Public HTTPS origin không có `/mcp` |
+| `LOCAL_SHELL_MCP_AUTH_MODE` | Dùng `oauth` cho public deployment |
+| OAuth PIN and JWT secret settings | Cần cho public OAuth authorization |
+
+Expose local HTTP port qua reverse proxy hoặc tunnel. Public endpoint:
+
+```text
+https://your-public-host.example.com/mcp
+```
+
+## YAML config
+
+YAML config có thể chứa runtime default không phải secret:
+
+```yaml
+host: 127.0.0.1
+port: 8765
+mode: mcp
+workspace_root: /srv/local-shell-mcp/workspace
+auth_mode: oauth
+public_base_url: https://your-public-host.example.com
+```
+
+Chạy:
+
+```bash
+local-shell-mcp --config /path/to/config.yaml
+```
+
+Environment variable có prefix `LOCAL_SHELL_MCP_` ghi đè giá trị YAML.
+
+## Trách nhiệm host toolchain
+
+Binary đóng gói ứng dụng Python, không phải mọi developer tool. MCP tool gọi các chương trình có sẵn trên host.
+
+Cài những gì task của bạn cần:
+
+| Capability | Host packages to consider |
+|---|---|
+| Search and shell ergonomics | `ripgrep`, `tree`, `jq`, `curl`, `wget`; Linux release đã có static tmux helper |
+| Git workflows | `git`, `gh`, OpenSSH client, credential helpers |
+| Python projects | Python, pip, venv, project-specific compilers and headers |
+| Node projects | Node.js, npm, pnpm, yarn |
+| Rust/Go/Java/C++ | Cargo/rustc, Go, JDK, Maven/Gradle, compilers, CMake, Ninja |
+| Browser automation | Playwright browser binaries and OS dependencies |
+| Document conversion | LibreOffice, Pandoc, Poppler utilities |
+
+Nếu không muốn duy trì host toolchain này, hãy dùng Docker Compose.
+
+## Dịch vụ chạy lâu dài
+
+Với persistent public deployment, chạy binary dưới process supervisor của hệ điều hành. Giữ các thực hành sau:
+
+- Dùng dedicated low-privilege OS account.
+- Dùng dedicated workspace directory.
+- Lưu sensitive value ngoài world-readable file.
+- Tự động restart khi lỗi.
+- Kiểm tra `/healthz` sau mỗi restart.
+- Giữ log cho troubleshooting.
+
+## Cập nhật
+
+1. Download release archive mới cho nền tảng.
+2. Verify checksum nếu muốn.
+3. Thay executable.
+4. Restart process manager.
+5. Kiểm tra `/healthz`.
+6. Yêu cầu client chạy `environment_get` trước khi tiếp tục.
+
+## Ghi chú an toàn
+
+Binary chạy với privilege của user hệ điều hành. Với public deployment, dùng dedicated low-privilege user, dedicated workspace và biên VM/container nếu có thể.
+
+Không đặt `LOCAL_SHELL_MCP_ALLOW_FULL_CONTAINER=true` cho binary chạy trực tiếp trên personal host. Setting này dành cho disposable container hoặc VM.

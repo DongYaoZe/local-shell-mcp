@@ -1,38 +1,62 @@
-# 汎用 MCP Client
+<!-- i18n-source-sha256: 6e76d0746c53eeef3e770417742a44e122c6484afd0d91ddf6a4995387085c74 -->
+# 汎用 MCP client
 
-このページでは「汎用 MCP Client」の場面を説明し、サイト全体で共通の Runtime/Client 構造に従います。
+`local-shell-mcp` は ChatGPT だけでなく、その他の MCP client からも利用できます。client は HTTP で接続するか、stdio 経由でサーバープロセスを起動するかを選びます。
 
-## 概要
+## HTTP MCP client
 
-Runtime はサーバープロセスの起動方法と制御するワークスペースを決めます。Client は ChatGPT または別の MCP クライアントの接続方法を決めます。Docker、VS Code 拡張、スタンドアロンバイナリ、Python/pipx/ソースインストール、stdio は Runtime の選択肢です。ChatGPT コネクタ、汎用 HTTP MCP クライアント、stdio MCP クライアントは Client 接続です。
+サーバーが既に実行中の場合は HTTP mode を使用します。
 
-## 利用する場面
-
-- 選択した Runtime または Client の経路がこのページのタイトルに一致する場合に使用します。
-- ワークスペースルート、公開 base URL、MCP endpoint、認証モード、ホストで利用できるツールをそろえます。
-- ChatGPT の Web/App では `/mcp` で終わる HTTPS MCP endpoint を公開します。
-- ローカル MCP クライアントでは、対応状況に応じて HTTP localhost または `local-shell-mcp --mode stdio` を使用します。
-
-## 手順
-
-1. まず Runtime のインストールページを選びます。
-2. Runtime を起動し、HTTP モードでは `/healthz` を確認します。
-3. 次に Client 接続ページを選びます。
-4. Client に MCP endpoint または stdio コマンドを登録します。
-5. `environment_get` を呼び出して実際のワークスペースと設定を確認します。
-
-```text
-Runtime: Docker / VS Code extension / binary / Python / stdio
-Client:  ChatGPT connector / generic HTTP MCP / generic stdio MCP
-Endpoint: https://your-host.example.com/mcp
+```bash
+LOCAL_SHELL_MCP_WORKSPACE_ROOT=/path/to/workspace local-shell-mcp --mode mcp
 ```
 
-## 検証
+ローカル endpoint：
 
-- `environment_get` は Runtime 設定とワークスペースを確認します。
-- `file_tree` は見えているファイルを確認します。
-- `run_shell` はコマンド実行環境を確認します。
+```text
+http://127.0.0.1:8765/mcp
+```
 
-## 注記
+ネットワーク endpoint：
 
-小さく検証可能な手順を優先します。確認、編集、diff、テスト、スキャン、コミットの順に進めます。大きな作業も監査可能なツール呼び出しに分解します。
+```text
+https://your-public-host.example.com/mcp
+```
+
+信頼された localhost の外から到達できる endpoint には OAuth を使用してください。
+
+## Stdio MCP client
+
+client 自身がサーバープロセスを起動する場合は stdio mode を使用します。
+
+```bash
+LOCAL_SHELL_MCP_WORKSPACE_ROOT=/path/to/workspace local-shell-mcp --mode stdio
+```
+
+一般的な client 設定の形：
+
+```json
+{
+  "mcpServers": {
+    "local-shell-mcp": {
+      "command": "local-shell-mcp",
+      "args": ["--mode", "stdio"],
+      "env": {
+        "LOCAL_SHELL_MCP_WORKSPACE_ROOT": "/path/to/workspace"
+      }
+    }
+  }
+}
+```
+
+client ごとに schema は異なります。このセクションを `mcpServers` と呼ぶものもあれば、別の名前を使うものもあります。
+
+## 最初の安全な確認
+
+新しく接続した client では、次から始めます。
+
+```text
+Call environment_get, then file_tree on the workspace root. Do not modify files yet.
+```
+
+その後、編集・テスト・Git のルールを明示した、範囲を限定したタスクを実行してください。

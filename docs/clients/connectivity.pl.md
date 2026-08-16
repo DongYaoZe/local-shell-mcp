@@ -1,38 +1,72 @@
+<!-- i18n-source-sha256: 3986da6ff877609189b0d88d363aff1f5f45445f0cfe5ffa608a31929078542c -->
 # Łączność sieciowa
 
-Ta strona opisuje scenariusz „Łączność sieciowa” i zachowuje wspólną strukturę Runtime/Client dokumentacji.
+HTTP MCP client znajdujące się poza maszyną potrzebują osiągalnego HTTPS origin. Ta strona dotyczy routingu sieciowego, a nie wyboru runtime.
 
-## Przegląd
-
-Runtime określa, jak działa proces serwera i którym workspace steruje. Client określa, jak łączy się ChatGPT lub inny klient MCP. Docker, rozszerzenie VS Code, samodzielne pliki binarne, instalacje Python/pipx/ze źródeł i stdio to opcje Runtime; łącznik ChatGPT, ogólny klient HTTP MCP i klient MCP stdio to połączenia Client.
-
-## Kiedy używać
-
-- Użyj tej strony, gdy wybrana ścieżka Runtime lub Client odpowiada tytułowi.
-- Zachowaj spójność katalogu głównego workspace, publicznego base URL, MCP endpoint, trybu uwierzytelniania i dostępnych narzędzi hosta.
-- Dla ChatGPT web/app wystaw HTTPS MCP endpoint kończący się na `/mcp`.
-- Dla lokalnych klientów MCP użyj HTTP localhost albo `local-shell-mcp --mode stdio` zależnie od obsługi klienta.
-
-## Kroki
-
-1. Najpierw wybierz stronę instalacji Runtime.
-2. Uruchom Runtime i sprawdź `/healthz`, gdy używany jest tryb HTTP.
-3. Następnie wybierz stronę połączenia Client.
-4. Zarejestruj MCP endpoint albo polecenie stdio w Client.
-5. Wywołaj `environment_get`, aby sprawdzić rzeczywisty workspace i ustawienia.
+client endpoint zwykle kończy się na `/mcp`:
 
 ```text
-Runtime: Docker / VS Code extension / binary / Python / stdio
-Client:  ChatGPT connector / generic HTTP MCP / generic stdio MCP
-Endpoint: https://your-host.example.com/mcp
+https://your-public-host.example.com/mcp
 ```
 
-## Weryfikacja
+Ustawienie public base URL serwera zawiera wyłącznie origin:
 
-- `environment_get` potwierdza ustawienia Runtime i workspace.
-- `file_tree` potwierdza widoczne pliki.
-- `run_shell` potwierdza środowisko poleceń.
+```env
+LOCAL_SHELL_MCP_PUBLIC_BASE_URL=https://your-public-host.example.com
+```
 
-## Uwagi
+Nie dodawaj `/mcp` do tego base URL.
 
-Preferuj małe, weryfikowalne kroki: inspekcja, edycja, diff, test, skanowanie i commit. Duże zadania również należy dzielić na audytowalne wywołania narzędzi.
+## Opcje łączności
+
+| Opcja | Kiedy używać |
+|---|---|
+| Compose tunnel sidecar | Docker Compose z wbudowanym profile `tunnel` |
+| Zewnętrzny tunnel | Dowolny runtime, który musi być osiągalny spoza sieci lokalnej |
+| Caddy | Prosty automatyczny TLS |
+| Nginx lub Nginx Proxy Manager | Istniejąca infrastruktura Nginx |
+| Traefik | Istniejący routing container-native |
+
+## Ścieżki
+
+Przekieruj cały origin do uruchomionego serwera. Ważne ścieżki obejmują:
+
+| Ścieżka | Zastosowanie |
+|---|---|
+| `/mcp` | MCP Streamable HTTP endpoint |
+| `/healthz`, `/readyz` | Kontrole stanu |
+| `/.well-known/...` | Metadane client discovery |
+| `/oauth/...` | Przepływ autoryzacji client |
+| `/downloads/...` | Opcjonalne linki do wygenerowanych plików |
+| `/join/...`, `/remote/...` | Opcjonalny przepływ remote-worker |
+
+## Zachowanie proxy
+
+Proxy powinno zachowywać ścieżki, przekazywać request body, obsługiwać długie response’y i unikać bardzo krótkich timeoutów.
+
+## Kontrole
+
+```bash
+curl -i http://127.0.0.1:8765/healthz
+curl -i https://your-public-host.example.com/healthz
+```
+
+## Częste błędy
+
+| Błąd | Naprawa |
+|---|---|
+| Użycie w ChatGPT `https://host` zamiast `https://host/mcp` | Dodaj `/mcp` tylko do client endpoint |
+| Ustawienie `LOCAL_SHELL_MCP_PUBLIC_BASE_URL=https://host/mcp` | Ustaw tylko origin |
+| Routing tylko `/mcp` | Routuj cały origin, aby działały także discovery i autoryzacja |
+| Uruchamianie host runtime ze zbyt szerokim workspace | Użyj wąskiego workspace lub Docker |
+
+## Sugerowane połączenia
+
+| Runtime | Schemat sieci |
+|---|---|
+| Docker Compose na serwerze | Istniejący reverse proxy lub Compose tunnel profile |
+| Docker Compose na komputerze domowym | Outbound tunnel |
+| VS Code extension na laptopie | Tymczasowy tunnel na czas sesji |
+| Binary na VM | Reverse proxy na VM lub brzegu sieci |
+| Python/source dev server | Zwykle tylko localhost |
+| Stdio mode | Brak ścieżki HTTP; użyj lokalnego MCP client |

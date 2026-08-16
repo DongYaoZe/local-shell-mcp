@@ -1,38 +1,63 @@
-# Modalità stdio
+<!-- i18n-source-sha256: a3d2dc835f99feed33a73ae3dd880dabab04a37d7461b99f1fa49c33ba0506e1 -->
+# Runtime Stdio
 
-Questa pagina descrive lo scenario “Modalità stdio” e mantiene la struttura Runtime/Client comune del sito.
+La modalità stdio è destinata ai MCP client locali che avviano `local-shell-mcp` come child process e comunicano tramite input/output standard.
 
-## Panoramica
+Non è un deployment HTTP pubblico. ChatGPT web/app non può usarlo direttamente perché ChatGPT non può avviare un process sulla tua macchina.
 
-Runtime definisce come viene eseguito il processo server e quale workspace controlla. Client definisce come si collega ChatGPT o un altro client MCP. Docker, l’estensione VS Code, i binari autonomi, le installazioni Python/pipx/sorgente e stdio sono opzioni Runtime; il connettore ChatGPT, il client MCP HTTP generico e il client MCP stdio sono connessioni Client.
+## Quando usare stdio
 
-## Quando usarlo
+Usa stdio mode quando:
 
-- Usa questa pagina quando il percorso Runtime o Client scelto corrisponde al titolo.
-- Mantieni coerenti radice del workspace, base URL pubblica, MCP endpoint, modalità di autenticazione e strumenti disponibili sull’host.
-- Per ChatGPT web/app, esponi un MCP endpoint HTTPS che termini con `/mcp`.
-- Per client MCP locali, usa HTTP localhost o `local-shell-mcp --mode stdio` in base al supporto del client.
+- Il tuo MCP client supporta definizioni server basate su comando.
+- Il client e il workspace controllato si trovano sulla stessa macchina.
+- Non servono OAuth, HTTPS pubblico, reverse proxy o tunnel.
+- Vuoi che il client gestisca il server lifecycle.
 
-## Passaggi
+Non usare stdio mode quando:
 
-1. Scegli prima la pagina di installazione del Runtime.
-2. Avvia il Runtime e verifica `/healthz` quando usi la modalità HTTP.
-3. Poi scegli la pagina di connessione Client.
-4. Registra il MCP endpoint o il comando stdio nel Client.
-5. Chiama `environment_get` per verificare workspace e impostazioni effettive.
+- Il client è ChatGPT web/app.
+- Più remote client richiedono lo stesso server.
+- Servono download tokenizzati via HTTP.
+- Servono route di join dei remote worker servite via HTTP.
 
-```text
-Runtime: Docker / VS Code extension / binary / Python / stdio
-Client:  ChatGPT connector / generic HTTP MCP / generic stdio MCP
-Endpoint: https://your-host.example.com/mcp
+## Comando
+
+```bash
+LOCAL_SHELL_MCP_WORKSPACE_ROOT=/path/to/workspace local-shell-mcp --mode stdio
 ```
 
-## Verifica
+Una configurazione generica di MCP client contiene in genere:
 
-- `environment_get` conferma impostazioni Runtime e workspace.
-- `file_tree` conferma i file visibili.
-- `run_shell` conferma l’ambiente dei comandi.
+```json
+{
+  "mcpServers": {
+    "local-shell-mcp": {
+      "command": "local-shell-mcp",
+      "args": ["--mode", "stdio"],
+      "env": {
+        "LOCAL_SHELL_MCP_WORKSPACE_ROOT": "/path/to/workspace"
+      }
+    }
+  }
+}
+```
 
-## Note
+Adatta lo schema al tuo client. Alcuni client chiamano questa sezione `servers`, `tools`, `mcpServers` o `contextServers`.
 
-Preferisci passaggi piccoli e verificabili: ispezionare, modificare, controllare il diff, testare, scansionare e fare commit. Anche le attività grandi dovrebbero essere divise in chiamate di strumenti auditabili.
+## Differenze rispetto a HTTP mode
+
+| Area | Stdio mode | HTTP MCP mode |
+|---|---|---|
+| Transport | stdin/stdout | HTTP streamable MCP endpoint |
+| Endpoint | Nessuno | `/mcp` |
+| OAuth | Non necessario | Consigliato per uso pubblico |
+| Health endpoint | Nessuno | `/healthz`, `/readyz` |
+| Uso pubblico con ChatGPT | No | Sì, dietro HTTPS |
+| Server lifecycle | Il client avvia il process | Gestisci tu process/runtime |
+
+La tool surface usa altrimenti la stessa implementazione server-side, soggetta a configuration e supporto del client.
+
+## Note di sicurezza
+
+Stdio mode viene spesso eseguito direttamente sull’host con lo stesso utente del MCP client. Usa un workspace root ristretto ed evita accesso ampio al filesystem. Mantieni full-container mode disabilitato a meno che stdio stesso non venga eseguito in un container o VM usa e getta.

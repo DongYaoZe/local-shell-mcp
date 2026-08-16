@@ -1,38 +1,184 @@
-# Docker Compose
+<!-- i18n-source-sha256: 56d5f11100a1906c167afd36354f29742515a26289c62a03f044f3852ce2eaed -->
+# Runtime Docker Compose
 
-Cette page décrit le scénario « Docker Compose » et conserve la structure Runtime/Client commune du site.
+Docker Compose est le runtime recommandé pour la plupart des utilisateurs. Il donne au modèle un workspace Linux contrôlé, un toolchain reproductible, des credentials persistants, le support de browser automation et un chemin de mise à jour simple.
 
-## Vue d’ensemble
+C’est un choix de runtime. Il peut être connecté à ChatGPT, à un MCP client HTTP générique ou rester local pour les tests.
 
-Runtime définit la manière dont le processus serveur s’exécute et l’espace de travail qu’il contrôle. Client définit la manière dont ChatGPT ou un autre client MCP se connecte. Docker, l’extension VS Code, les binaires autonomes, les installations Python/pipx/source et stdio sont des choix de Runtime ; le connecteur ChatGPT, le client MCP HTTP générique et le client MCP stdio sont des connexions Client.
+## Ce que contient l’image Docker
 
-## Quand l’utiliser
+L’image est basée sur l’image Python Playwright et installe un toolchain de développement étendu. L’objectif est qu’un AI coding agent puisse travailler sur de nombreux repositories sans demander de reconstruire le runtime pour chaque projet.
 
-- Utilisez cette page lorsque le chemin Runtime ou Client choisi correspond à son titre.
-- Gardez cohérents la racine de l’espace de travail, la base URL publique, le MCP endpoint, le mode d’authentification et les outils disponibles sur l’hôte.
-- Pour ChatGPT web/app, exposez un MCP endpoint HTTPS se terminant par `/mcp`.
-- Pour les clients MCP locaux, utilisez HTTP localhost ou `local-shell-mcp --mode stdio` selon les capacités du client.
+Catégories incluses :
 
-## Étapes
+| Catégorie | Exemples |
+|---|---|
+| Shell et inspection | Bash, curl, wget, jq, ripgrep, tree, tmux, patch, file |
+| Git et credentials | Git, GitHub CLI, OpenSSH client, credential persistence volume |
+| C/C++ build | build-essential, clang, cmake, ninja, autoconf, automake, gdb, lldb |
+| Python | Python, pip, venv, pipx, package development dependencies |
+| JavaScript/TypeScript | Node.js, npm, yarn, pnpm, TypeScript, ts-node |
+| Autres langages | Go, Rust, Java, Ruby, PHP, Perl, Lua, R |
+| Browser automation | Playwright browsers and browser dependencies |
+| Outils documentaires | LibreOffice, Pandoc, Poppler utilities, OCR tooling |
 
-1. Choisissez d’abord la page d’installation du Runtime.
-2. Démarrez le Runtime et vérifiez `/healthz` lorsque le mode HTTP est utilisé.
-3. Choisissez ensuite la page de connexion Client.
-4. Enregistrez le MCP endpoint ou la commande stdio dans le Client.
-5. Appelez `environment_get` pour vérifier l’espace de travail et les paramètres effectifs.
+Le contenu exact de l’image est une couche de commodité, pas une API stable. Les dépendances propres au projet doivent rester dans le workspace ou les scripts de build du projet.
 
-```text
-Runtime: Docker / VS Code extension / binary / Python / stdio
-Client:  ChatGPT connector / generic HTTP MCP / generic stdio MCP
-Endpoint: https://your-host.example.com/mcp
+## Exécution locale de base
+
+```bash
+git clone https://github.com/fwerkor/local-shell-mcp.git
+cd local-shell-mcp
+cp .env.example .env
+mkdir -p workspaces/default
+docker compose up -d
+curl -i http://127.0.0.1:8765/healthz
 ```
 
-## Vérification
+Le fichier Compose par défaut lie le service à localhost :
 
-- `environment_get` confirme les paramètres du Runtime et l’espace de travail.
-- `file_tree` confirme les fichiers visibles.
-- `run_shell` confirme l’environnement de commande.
+```text
+127.0.0.1:8765 -> container:8765
+```
 
-## Notes
+Cela convient aux tests locaux et à un reverse proxy exécuté sur le même host.
 
-Privilégiez les étapes petites et vérifiables : inspecter, modifier, examiner le diff, tester, analyser et valider. Les tâches importantes doivent aussi être décomposées en appels d’outils auditables.
+## Layout du workspace
+
+Le runtime Compose par défaut monte :
+
+| Path ou volume host | Path container | Rôle |
+|---|---|---|
+| `./workspaces/default` | `/workspace` | Workspace contrôlé visible des tools |
+| `local-shell-mcp-credentials` volume | `/persist/credentials` | État persistant des credentials Git/GitHub/SSH/GPG |
+
+Utilisez un répertoire de workspace par trust boundary. Ne montez pas tout votre home directory simplement par commodité.
+
+## Réglages publics requis
+
+Pour ChatGPT ou un autre MCP client HTTP public, configurez `.env` :
+
+```env
+LOCAL_SHELL_MCP_PUBLIC_BASE_URL=https://your-public-host.example.com
+LOCAL_SHELL_MCP_AUTH_MODE=oauth
+LOCAL_SHELL_MCP_OAUTH_ADMIN_PIN=change-me-long-random-pin
+LOCAL_SHELL_MCP_OAUTH_JWT_SECRET=change-me-64-hex-random-secret
+```
+
+Générez un JWT secret avec une commande telle que :
+
+```bash
+openssl rand -hex 32
+```
+
+L’URL MCP publique est :
+
+```text
+https://your-public-host.example.com/mcp
+```
+
+## Cloudflare Tunnel sidecar
+
+Le fichier Compose inclut un service `cloudflared` optionnel derrière le profile `tunnel`. Il exécute le tunnel à côté du MCP server.
+
+Configurez `.env` :
+
+```env
+CLOUDFLARE_TUNNEL_TOKEN=<token from Cloudflare Tunnel>
+LOCAL_SHELL_MCP_PUBLIC_BASE_URL=https://your-public-host.example.com
+LOCAL_SHELL_MCP_AUTH_MODE=oauth
+LOCAL_SHELL_MCP_OAUTH_ADMIN_PIN=<strong pin>
+LOCAL_SHELL_MCP_OAUTH_JWT_SECRET=<strong random secret>
+```
+
+Démarrez les deux services :
+
+```bash
+docker compose --profile tunnel up -d
+```
+
+Dans Cloudflare Zero Trust, routez le public hostname vers :
+
+```text
+http://local-shell-mcp:8765
+```
+
+Il s’agit de Cloudflare Tunnel, pas de Cloudflare Access. `local-shell-mcp` continue de gérer son propre OAuth pour ChatGPT.
+Le service Compose fait confiance aux forwarded headers car son port publié est limité à localhost ; cela préserve l’adresse publique de l’appelant pour le rate limiting du OAuth PIN. Si vous exposez directement le port du container, remplacez `LOCAL_SHELL_MCP_FORWARDED_ALLOW_IPS=*` par les adresses explicites de vos reverse proxies de confiance.
+
+## Reverse proxy sans tunnel sidecar
+
+Si vous utilisez déjà Caddy, Nginx, Traefik ou Nginx Proxy Manager, gardez le service Compose normal et transférez HTTPS vers :
+
+```text
+http://127.0.0.1:8765
+```
+
+Le proxy doit transférer ces routes sans retirer les paths :
+
+| Route | Rôle |
+|---|---|
+| `/mcp` | MCP streamable HTTP endpoint |
+| `/healthz`, `/readyz` | Health checks |
+| `/.well-known/oauth-protected-resource` | Metadata de ressource OAuth |
+| `/.well-known/oauth-authorization-server` | Metadata du serveur d’autorisation OAuth |
+| `/oauth/register` | Enregistrement dynamique du client |
+| `/oauth/authorize` | Page d’autorisation navigateur |
+| `/oauth/token` | Échange de token |
+| `/downloads/<token>` | Téléchargements optionnels de fichiers générés |
+| `/join/<token>`, `/remote/*` | Bootstrap/polling optionnel du remote worker |
+
+Voir [network connectivity](../clients/connectivity.md) pour les exigences de comportement du proxy.
+
+## Mode full-container
+
+`LOCAL_SHELL_MCP_ALLOW_FULL_CONTAINER=false` garde les opérations filesystem limitées au workspace. C’est le default le plus sûr.
+
+Mettez-le à `true` uniquement lorsque le container est volontairement jetable et que le modèle doit opérer tout son filesystem. L’activation retire les restrictions built-in de command et path denylist.
+
+```env
+LOCAL_SHELL_MCP_ALLOW_FULL_CONTAINER=true
+```
+
+N’activez pas full-container mode sur un runtime lancé directement sur le host, comme VS Code extension ou un binary sur votre portable.
+
+## Credentials
+
+Le runtime Docker peut persister les credentials développeur courants dans un volume dédié. C’est utile pour le login GitHub CLI, Git HTTPS credential helpers, `.netrc`, SSH config et l’état GPG.
+
+Traitez le volume de credentials comme sensible. Préférez les deploy keys limitées au repository, tokens fine-grained ou credentials de courte durée. Ne placez pas de credentials personnels larges dans un workspace que le modèle peut lire librement.
+
+Le SSH-agent forwarding est possible en montant le socket de l’agent, mais cela étend la confiance du container à votre agent actif. Utilisez-le uniquement si vous comprenez l’exposition.
+
+## Mises à jour
+
+```bash
+docker compose pull
+docker compose up -d
+curl -i http://127.0.0.1:8765/healthz
+```
+
+Avec tunnel sidecar :
+
+```bash
+docker compose --profile tunnel pull
+docker compose --profile tunnel up -d
+curl -i http://127.0.0.1:8765/healthz
+```
+
+Après mise à jour, demandez d’abord au client un check read-only :
+
+```text
+Utilise local-shell-mcp. Appelle environment_get et exécute file_list sur la racine du workspace. Ne modifie aucun fichier.
+```
+
+## Dépannage
+
+| Symptôme | Vérifier |
+|---|---|
+| `/healthz` échoue localement | `docker compose ps`, `docker compose logs --tail=200 local-shell-mcp` |
+| ChatGPT ne découvre pas les tools | L’URL publique doit finir par `/mcp` ; `LOCAL_SHELL_MCP_PUBLIC_BASE_URL` ne doit pas contenir `/mcp` |
+| La page OAuth échoue | Admin PIN et JWT secret doivent être définis pour les deployments OAuth publics |
+| Les tools ne voient pas les fichiers | Confirmez que le bon répertoire host est monté sur `/workspace` |
+| Les browser tools échouent | Confirmez que l’image Playwright est à jour ; essayez `run_shell` pour le browser cible |
+| Git auth a disparu | Vérifiez le volume de credentials et que le container recréé utilise le même volume |

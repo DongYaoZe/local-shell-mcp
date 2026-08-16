@@ -1,38 +1,47 @@
+<!-- i18n-source-sha256: d758caead1c922385409aceebf498662f25f4cbf252a48d65b29d91f07e5a173 -->
 # Links de arquivos
 
-Esta página descreve o cenário “Links de arquivos” e mantém a estrutura Runtime/Client comum do site.
+`local-shell-mcp` pode expor arquivos do workspace controlado por meio de bearer URLs de alta entropia. Isso é útil quando a IA gera relatórios, arquivos compactados, PDFs, screenshots ou outros artifacts que precisam ser baixados ou exibidos no chat.
 
-## Visão geral
+## Quando usar links de arquivos
 
-Runtime define como o processo do servidor é executado e qual workspace ele controla. Client define como ChatGPT ou outro cliente MCP se conecta. Docker, extensão do VS Code, binários independentes, instalações por Python/pipx/código-fonte e stdio são opções de Runtime; conector ChatGPT, cliente MCP HTTP genérico e cliente MCP stdio são conexões Client.
+Use links de arquivos para:
 
-## Quando usar
+- PDFs ou relatórios gerados.
+- Screenshots e artifacts do navegador.
+- Saídas de build.
+- Logs grandes demais para colar.
+- Arquivos preparados para inspeção manual.
 
-- Use esta página quando o caminho de Runtime ou Client escolhido corresponder ao título.
-- Mantenha consistentes a raiz do workspace, a base URL pública, o MCP endpoint, o modo de autenticação e as ferramentas disponíveis no host.
-- Para ChatGPT web/app, exponha um MCP endpoint HTTPS terminado em `/mcp`.
-- Para clientes MCP locais, use HTTP localhost ou `local-shell-mcp --mode stdio` conforme o suporte do cliente.
+Não use links de arquivos para secrets, private keys, armazenamentos de credentials ou dados pessoais não relacionados.
 
-## Passos
+## Fluxo típico
 
-1. Escolha primeiro a página de instalação do Runtime.
-2. Inicie o Runtime e verifique `/healthz` quando usar o modo HTTP.
-3. Depois escolha a página de conexão do Client.
-4. Registre o MCP endpoint ou o comando stdio no Client.
-5. Chame `environment_get` para verificar o workspace e as configurações efetivas.
+1. Gere ou localize um arquivo em `/workspace`.
+2. Chame `link_create` com um TTL e limite opcional de downloads. Defina `inline=true` quando o arquivo deva renderizar diretamente no navegador ou como imagem Markdown; o padrão é `false`, que força download como attachment.
+3. Compartilhe a URL retornada.
+4. Revogue o link quando não for mais necessário.
 
-```text
-Runtime: Docker / VS Code extension / binary / Python / stdio
-Client:  ChatGPT connector / generic HTTP MCP / generic stdio MCP
-Endpoint: https://your-host.example.com/mcp
-```
+## Ferramentas relevantes
 
-## Verificação
+| Tool | Finalidade |
+|---|---|
+| `link_create` | Criar uma URL tokenizada para um arquivo do workspace. |
+| `link_list` | Mostrar links ativos. |
+| `link_revoke` | Desabilitar um link antes de expirar. |
 
-- `environment_get` confirma configurações do Runtime e workspace.
-- `file_tree` confirma arquivos visíveis.
-- `run_shell` confirma o ambiente de comandos.
+## Controles
 
-## Notas
+As opções de configuração incluem:
 
-Prefira etapas pequenas e verificáveis: inspecionar, editar, ver o diff, testar, escanear e fazer commit. Tarefas grandes também devem ser divididas em chamadas de ferramentas auditáveis.
+- `LOCAL_SHELL_MCP_FILE_DOWNLOAD_ENABLED`
+- `LOCAL_SHELL_MCP_FILE_DOWNLOAD_DEFAULT_TTL_S`
+- `LOCAL_SHELL_MCP_FILE_DOWNLOAD_MAX_TTL_S`
+- `LOCAL_SHELL_MCP_FILE_DOWNLOAD_DEFAULT_MAX_DOWNLOADS`
+- `LOCAL_SHELL_MCP_FILE_DOWNLOAD_MAX_FILE_BYTES`
+
+Use TTLs menores para artifacts sensíveis e defina maximum download count quando o link se destinar a um único destinatário.
+
+## Notas de segurança
+
+Links de arquivos são bearer URLs. Qualquer pessoa com a URL pode baixar o arquivo até ele expirar, atingir o download limit ou ser revogado. Trate-os como secrets temporários. Respostas inline incluem CSP sandbox e `X-Content-Type-Options: nosniff`, impedindo formatos ativos de acessar o LSM origin ou executar como conteúdo same-origin sem sandbox.

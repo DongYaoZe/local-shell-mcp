@@ -1,3 +1,4 @@
+<!-- i18n-source-sha256: d758caead1c922385409aceebf498662f25f4cbf252a48d65b29d91f07e5a173 -->
 # 文件鏈接
 
 `local-shell-mcp` 可以通過高熵 bearer URL 暴露受控工作區中的文件。當 AI 生成報告、壓縮包、PDF、截圖或其它需要從聊天中下載的產物時，這很有用。

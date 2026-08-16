@@ -1,38 +1,62 @@
-# عملاء MCP عامون
+<!-- i18n-source-sha256: 6e76d0746c53eeef3e770417742a44e122c6484afd0d91ddf6a4995387085c74 -->
+# MCP client عامة
 
-تشرح هذه الصفحة سيناريو “عملاء MCP عامون” وتحافظ على بنية Runtime/Client المشتركة في الموقع.
+يمكن استخدام `local-shell-mcp` من ChatGPT ومن MCP client أخرى. يقرر الـ client ما إذا كان سيتصل عبر HTTP أو سيشغّل الخادم عبر stdio.
 
-## نظرة عامة
+## MCP client عبر HTTP
 
-يحدد Runtime كيفية تشغيل عملية الخادم وأي مساحة عمل يتحكم بها. يحدد Client كيفية اتصال ChatGPT أو أي عميل MCP آخر. Docker وإضافة VS Code والملفات التنفيذية المستقلة وتثبيتات Python/pipx/المصدر و stdio هي خيارات Runtime؛ أما موصل ChatGPT وعميل MCP HTTP العام وعميل MCP عبر stdio فهي اتصالات Client.
+استخدم HTTP mode عندما يكون الخادم قيد التشغيل بالفعل:
 
-## متى تستخدمه
-
-- استخدم هذه الصفحة عندما يطابق مسار Runtime أو Client المختار عنوان الصفحة.
-- حافظ على اتساق جذر مساحة العمل و base URL العام و MCP endpoint ونمط المصادقة والأدوات المتاحة على المضيف.
-- بالنسبة إلى ChatGPT web/app، انشر MCP endpoint عبر HTTPS ينتهي بـ `/mcp`.
-- بالنسبة إلى عملاء MCP المحليين، استخدم HTTP localhost أو `local-shell-mcp --mode stdio` حسب دعم العميل.
-
-## الخطوات
-
-1. اختر صفحة تثبيت Runtime أولاً.
-2. شغّل Runtime وتحقق من `/healthz` عند استخدام وضع HTTP.
-3. اختر بعد ذلك صفحة اتصال Client.
-4. سجّل MCP endpoint أو أمر stdio في Client.
-5. استدعِ `environment_get` للتحقق من مساحة العمل والإعدادات الفعلية.
-
-```text
-Runtime: Docker / VS Code extension / binary / Python / stdio
-Client:  ChatGPT connector / generic HTTP MCP / generic stdio MCP
-Endpoint: https://your-host.example.com/mcp
+```bash
+LOCAL_SHELL_MCP_WORKSPACE_ROOT=/path/to/workspace local-shell-mcp --mode mcp
 ```
 
-## التحقق
+Endpoint محلي:
 
-- `environment_get` يؤكد إعدادات Runtime ومساحة العمل.
-- `file_tree` يؤكد الملفات المرئية.
-- `run_shell` يؤكد بيئة الأوامر.
+```text
+http://127.0.0.1:8765/mcp
+```
 
-## ملاحظات
+Endpoint على الشبكة:
 
-فضّل الخطوات الصغيرة القابلة للتحقق: الفحص، التعديل، مراجعة diff، الاختبار، الفحص الأمني، ثم commit. يجب أيضاً تقسيم المهام الكبيرة إلى استدعاءات أدوات قابلة للتدقيق.
+```text
+https://your-public-host.example.com/mcp
+```
+
+استخدم OAuth لأي endpoint يمكن الوصول إليه خارج localhost الموثوق.
+
+## MCP client عبر stdio
+
+استخدم stdio mode عندما يشغّل الـ client عملية الخادم بنفسه:
+
+```bash
+LOCAL_SHELL_MCP_WORKSPACE_ROOT=/path/to/workspace local-shell-mcp --mode stdio
+```
+
+شكل نموذجي لإعداد client:
+
+```json
+{
+  "mcpServers": {
+    "local-shell-mcp": {
+      "command": "local-shell-mcp",
+      "args": ["--mode", "stdio"],
+      "env": {
+        "LOCAL_SHELL_MCP_WORKSPACE_ROOT": "/path/to/workspace"
+      }
+    }
+  }
+}
+```
+
+تختلف schemas بين clients. يسمي بعضها هذا القسم `mcpServers` بينما يستخدم بعضها اسماً آخر.
+
+## أول فحص آمن
+
+ابدأ مع client جديد الاتصال بما يلي:
+
+```text
+Call environment_get, then file_tree on the workspace root. Do not modify files yet.
+```
+
+ثم نفّذ مهمة محدودة بقواعد واضحة للتحرير والاختبارات وGit.

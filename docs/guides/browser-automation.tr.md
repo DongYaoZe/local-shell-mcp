@@ -1,38 +1,23 @@
+<!-- i18n-source-sha256: 91695da5acbb82a8550b150249a9b97f17470140a72b27233e2470a93305e7fb -->
 # Tarayıcı otomasyonu
 
-Bu sayfa “Tarayıcı otomasyonu” senaryosunu açıklar ve sitenin ortak Runtime/Client yapısını korur.
+Tarayıcı araçları sayfaları incelemek, kanıt toplamak ve tekrarlanabilir tarayıcı iş akışları yürütmek için Playwright kullanır. Genel tool surface kasıtlı olarak küçüktür.
 
-## Genel bakış
+## Araçlar
 
-Runtime, sunucu sürecinin nasıl çalıştığını ve hangi workspace’i kontrol ettiğini belirler. Client, ChatGPT veya başka bir MCP istemcisinin nasıl bağlandığını belirler. Docker, VS Code eklentisi, bağımsız ikililer, Python/pipx/kaynak kurulumları ve stdio Runtime seçenekleridir; ChatGPT bağlayıcısı, genel HTTP MCP istemcisi ve stdio MCP istemcisi Client bağlantılarıdır.
+| Tool | Amaç |
+|---|---|
+| `browser_session` | Kalıcı tarayıcı oturumlarını başlatmak, listelemek, kapatmak veya temizlemek; isteğe bağlı olarak profile ya da storage state’i yeniden kullanmak. |
+| `browser_snapshot` | Sınırlı sayfa metnini, page/network hatalarını ve `e1` gibi kısa ref’lere sahip etkileşimli öğeleri okumak; isteğe bağlı screenshot almak. |
+| `browser_act` | Snapshot ref veya CSS selector kullanarak yapılandırılmış navigation, click, fill, select, key, wait ve çok sayfalı işlemler yürütmek. |
+| `browser_run_script` | Üst düzey action set yeterli olmadığında tam bir Python Playwright script çalıştırmak. |
 
-## Ne zaman kullanılır
+Tüm tarayıcı araçları isteğe bağlı `machine` kabul eder. Tarayıcı bağımlılıkları seçilen controller veya worker üzerinde önceden kurulu olmalıdır; kurulum `python -m playwright install chromium` gibi normal shell komutlarıyla yapılır.
 
-- Seçilen Runtime veya Client yolu bu başlıkla eşleştiğinde bu sayfayı kullanın.
-- Workspace kökü, public base URL, MCP endpoint, kimlik doğrulama modu ve kullanılabilir host araçlarını tutarlı tutun.
-- ChatGPT web/app için `/mcp` ile biten bir HTTPS MCP endpoint yayımlayın.
-- Yerel MCP istemcileri için istemci desteğine göre HTTP localhost veya `local-shell-mcp --mode stdio` kullanın.
+## Yaygın akışlar
 
-## Adımlar
+Etkileşimli çalışma için `browser_session(action="start", url=...)` çağırın, ardından `browser_snapshot` kullanın. Snapshot `e1` ve `e2` gibi kısa referanslar döndürür; bunları doğrudan `browser_act` içine verin, örneğin `{"action": "click", "target": "e1"}` veya `{"action": "fill", "target": "e2", "value": "..."}`. Element ref’leri kalıcı selector değil sayfa durumu referansları olduğundan navigation sonrasında yeniden snapshot alın.
 
-1. Önce Runtime kurulum sayfasını seçin.
-2. Runtime’ı başlatın ve HTTP modu kullanılıyorsa `/healthz` değerini doğrulayın.
-3. Sonra Client bağlantı sayfasını seçin.
-4. Client içinde MCP endpoint veya stdio komutunu kaydedin.
-5. Etkin workspace ve ayarları doğrulamak için `environment_get` çağırın.
+Normal inceleme ve screenshots için `browser_session` + `browser_snapshot` tercih edin; snapshot sınırlı visible text döndürebilir ve screenshot kaydedebilir. JavaScript evaluation, özel capture/PDF logic veya `browser_act` ile ifade edilmeyen etkileşimler için `browser_run_script` kullanın.
 
-```text
-Runtime: Docker / VS Code extension / binary / Python / stdio
-Client:  ChatGPT connector / generic HTTP MCP / generic stdio MCP
-Endpoint: https://your-host.example.com/mcp
-```
-
-## Doğrulama
-
-- `environment_get` Runtime ayarlarını ve workspace’i doğrular.
-- `file_tree` görünen dosyaları doğrular.
-- `run_shell` komut ortamını doğrular.
-
-## Notlar
-
-Küçük ve doğrulanabilir adımları tercih edin: incele, düzenle, diff kontrol et, test et, tara ve commit yap. Büyük görevler de denetlenebilir araç çağrılarına bölünmelidir.
+Script’leri sınırlı tutun, açık timeout’lar belirleyin, artifacts’ı workspace altında saklayın ve ortam göreve ayrılmadıkça credential girmekten kaçının.

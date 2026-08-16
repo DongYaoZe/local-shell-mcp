@@ -1,38 +1,105 @@
-# Python / pipx / źródła
+<!-- i18n-source-sha256: 19347ba1d8d3f26f227506397f4093281319e6a2a59833ced1da286c1d46f21a -->
+# Runtime Python, pipx i source
 
-Ta strona opisuje scenariusz „Python / pipx / źródła” i zachowuje wspólną strukturę Runtime/Client dokumentacji.
+Runtime Python są przydatne do programowania, debugowania i środowisk, w których zarządzanie pakietami Python jest łatwiejsze niż Docker. Uruchamiają ten sam server co runtime Docker i binary.
 
-## Przegląd
+Ta strona obejmuje trzy powiązane przypadki:
 
-Runtime określa, jak działa proces serwera i którym workspace steruje. Client określa, jak łączy się ChatGPT lub inny klient MCP. Docker, rozszerzenie VS Code, samodzielne pliki binarne, instalacje Python/pipx/ze źródeł i stdio to opcje Runtime; łącznik ChatGPT, ogólny klient HTTP MCP i klient MCP stdio to połączenia Client.
+- `pipx install local-shell-mcp`: instalacja executable na poziomie użytkownika.
+- `pip install local-shell-mcp`: instalacja w istniejącym virtual environment.
+- Editable source checkout: rozwijanie lub debugowanie samego projektu.
 
-## Kiedy używać
+## Instalacja pipx
 
-- Użyj tej strony, gdy wybrana ścieżka Runtime lub Client odpowiada tytułowi.
-- Zachowaj spójność katalogu głównego workspace, publicznego base URL, MCP endpoint, trybu uwierzytelniania i dostępnych narzędzi hosta.
-- Dla ChatGPT web/app wystaw HTTPS MCP endpoint kończący się na `/mcp`.
-- Dla lokalnych klientów MCP użyj HTTP localhost albo `local-shell-mcp --mode stdio` zależnie od obsługi klienta.
+`pipx` jest najczystszą instalacją opartą na Python dla zwykłych użytkowników, ponieważ daje command własny virtual environment, jednocześnie udostępniając executable w `PATH`.
 
-## Kroki
-
-1. Najpierw wybierz stronę instalacji Runtime.
-2. Uruchom Runtime i sprawdź `/healthz`, gdy używany jest tryb HTTP.
-3. Następnie wybierz stronę połączenia Client.
-4. Zarejestruj MCP endpoint albo polecenie stdio w Client.
-5. Wywołaj `environment_get`, aby sprawdzić rzeczywisty workspace i ustawienia.
-
-```text
-Runtime: Docker / VS Code extension / binary / Python / stdio
-Client:  ChatGPT connector / generic HTTP MCP / generic stdio MCP
-Endpoint: https://your-host.example.com/mcp
+```bash
+pipx install local-shell-mcp
+local-shell-mcp --help
 ```
 
-## Weryfikacja
+Uruchom lokalny HTTP MCP server:
 
-- `environment_get` potwierdza ustawienia Runtime i workspace.
-- `file_tree` potwierdza widoczne pliki.
-- `run_shell` potwierdza środowisko poleceń.
+```bash
+mkdir -p ~/local-shell-mcp-workspace
+export LOCAL_SHELL_MCP_WORKSPACE_ROOT=~/local-shell-mcp-workspace
+local-shell-mcp --mode mcp
+```
 
-## Uwagi
+Sprawdź stan:
 
-Preferuj małe, weryfikowalne kroki: inspekcja, edycja, diff, test, skanowanie i commit. Duże zadania również należy dzielić na audytowalne wywołania narzędzi.
+```bash
+curl -i http://127.0.0.1:8765/healthz
+```
+
+## Instalacja w virtual environment
+
+Użyj, jeśli już samodzielnie zarządzasz środowiskami Python:
+
+```bash
+python -m venv .venv
+. .venv/bin/activate
+pip install --upgrade pip
+pip install local-shell-mcp
+local-shell-mcp --mode mcp
+```
+
+Process używa narzędzi zainstalowanych na host. Pakiet Python nie instaluje za Ciebie compilerów, Git, browser system dependencies ani project dependencies.
+
+## Editable source checkout
+
+Do rozwoju projektu:
+
+```bash
+git clone https://github.com/fwerkor/local-shell-mcp.git
+cd local-shell-mcp
+python -m venv .venv
+. .venv/bin/activate
+pip install --upgrade pip
+pip install -e '.[dev,docs]'
+LOCAL_SHELL_MCP_WORKSPACE_ROOT=/tmp/local-shell-mcp-workspace local-shell-mcp --mode mcp
+```
+
+Uruchom kontrole:
+
+```bash
+ruff check .
+pytest -q
+mkdocs build --strict
+```
+
+## Konfiguracja przeglądarki
+
+Pakiet Python zależy od Playwright, ale browser binaries mogą nadal wymagać instalacji na host:
+
+```bash
+python -m playwright install chromium
+```
+
+Niektóre hosty Linux wymagają dodatkowych browser dependencies. Docker omija większość tego, ponieważ image bazuje na Playwright base image.
+
+## Publiczne użycie HTTP MCP
+
+Dla ChatGPT lub innego public HTTP MCP client skonfiguruj te same ustawienia public-origin i OAuth co w innych runtime HTTP, a następnie expose local port przez reverse proxy lub tunnel.
+
+Publiczny MCP endpoint:
+
+```text
+https://your-public-host.example.com/mcp
+```
+
+## Tryby deweloperskie
+
+| Mode | Command | Zastosowanie |
+|---|---|---|
+| MCP HTTP | `local-shell-mcp --mode mcp` | Pełne MCP client przez HTTP, w tym ChatGPT za HTTPS |
+| REST-style HTTP | `local-shell-mcp --mode http` | Endpointy diagnostyczne lub zgodności, nie główna ścieżka ChatGPT |
+| stdio | `local-shell-mcp --mode stdio` | Lokalne MCP client uruchamiające process |
+
+`mode=both` jest zarezerwowany i obecnie nie powinien być używany jako mode pojedynczego process.
+
+## Bezpieczeństwo host runtime
+
+Instalacje Python działają jako host user, chyba że umieścisz je w VM/container. Ogranicz workspace, pozostaw full-container mode wyłączony i nie kieruj workspace na home directory.
+
+Używaj Docker Compose dla niezaufanych repository, zadań intensywnie używających package manager lub workflow, w których resetability jest ważniejsze niż integracja z host.

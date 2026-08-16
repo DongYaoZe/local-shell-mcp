@@ -1,38 +1,133 @@
-# स्वतंत्र बाइनरी
+<!-- i18n-source-sha256: 42daa6d3dd931530a1d2e86d6a36fc6424b7494ff078626157c158b38b1f4b1e -->
+# Standalone binary runtime
 
-यह पृष्ठ “स्वतंत्र बाइनरी” परिदृश्य समझाता है और साइट की समान Runtime/Client संरचना का पालन करता है।
+Release binaries `local-shell-mcp` को Docker और Python environment के बिना चलाती हैं। इस runtime का उपयोग तब करें जब Docker उपलब्ध न हो या dedicated VM, container host, lab server या restricted user account पहले से safety boundary देता हो।
 
-## सारांश
+यह runtime choice है। ChatGPT access अलग से HTTPS `/mcp` endpoint के माध्यम से configure होता है।
 
-Runtime यह तय करता है कि सर्वर प्रक्रिया कैसे चलेगी और कौन-सा workspace नियंत्रित होगा। Client यह तय करता है कि ChatGPT या कोई अन्य MCP क्लाइंट कैसे जुड़ेगा। Docker, VS Code एक्सटेंशन, स्वतंत्र बाइनरी, Python/pipx/source स्थापना और stdio Runtime विकल्प हैं; ChatGPT कनेक्टर, सामान्य HTTP MCP क्लाइंट और stdio MCP क्लाइंट Client कनेक्शन हैं।
+## Release artifacts
 
-## कब उपयोग करें
+GitHub Releases सामान्य platforms के लिए self-contained executables build करता है:
 
-- जब चुना गया Runtime या Client पथ इस शीर्षक से मेल खाए, तब इस पृष्ठ का उपयोग करें।
-- workspace root, public base URL, MCP endpoint, authentication mode और host पर उपलब्ध टूल को संगत रखें।
-- ChatGPT web/app के लिए `/mcp` पर समाप्त होने वाला HTTPS MCP endpoint उपलब्ध कराएँ।
-- स्थानीय MCP क्लाइंट के लिए क्लाइंट समर्थन के अनुसार HTTP localhost या `local-shell-mcp --mode stdio` का उपयोग करें।
+| Platform artifact | Archive |
+|---|---|
+| `local-shell-mcp-linux-x86_64` | `.tar.gz` |
+| `local-shell-mcp-linux-aarch64` | `.tar.gz` |
+| `local-shell-mcp-macos-x86_64` | `.tar.gz` |
+| `local-shell-mcp-macos-aarch64` | `.tar.gz` |
+| `local-shell-mcp-windows-x86_64` | `.zip` |
 
-## चरण
+हर archive में executable, README, license और छोटा quickstart file होता है।
 
-1. पहले Runtime स्थापना पृष्ठ चुनें।
-2. Runtime शुरू करें और HTTP मोड में `/healthz` जाँचें।
-3. फिर Client कनेक्शन पृष्ठ चुनें।
-4. Client में MCP endpoint या stdio command पंजीकृत करें।
-5. वास्तविक workspace और settings की जाँच के लिए `environment_get` कॉल करें।
+## Install
 
-```text
-Runtime: Docker / VS Code extension / binary / Python / stdio
-Client:  ChatGPT connector / generic HTTP MCP / generic stdio MCP
-Endpoint: https://your-host.example.com/mcp
+1. GitHub Releases से अपने platform का archive download करें।
+2. उसे extract करें।
+3. Executable को `PATH` पर रखें या उसका absolute path लिख लें।
+4. `local-shell-mcp --help` चलाकर binary start होने की पुष्टि करें।
+
+Linux और macOS को सामान्यतः executable bit चाहिए:
+
+```bash
+chmod +x local-shell-mcp
+./local-shell-mcp --help
 ```
 
-## सत्यापन
+Windows users PowerShell से `local-shell-mcp.exe` चलाएँ या containing directory को `PATH` में configure करें।
 
-- `environment_get` Runtime settings और workspace की पुष्टि करता है।
-- `file_tree` दिखाई देने वाली फ़ाइलों की पुष्टि करता है।
-- `run_shell` command environment की पुष्टि करता है।
+## Minimal local run
 
-## टिप्पणियाँ
+```bash
+mkdir -p ~/local-shell-mcp-workspace
+export LOCAL_SHELL_MCP_WORKSPACE_ROOT=~/local-shell-mcp-workspace
+local-shell-mcp --mode mcp
+```
 
-छोटे और सत्यापित किए जा सकने वाले चरणों को प्राथमिकता दें: निरीक्षण, संपादन, diff, test, scan और commit। बड़े कार्यों को भी audit योग्य tool calls में बाँटें।
+दूसरे terminal में:
+
+```bash
+curl -i http://127.0.0.1:8765/healthz
+```
+
+## Public HTTP MCP run
+
+ChatGPT या public HTTP MCP client के लिए ये configuration categories सेट करें:
+
+| Setting | Purpose |
+|---|---|
+| `LOCAL_SHELL_MCP_WORKSPACE_ROOT` | Tools द्वारा controlled directory |
+| `LOCAL_SHELL_MCP_HOST` and `LOCAL_SHELL_MCP_PORT` | Local bind address और port |
+| `LOCAL_SHELL_MCP_PUBLIC_BASE_URL` | `/mcp` के बिना public HTTPS origin |
+| `LOCAL_SHELL_MCP_AUTH_MODE` | Public deployments में `oauth` उपयोग करें |
+| OAuth PIN and JWT secret settings | Public OAuth authorization के लिए आवश्यक |
+
+Local HTTP port को reverse proxy या tunnel से expose करें। Public endpoint:
+
+```text
+https://your-public-host.example.com/mcp
+```
+
+## YAML config
+
+YAML config non-secret runtime defaults रख सकता है:
+
+```yaml
+host: 127.0.0.1
+port: 8765
+mode: mcp
+workspace_root: /srv/local-shell-mcp/workspace
+auth_mode: oauth
+public_base_url: https://your-public-host.example.com
+```
+
+Run:
+
+```bash
+local-shell-mcp --config /path/to/config.yaml
+```
+
+`LOCAL_SHELL_MCP_` prefix वाले environment variables YAML values override करते हैं।
+
+## Host toolchain responsibility
+
+Binary Python application package करता है, हर developer tool नहीं। MCP tools host पर available programs call करते हैं।
+
+अपनी tasks के लिए आवश्यक packages install करें:
+
+| Capability | Host packages to consider |
+|---|---|
+| Search and shell ergonomics | `ripgrep`, `tree`, `jq`, `curl`, `wget`; Linux releases में static tmux helper पहले से शामिल है |
+| Git workflows | `git`, `gh`, OpenSSH client, credential helpers |
+| Python projects | Python, pip, venv, project-specific compilers and headers |
+| Node projects | Node.js, npm, pnpm, yarn |
+| Rust/Go/Java/C++ | Cargo/rustc, Go, JDK, Maven/Gradle, compilers, CMake, Ninja |
+| Browser automation | Playwright browser binaries and OS dependencies |
+| Document conversion | LibreOffice, Pandoc, Poppler utilities |
+
+यदि आप यह host toolchain maintain नहीं करना चाहते तो Docker Compose उपयोग करें।
+
+## Long-running service
+
+Persistent public deployment के लिए binary को OS process supervisor के नीचे चलाएँ। ये practices रखें:
+
+- Dedicated low-privilege OS account उपयोग करें।
+- Dedicated workspace directory उपयोग करें।
+- Sensitive values को world-readable files से बाहर रखें।
+- Failure पर automatically restart करें।
+- हर restart के बाद `/healthz` check करें।
+- Troubleshooting के लिए logs उपलब्ध रखें।
+
+## Updates
+
+1. अपने platform का नया release archive download करें।
+2. चाहें तो checksums verify करें।
+3. Executable replace करें।
+4. Process manager restart करें।
+5. `/healthz` check करें।
+6. काम जारी रखने से पहले client से `environment_get` चलवाएँ।
+
+## Safety notes
+
+Binary अपने operating-system user के privileges से चलता है। Public deployments के लिए dedicated low-privilege user, dedicated workspace और जहाँ संभव हो VM/container boundary उपयोग करें।
+
+अपने personal host पर सीधे चल रहे binary के लिए `LOCAL_SHELL_MCP_ALLOW_FULL_CONTAINER=true` सेट न करें। यह setting disposable containers या VMs के लिए है।

@@ -1,38 +1,72 @@
+<!-- i18n-source-sha256: 3986da6ff877609189b0d88d363aff1f5f45445f0cfe5ffa608a31929078542c -->
 # Kết nối mạng
 
-Trang này mô tả kịch bản “Kết nối mạng” và giữ cấu trúc Runtime/Client chung của trang tài liệu.
+MCP client HTTP ở ngoài máy cần một HTTPS origin có thể truy cập. Trang này nói về định tuyến mạng, không phải việc chọn runtime.
 
-## Tổng quan
-
-Runtime xác định tiến trình server chạy như thế nào và điều khiển workspace nào. Client xác định ChatGPT hoặc client MCP khác kết nối như thế nào. Docker, tiện ích VS Code, tệp nhị phân độc lập, cài đặt Python/pipx/mã nguồn và stdio là lựa chọn Runtime; trình kết nối ChatGPT, client MCP HTTP chung và client MCP stdio là kết nối Client.
-
-## Khi nào dùng
-
-- Dùng trang này khi đường dẫn Runtime hoặc Client đã chọn khớp với tiêu đề.
-- Giữ nhất quán workspace root, public base URL, MCP endpoint, chế độ xác thực và các công cụ host khả dụng.
-- Với ChatGPT web/app, hãy công bố MCP endpoint HTTPS kết thúc bằng `/mcp`.
-- Với client MCP cục bộ, dùng HTTP localhost hoặc `local-shell-mcp --mode stdio` tùy khả năng hỗ trợ của client.
-
-## Các bước
-
-1. Trước tiên chọn trang cài đặt Runtime.
-2. Khởi động Runtime và kiểm tra `/healthz` khi dùng chế độ HTTP.
-3. Sau đó chọn trang kết nối Client.
-4. Đăng ký MCP endpoint hoặc lệnh stdio trong Client.
-5. Gọi `environment_get` để kiểm tra workspace và cấu hình thực tế.
+client endpoint thường kết thúc bằng `/mcp`:
 
 ```text
-Runtime: Docker / VS Code extension / binary / Python / stdio
-Client:  ChatGPT connector / generic HTTP MCP / generic stdio MCP
-Endpoint: https://your-host.example.com/mcp
+https://your-public-host.example.com/mcp
 ```
 
-## Xác minh
+Thiết lập public base URL của máy chủ chỉ là origin:
 
-- `environment_get` xác nhận cấu hình Runtime và workspace.
-- `file_tree` xác nhận các tệp nhìn thấy được.
-- `run_shell` xác nhận môi trường lệnh.
+```env
+LOCAL_SHELL_MCP_PUBLIC_BASE_URL=https://your-public-host.example.com
+```
 
-## Ghi chú
+Không đưa `/mcp` vào base URL này.
 
-Ưu tiên các bước nhỏ và có thể xác minh: kiểm tra, chỉnh sửa, diff, test, scan và commit. Tác vụ lớn cũng nên được chia thành các lời gọi công cụ có thể audit.
+## Các lựa chọn kết nối
+
+| Lựa chọn | Khi nào dùng |
+|---|---|
+| Compose tunnel sidecar | Docker Compose với profile `tunnel` tích hợp |
+| Tunnel bên ngoài | Bất kỳ runtime nào cần truy cập từ ngoài mạng cục bộ |
+| Caddy | TLS tự động đơn giản |
+| Nginx hoặc Nginx Proxy Manager | Hạ tầng Nginx hiện có |
+| Traefik | Định tuyến container-native hiện có |
+
+## Đường dẫn
+
+Chuyển tiếp toàn bộ origin tới máy chủ đang chạy. Các đường dẫn quan trọng gồm:
+
+| Đường dẫn | Mục đích |
+|---|---|
+| `/mcp` | MCP Streamable HTTP endpoint |
+| `/healthz`, `/readyz` | Kiểm tra sức khỏe |
+| `/.well-known/...` | Metadata khám phá client |
+| `/oauth/...` | Luồng ủy quyền client |
+| `/downloads/...` | Liên kết tệp được tạo tùy chọn |
+| `/join/...`, `/remote/...` | Luồng remote-worker tùy chọn |
+
+## Hành vi proxy
+
+Proxy cần giữ nguyên đường dẫn, chuyển tiếp request body, hỗ trợ response dài và tránh timeout quá ngắn.
+
+## Kiểm tra
+
+```bash
+curl -i http://127.0.0.1:8765/healthz
+curl -i https://your-public-host.example.com/healthz
+```
+
+## Lỗi thường gặp
+
+| Lỗi | Cách sửa |
+|---|---|
+| Dùng `https://host` thay vì `https://host/mcp` trong ChatGPT | Chỉ thêm `/mcp` vào client endpoint |
+| Đặt `LOCAL_SHELL_MCP_PUBLIC_BASE_URL=https://host/mcp` | Chỉ đặt origin |
+| Chỉ route `/mcp` | Route toàn bộ origin để discovery và ủy quyền cũng hoạt động |
+| Chạy host runtime với workspace quá rộng | Dùng workspace hẹp hoặc Docker |
+
+## Kết hợp gợi ý
+
+| Runtime | Kiểu mạng |
+|---|---|
+| Docker Compose trên server | Reverse proxy hiện có hoặc Compose tunnel profile |
+| Docker Compose trên máy gia đình | Outbound tunnel |
+| VS Code extension trên laptop | Tunnel tạm thời cho phiên |
+| Binary trên VM | Reverse proxy trên VM hoặc biên mạng |
+| Server dev Python/source | Thường chỉ localhost |
+| Stdio mode | Không có đường HTTP; dùng MCP client cục bộ |

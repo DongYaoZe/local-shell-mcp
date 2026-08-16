@@ -1,3 +1,4 @@
+<!-- i18n-source-sha256: f0abfd8b2a3118c630bf6693921a7e5f95ad61e089bfa6645a583467a0b9832e -->
 # Questions fréquentes
 
 Cette page regroupe des problèmes récurrents de Client et de proxy inverse qui peuvent ressembler à des pannes LSM alors que le serveur fonctionne correctement.

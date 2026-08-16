@@ -1,38 +1,55 @@
+<!-- i18n-source-sha256: 4aec137923c38de0ed4a1b760b5dbd6ce99090d508ce3fe838d35ad44b4ba4f1 -->
 # Denetim günlüğü
 
-Bu sayfa “Denetim günlüğü” senaryosunu açıklar ve sitenin ortak Runtime/Client yapısını korur.
+`local-shell-mcp`, bağlı bir client’ın ne yaptığını yeniden oluşturmayı kolaylaştırmak için yapılandırılmış denetim kayıtları yazar.
 
-## Genel bakış
-
-Runtime, sunucu sürecinin nasıl çalıştığını ve hangi workspace’i kontrol ettiğini belirler. Client, ChatGPT veya başka bir MCP istemcisinin nasıl bağlandığını belirler. Docker, VS Code eklentisi, bağımsız ikililer, Python/pipx/kaynak kurulumları ve stdio Runtime seçenekleridir; ChatGPT bağlayıcısı, genel HTTP MCP istemcisi ve stdio MCP istemcisi Client bağlantılarıdır.
-
-## Ne zaman kullanılır
-
-- Seçilen Runtime veya Client yolu bu başlıkla eşleştiğinde bu sayfayı kullanın.
-- Workspace kökü, public base URL, MCP endpoint, kimlik doğrulama modu ve kullanılabilir host araçlarını tutarlı tutun.
-- ChatGPT web/app için `/mcp` ile biten bir HTTPS MCP endpoint yayımlayın.
-- Yerel MCP istemcileri için istemci desteğine göre HTTP localhost veya `local-shell-mcp --mode stdio` kullanın.
-
-## Adımlar
-
-1. Önce Runtime kurulum sayfasını seçin.
-2. Runtime’ı başlatın ve HTTP modu kullanılıyorsa `/healthz` değerini doğrulayın.
-3. Sonra Client bağlantı sayfasını seçin.
-4. Client içinde MCP endpoint veya stdio komutunu kaydedin.
-5. Etkin workspace ve ayarları doğrulamak için `environment_get` çağırın.
+Varsayılan yol:
 
 ```text
-Runtime: Docker / VS Code extension / binary / Python / stdio
-Client:  ChatGPT connector / generic HTTP MCP / generic stdio MCP
-Endpoint: https://your-host.example.com/mcp
+/workspace/.local-shell-mcp/audit.jsonl
 ```
 
-## Doğrulama
+## Kaydedilenler
 
-- `environment_get` Runtime ayarlarını ve workspace’i doğrular.
-- `file_tree` görünen dosyaları doğrular.
-- `run_shell` komut ortamını doğrular.
+Denetim kayıtları şunlar gibi olayları kapsar:
 
-## Notlar
+- Tool call başlangıcı/bitişi.
+- Komut yürütme meta verileri.
+- Timeout’lar ve işlenmiş hatalar.
+- Remote worker kaydı ve job etkinliği.
+- File link oluşturma ve iptal.
+- Uygun olduğunda kimlik doğrulamayla ilgili olaylar.
 
-Küçük ve doğrulanabilir adımları tercih edin: incele, düzenle, diff kontrol et, test et, tara ve commit yap. Büyük görevler de denetlenebilir araç çağrılarına bölünmelidir.
+Sunucunun tanımlayabildiği hassas argümanlar maskelenir.
+
+## Günlüğü okuma
+
+MCP aracını kullanın:
+
+```text
+audit_tail
+```
+
+Veya doğrudan inceleyin:
+
+```bash
+tail -n 100 /workspace/.local-shell-mcp/audit.jsonl
+```
+
+## Operasyonel kullanım
+
+Denetim günlükleri özellikle şunlar için yararlıdır:
+
+- Dosyaları değiştiren komutları incelemek.
+- Remote worker kullanılıp kullanılmadığını kontrol etmek.
+- Beklenmedik hataları ayıklamak.
+- File link’lerin yanlışlıkla açığa çıkmasını tespit etmek.
+- Genel deployment hatasından sonra incident response’u desteklemek.
+
+## Saklama
+
+Günlük `LOCAL_SHELL_MCP_MAX_AUDIT_LOG_BYTES` ile sınırlandırılır. Uzun süre saklama gerekiyorsa rotate edin veya dışarı export edin.
+
+## Sınırlamalar
+
+Denetim günlükleri sandbox değildir. İzlenebilirliğe yardımcı olur ancak bağlı modelin yapılandırılmış yetkisi içinde işlem yapmasını engellemez.

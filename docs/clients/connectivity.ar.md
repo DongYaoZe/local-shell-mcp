@@ -1,38 +1,72 @@
-# اتصال الشبكة
+<!-- i18n-source-sha256: 3986da6ff877609189b0d88d363aff1f5f45445f0cfe5ffa608a31929078542c -->
+# الاتصال بالشبكة
 
-تشرح هذه الصفحة سيناريو “اتصال الشبكة” وتحافظ على بنية Runtime/Client المشتركة في الموقع.
+تحتاج MCP client عبر HTTP الموجودة خارج الجهاز إلى HTTPS origin يمكن الوصول إليه. تتناول هذه الصفحة توجيه الشبكة، وليس اختيار runtime.
 
-## نظرة عامة
-
-يحدد Runtime كيفية تشغيل عملية الخادم وأي مساحة عمل يتحكم بها. يحدد Client كيفية اتصال ChatGPT أو أي عميل MCP آخر. Docker وإضافة VS Code والملفات التنفيذية المستقلة وتثبيتات Python/pipx/المصدر و stdio هي خيارات Runtime؛ أما موصل ChatGPT وعميل MCP HTTP العام وعميل MCP عبر stdio فهي اتصالات Client.
-
-## متى تستخدمه
-
-- استخدم هذه الصفحة عندما يطابق مسار Runtime أو Client المختار عنوان الصفحة.
-- حافظ على اتساق جذر مساحة العمل و base URL العام و MCP endpoint ونمط المصادقة والأدوات المتاحة على المضيف.
-- بالنسبة إلى ChatGPT web/app، انشر MCP endpoint عبر HTTPS ينتهي بـ `/mcp`.
-- بالنسبة إلى عملاء MCP المحليين، استخدم HTTP localhost أو `local-shell-mcp --mode stdio` حسب دعم العميل.
-
-## الخطوات
-
-1. اختر صفحة تثبيت Runtime أولاً.
-2. شغّل Runtime وتحقق من `/healthz` عند استخدام وضع HTTP.
-3. اختر بعد ذلك صفحة اتصال Client.
-4. سجّل MCP endpoint أو أمر stdio في Client.
-5. استدعِ `environment_get` للتحقق من مساحة العمل والإعدادات الفعلية.
+ينتهي client endpoint عادةً بـ `/mcp`:
 
 ```text
-Runtime: Docker / VS Code extension / binary / Python / stdio
-Client:  ChatGPT connector / generic HTTP MCP / generic stdio MCP
-Endpoint: https://your-host.example.com/mcp
+https://your-public-host.example.com/mcp
 ```
 
-## التحقق
+إعداد public base URL للخادم هو الـ origin فقط:
 
-- `environment_get` يؤكد إعدادات Runtime ومساحة العمل.
-- `file_tree` يؤكد الملفات المرئية.
-- `run_shell` يؤكد بيئة الأوامر.
+```env
+LOCAL_SHELL_MCP_PUBLIC_BASE_URL=https://your-public-host.example.com
+```
 
-## ملاحظات
+لا تضف `/mcp` إلى هذا base URL.
 
-فضّل الخطوات الصغيرة القابلة للتحقق: الفحص، التعديل، مراجعة diff، الاختبار، الفحص الأمني، ثم commit. يجب أيضاً تقسيم المهام الكبيرة إلى استدعاءات أدوات قابلة للتدقيق.
+## خيارات الاتصال
+
+| الخيار | متى يُستخدم |
+|---|---|
+| Compose tunnel sidecar | Docker Compose مع profile `tunnel` المدمج |
+| Tunnel خارجي | أي runtime يجب الوصول إليه من خارج الشبكة المحلية |
+| Caddy | TLS تلقائي وبسيط |
+| Nginx أو Nginx Proxy Manager | بنية Nginx موجودة |
+| Traefik | توجيه container-native موجود |
+
+## المسارات
+
+مرّر الـ origin بالكامل إلى الخادم العامل. تشمل المسارات المهمة:
+
+| المسار | الغرض |
+|---|---|
+| `/mcp` | MCP Streamable HTTP endpoint |
+| `/healthz`, `/readyz` | فحوص الصحة |
+| `/.well-known/...` | بيانات client discovery الوصفية |
+| `/oauth/...` | مسار تفويض client |
+| `/downloads/...` | روابط اختيارية للملفات المُنشأة |
+| `/join/...`, `/remote/...` | مسار remote-worker اختياري |
+
+## سلوك الوكيل
+
+يجب أن يحافظ الوكيل على المسارات، ويمرر request bodies، ويدعم responses الطويلة، ويتجنب timeouts القصيرة جداً.
+
+## الفحوص
+
+```bash
+curl -i http://127.0.0.1:8765/healthz
+curl -i https://your-public-host.example.com/healthz
+```
+
+## أخطاء شائعة
+
+| الخطأ | الإصلاح |
+|---|---|
+| استخدام `https://host` في ChatGPT بدلاً من `https://host/mcp` | أضف `/mcp` فقط إلى client endpoint |
+| ضبط `LOCAL_SHELL_MCP_PUBLIC_BASE_URL=https://host/mcp` | اضبط الـ origin فقط |
+| توجيه `/mcp` فقط | وجّه الـ origin بالكامل حتى تعمل discovery والتفويض أيضاً |
+| تشغيل host runtime مع workspace واسع | استخدم workspace ضيقاً أو Docker |
+
+## الاقتران المقترح
+
+| Runtime | نمط الشبكة |
+|---|---|
+| Docker Compose على خادم | Reverse proxy موجود أو Compose tunnel profile |
+| Docker Compose على جهاز منزلي | Outbound tunnel |
+| VS Code extension على حاسوب محمول | Tunnel مؤقت للجلسة |
+| Binary على VM | Reverse proxy على VM أو حافة الشبكة |
+| خادم تطوير Python/source | عادةً localhost فقط |
+| Stdio mode | لا يوجد مسار HTTP؛ استخدم MCP client محلياً |

@@ -1,12 +1,8 @@
+<!-- i18n-source-sha256: 1f30fc9935125c84fb0838d17ec894d78aaa6253fe3903356414aac716ba2adc -->
 # セキュリティ
 
-公開環境では OAuth を必ず有効にし、Docker socket、ホスト root、長期認証情報をマウントしないでください。
+公開環境では OAuth を使用してください。`LOCAL_SHELL_MCP_OAUTH_ADMIN_PIN` と `LOCAL_SHELL_MCP_OAUTH_JWT_SECRET` には強力な値を設定し、秘密として管理してください。
 
-Mandatory rules:
+既定では、パス操作はワークスペース内に限定され、機密性の高いパス断片はブロックされます。Full-container モードでは組み込みのワークスペース制限とパス制限が無効になるため、破棄可能なコンテナまたは VM でのみ使用してください。
 
-1. Keep OAuth enabled for public deployments.
-2. Do not mount `/var/run/docker.sock`.
-3. Do not mount the host root filesystem.
-4. Do not expose unauthenticated MCP tools on the public internet.
-5. Treat file links and credential volumes as sensitive.
-6. Use disposable containers or VMs when granting broad authority.
+生成されたファイルのダウンロードリンクは公開 bearer URL です。高エントロピーのトークン、TTL、任意のダウンロード回数制限、任意のサイズ制限、および明示的な失効機能によって保護されます。

@@ -1,68 +1,726 @@
+<!-- i18n-source-sha256: 9e104b7a893f61206aea6ed76b78bb04387fc5349535c46ffafd8f2e4c9ccd3e -->
 # 工具參考
 
-本頁概述 `local-shell-mcp` 目前公開的 MCP 工具。英文參考頁由實際 MCP Schema 自動生成，包含每個參數的類型和預設值。
+本頁由實際 MCP tool schema 產生。公開工具介面變更後，執行 `python scripts/generate-tools-reference.py` 更新 English 參考頁。
 
-公開工具返回包含 `ok`、`message`、`data` 的結構化結果；`workspace_open` 返回用於渲染 MCP App 的模型可見狀態。多數執行、檔案和瀏覽器工具都接受可選的 `machine` 參數：省略時在控制端執行，指定時在對應遠端 worker 執行，並額外要求 `remote:use` 權限。
+大多數工具回傳包含 `ok`、`message` 和 `data` 的結構化 `ToolResult`。`workspace_open` 回傳用於渲染 MCP App 的模型可見狀態。多數執行與檔案工具接受可選 `machine`；省略時操作 controller workspace，指定時操作已連線 worker。Git 操作刻意透過 `run_shell` 或其他 shell 工具執行，而不提供專用 Git wrapper。
 
-Git 不再擁有專用 MCP 工具。請透過 `run_shell` 執行標準 Git CLI，例如 `git status --short --branch`、`git diff`、`git commit` 和 `git push`。
-
-## 工具分組
-
-### Live Workspace
-
-`workspace_open`
-
-
-### 環境、Skills 與任務狀態
-
-`environment_get`、`skill_list`、`skill_load`、`skill_read`、`secret_scan`、`session_manage`、`plan_manage`、`audit_tail`
-
-`environment_get` 已包含執行版本、Python、平台、可執行檔、工作區、權限策略和基礎探測資訊，因此不再單獨暴露 `version_info`。
-
-### Shell 與長期任務
-
-`run_shell`、`run_python`、`shell_start`、`shell_send`、`shell_read`、`shell_stop`、`shell_list`、`job_start`、`job_list`、`job_tail`、`job_stop`、`job_retry`
-
-- 短期、非互動命令使用 `run_shell`。
-- 需要互動的終端、REPL、TUI 使用 `shell_*`。
-- 需要可追蹤、停止和重試的長期任務使用 `job_*`。
-
-### 檔案、搜尋與傳輸
-
-`file_list`、`file_tree`、`file_glob`、`file_grep`、`file_read`、`image_view`、`file_write`、`file_edit`、`file_delete`、`file_patch`、`remote_transfer`
-
-- `file_read.path` 可以是單一路徑，也可以是路徑陣列。
-- `file_edit.edits` 接受一個或多個精確替換項，不再區分單次與批次編輯工具。
-- `remote_transfer` 自動判斷來源是檔案還是目錄，並立即建立一個可追蹤的傳輸 job，支援控制端到 worker、worker 到控制端以及 worker 到 worker。使用 `job_list`、`job_tail`、`job_stop` 和 `job_retry` 查看、停止或重試；worker 到控制端的上傳使用可續傳的原始二進位分塊。`source_machine` 或 `destination_machine` 至少指定一個。
-
-### 瀏覽器自動化
-
-`browser_session`、`browser_snapshot`、`browser_act`、`browser_run_script`
-
-- 一般頁面檢查、文字讀取和截圖優先使用 `browser_session`、`browser_snapshot` 與 `browser_act`。
-- JavaScript 求值、自訂截圖/PDF 和複雜流程由 `browser_run_script` 執行完整 Playwright 腳本。
-- 瀏覽器安裝使用一般 shell 命令，不再長期占用獨立工具入口。
-
-### 檔案下載連結
-
-`link_create`、`link_list`、`link_revoke`
-
-連結使用高熵 bearer token，並支援 TTL、下載次數限制和主動撤銷。
-
-### 遠端 worker 管理
-
-`remote_manage`
-
-只有 worker 管理繼續使用 `remote_*` 名稱。實際執行使用一般工具及其 `machine` 參數。
-
-## 常用流程
+## 選擇指南
 
 | 需求 | 建議工具 |
 |---|---|
-| 檢查環境 | `environment_get` → `file_tree` → `file_read` |
-| Git 操作 | `run_shell` 執行標準 Git CLI |
-| 精確修改檔案 | `file_read` → `file_edit` / `file_patch` → 測試與 `git diff` |
-| 長時間任務 | `job_start` → `job_tail` → `job_stop` / `job_retry` |
-| 遠端執行 | 同一工具增加 `machine` |
-| 跨機器傳輸 | `remote_transfer` |
-| 瀏覽器證據 | `browser_snapshot` / `browser_run_script` |
+| 在 ChatGPT 中監控執行或協作 | `workspace_open` |
+| 檢查環境 | `environment_get`, `file_tree`, `file_read` |
+| 執行短指令或 Git 操作 | `run_shell` |
+| 執行互動式或長任務 | `shell_start` or `job_start` |
+| 精確修改檔案 | `file_edit` or `file_patch` |
+| 傳輸檔案或目錄 | `remote_transfer` |
+| 探索外部 MCP capability | `mcp_tool_search`, then `mcp_tool_inspect` |
+| 與頁面互動 | `browser_session`, `browser_snapshot`, then `browser_act` |
+| 執行自訂 browser 邏輯 | `browser_run_script` |
+| 在遠端機器工作 | 使用相同工具並提供 `machine`；僅 worker 管理使用 `remote_*` |
+
+## 互動式 workspace
+
+### `workspace_open`
+
+開啟或重用互動式 Live Workspace，支援人類與 agent 即時協作。Active task 只需呼叫一次，後續重用可自動重連的浮動 workspace，不要反覆重新開啟；當 terminal output、files/diffs、jobs、remotes 或 audit activity 能明顯改善工作流程時使用。
+
+| 參數 | 類型 | 必填/預設值 | 說明 |
+|---|---|---|---|
+| `machine` | `string \| null` | `null` |  |
+| `cwd` | `string` | `"."` |  |
+| `session_run_id` | `string \| null` | required | 一律提供此欄位。沒有活動 logical Session 時傳 `null`；在 `session_manage` start/resume 後，傳回傳的 `active_run.run_id`，並在 MCP transport 重連期間持續重用。明確 resume/takeover 後改用新值。 |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+指定 `machine` 時，呼叫還需要 `remote:use`，並透過遠端 worker 協定執行。
+
+## 環境、Skills 與任務狀態
+
+### `environment_get`
+
+回傳本機或 remote machine 的版本、workspace、驗證、policy 與環境資訊。
+
+| 參數 | 類型 | 必填/預設值 | 說明 |
+|---|---|---|---|
+| `machine` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | required | 一律提供此欄位。沒有活動 logical Session 時傳 `null`；在 `session_manage` start/resume 後，傳回傳的 `active_run.run_id`，並在 MCP transport 重連期間持續重用。明確 resume/takeover 後改用新值。 |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+指定 `machine` 時，呼叫還需要 `remote:use`，並透過遠端 worker 協定執行。
+
+### `skill_list`
+
+列出已安裝 Agent Skills，但不載入完整 instructions。MCP tool surface 保持固定；Skill directory 新增或移除會在下一次呼叫反映。
+
+| 參數 | 類型 | 必填/預設值 | 說明 |
+|---|---|---|---|
+| `session_run_id` | `string \| null` | required | 一律提供此欄位。沒有活動 logical Session 時傳 `null`；在 `session_manage` start/resume 後，傳回傳的 `active_run.run_id`，並在 MCP transport 重連期間持續重用。明確 resume/takeover 後改用新值。 |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+### `skill_load`
+
+依 `skill_list` 回傳的精確名稱載入一個已安裝 Skill，回傳完整 `SKILL.md` instructions 與 related file paths。
+
+| 參數 | 類型 | 必填/預設值 | 說明 |
+|---|---|---|---|
+| `name` | `string` | required |  |
+| `session_run_id` | `string \| null` | required | 一律提供此欄位。沒有活動 logical Session 時傳 `null`；在 `session_manage` start/resume 後，傳回傳的 `active_run.run_id`，並在 MCP transport 重連期間持續重用。明確 resume/takeover 後改用新值。 |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+### `skill_read`
+
+讀取一個已安裝 Skill 的 related text file。
+
+| 參數 | 類型 | 必填/預設值 | 說明 |
+|---|---|---|---|
+| `name` | `string` | required |  |
+| `path` | `string` | required |  |
+| `session_run_id` | `string \| null` | required | 一律提供此欄位。沒有活動 logical Session 時傳 `null`；在 `session_manage` start/resume 後，傳回傳的 `active_run.run_id`，並在 MCP transport 重連期間持續重用。明確 resume/takeover 後改用新值。 |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+### `secret_scan`
+
+在 commit 或 push 前掃描 local workspace 文字檔案中的常見 secrets。
+
+| 參數 | 類型 | 必填/預設值 | 說明 |
+|---|---|---|---|
+| `cwd` | `string` | `"."` |  |
+| `glob` | `string \| null` | `null` |  |
+| `max_results` | `integer` | `200` |  |
+| `session_run_id` | `string \| null` | required | 一律提供此欄位。沒有活動 logical Session 時傳 `null`；在 `session_manage` start/resume 後，傳回傳的 `active_run.run_id`，並在 MCP transport 重連期間持續重用。明確 resume/takeover 後改用新值。 |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+### `session_manage`
+
+管理與機器和 cwd 無關的持久 logical task Session。實質性工具工作前先 start；在有意義的檢查點 report 語義進度；新的 GPT/MCP run 可依 `session_id` resume 接手。`resume(takeover=true)` 一律建立新的 agent run 並取代舊 run。後續 report/finish/cancel 與其他工具使用回傳的 `active_run.run_id` 作為 `session_run_id`。動作：start、resume、get、report、list、finish、cancel、delete。
+
+| 參數 | 類型 | 必填/預設值 | 說明 |
+|---|---|---|---|
+| `action` | `string` | required |  |
+| `session_id` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | `null` |  |
+| `label` | `string \| null` | `null` |  |
+| `objective` | `string \| null` | `null` |  |
+| `summary` | `string \| null` | `null` |  |
+| `findings` | `array[string] \| null` | `null` |  |
+| `next` | `string \| null` | `null` |  |
+| `blockers` | `array[string] \| null` | `null` |  |
+| `takeover` | `boolean` | `false` |  |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+### `plan_manage`
+
+管理目前 logical Session 擁有的可選 Goal Plan。active Plan 會在 15 分鐘無 agent 活動後啟用自動續跑，最多 10 次 continuation attempt。先用 `session_manage` start/resume Session；修改類動作必須把該 Session 的 `active_run.run_id` 作為 `session_run_id`。動作：start、get、update、block、resume、finish、cancel；start 需要 objective 和 steps，finish 要求所有 step 已 completed 或 skipped。
+
+| 參數 | 類型 | 必填/預設值 | 說明 |
+|---|---|---|---|
+| `action` | `string` | required |  |
+| `session_run_id` | `string \| null` | `null` |  |
+| `objective` | `string \| null` | `null` |  |
+| `steps` | `array[object] \| null` | `null` |  |
+| `step_id` | `string \| null` | `null` |  |
+| `status` | `string \| null` | `null` |  |
+| `text` | `string \| null` | `null` |  |
+| `note` | `string \| null` | `null` |  |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+### `audit_tail`
+
+讀取最近的 local audit log entries。
+
+| 參數 | 類型 | 必填/預設值 | 說明 |
+|---|---|---|---|
+| `lines` | `integer` | `100` |  |
+| `session_run_id` | `string \| null` | required | 一律提供此欄位。沒有活動 logical Session 時傳 `null`；在 `session_manage` start/resume 後，傳回傳的 `active_run.run_id`，並在 MCP transport 重連期間持續重用。明確 resume/takeover 後改用新值。 |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+## Shell 與 jobs
+
+### `run_shell`
+
+在本機或 remote machine 執行一次非互動 shell command。適合應快速完成的 build、test、package-manager、Git 與 inspection command；長時間、互動式或 streaming process 應使用 `shell_start` 或 `job_start`。可選 purpose/explanation 欄位可說明執行原因。
+
+| 參數 | 類型 | 必填/預設值 | 說明 |
+|---|---|---|---|
+| `command` | `string` | required |  |
+| `cwd` | `string` | `"."` |  |
+| `timeout_s` | `integer \| null` | `null` |  |
+| `max_output_bytes` | `integer \| null` | `null` |  |
+| `purpose` | `string \| null` | `null` |  |
+| `explanation` | `string \| null` | `null` |  |
+| `machine` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | required | 一律提供此欄位。沒有活動 logical Session 時傳 `null`；在 `session_manage` start/resume 後，傳回傳的 `active_run.run_id`，並在 MCP transport 重連期間持續重用。明確 resume/takeover 後改用新值。 |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+指定 `machine` 時，呼叫還需要 `remote:use`，並透過遠端 worker 協定執行。
+
+### `run_python`
+
+在本機或 remote machine 寫入並執行短 Python script。
+
+| 參數 | 類型 | 必填/預設值 | 說明 |
+|---|---|---|---|
+| `code` | `string` | required |  |
+| `cwd` | `string` | `"."` |  |
+| `timeout_s` | `integer` | `60` |  |
+| `purpose` | `string \| null` | `null` |  |
+| `explanation` | `string \| null` | `null` |  |
+| `machine` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | required | 一律提供此欄位。沒有活動 logical Session 時傳 `null`；在 `session_manage` start/resume 後，傳回傳的 `active_run.run_id`，並在 MCP transport 重連期間持續重用。明確 resume/takeover 後改用新值。 |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+指定 `machine` 時，呼叫還需要 `remote:use`，並透過遠端 worker 協定執行。
+
+### `shell_start`
+
+在本機或 remote machine 啟動 persistent interactive shell。
+
+| 參數 | 類型 | 必填/預設值 | 說明 |
+|---|---|---|---|
+| `cwd` | `string` | `"."` |  |
+| `name` | `string \| null` | `null` |  |
+| `command` | `string \| null` | `null` |  |
+| `purpose` | `string \| null` | `null` |  |
+| `explanation` | `string \| null` | `null` |  |
+| `machine` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | required | 一律提供此欄位。沒有活動 logical Session 時傳 `null`；在 `session_manage` start/resume 後，傳回傳的 `active_run.run_id`，並在 MCP transport 重連期間持續重用。明確 resume/takeover 後改用新值。 |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+指定 `machine` 時，呼叫還需要 `remote:use`，並透過遠端 worker 協定執行。
+
+### `shell_send`
+
+向 persistent local/remote shell session 傳送輸入。
+
+| 參數 | 類型 | 必填/預設值 | 說明 |
+|---|---|---|---|
+| `session_id` | `string` | required |  |
+| `input_text` | `string` | required |  |
+| `enter` | `boolean` | `true` |  |
+| `machine` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | required | 一律提供此欄位。沒有活動 logical Session 時傳 `null`；在 `session_manage` start/resume 後，傳回傳的 `active_run.run_id`，並在 MCP transport 重連期間持續重用。明確 resume/takeover 後改用新值。 |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+指定 `machine` 時，呼叫還需要 `remote:use`，並透過遠端 worker 協定執行。
+
+### `shell_read`
+
+讀取 persistent local/remote shell session 的最近輸出。
+
+| 參數 | 類型 | 必填/預設值 | 說明 |
+|---|---|---|---|
+| `session_id` | `string` | required |  |
+| `lines` | `integer` | `200` |  |
+| `machine` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | required | 一律提供此欄位。沒有活動 logical Session 時傳 `null`；在 `session_manage` start/resume 後，傳回傳的 `active_run.run_id`，並在 MCP transport 重連期間持續重用。明確 resume/takeover 後改用新值。 |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+指定 `machine` 時，呼叫還需要 `remote:use`，並透過遠端 worker 協定執行。
+
+### `shell_stop`
+
+終止 persistent local/remote shell session。
+
+| 參數 | 類型 | 必填/預設值 | 說明 |
+|---|---|---|---|
+| `session_id` | `string` | required |  |
+| `machine` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | required | 一律提供此欄位。沒有活動 logical Session 時傳 `null`；在 `session_manage` start/resume 後，傳回傳的 `active_run.run_id`，並在 MCP transport 重連期間持續重用。明確 resume/takeover 後改用新值。 |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+指定 `machine` 時，呼叫還需要 `remote:use`，並透過遠端 worker 協定執行。
+
+### `shell_list`
+
+列出本機或 remote machine 上的 persistent shell sessions。
+
+| 參數 | 類型 | 必填/預設值 | 說明 |
+|---|---|---|---|
+| `machine` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | required | 一律提供此欄位。沒有活動 logical Session 時傳 `null`；在 `session_manage` start/resume 後，傳回傳的 `active_run.run_id`，並在 MCP transport 重連期間持續重用。明確 resume/takeover 後改用新值。 |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+指定 `machine` 時，呼叫還需要 `remote:use`，並透過遠端 worker 協定執行。
+
+### `job_start`
+
+在本機或 remote machine 啟動被追蹤的 long-running job。
+
+| 參數 | 類型 | 必填/預設值 | 說明 |
+|---|---|---|---|
+| `command` | `string` | required |  |
+| `cwd` | `string` | `"."` |  |
+| `name` | `string \| null` | `null` |  |
+| `purpose` | `string \| null` | `null` |  |
+| `explanation` | `string \| null` | `null` |  |
+| `machine` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | required | 一律提供此欄位。沒有活動 logical Session 時傳 `null`；在 `session_manage` start/resume 後，傳回傳的 `active_run.run_id`，並在 MCP transport 重連期間持續重用。明確 resume/takeover 後改用新值。 |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+指定 `machine` 時，呼叫還需要 `remote:use`，並透過遠端 worker 協定執行。
+
+### `job_list`
+
+列出本機或 remote machine 上被追蹤的 jobs。
+
+| 參數 | 類型 | 必填/預設值 | 說明 |
+|---|---|---|---|
+| `include_finished` | `boolean` | `true` |  |
+| `machine` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | required | 一律提供此欄位。沒有活動 logical Session 時傳 `null`；在 `session_manage` start/resume 後，傳回傳的 `active_run.run_id`，並在 MCP transport 重連期間持續重用。明確 resume/takeover 後改用新值。 |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+指定 `machine` 時，呼叫還需要 `remote:use`，並透過遠端 worker 協定執行。
+
+### `job_tail`
+
+讀取被追蹤 local/remote job 的最近輸出。
+
+| 參數 | 類型 | 必填/預設值 | 說明 |
+|---|---|---|---|
+| `job_id` | `string` | required |  |
+| `lines` | `integer` | `200` |  |
+| `machine` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | required | 一律提供此欄位。沒有活動 logical Session 時傳 `null`；在 `session_manage` start/resume 後，傳回傳的 `active_run.run_id`，並在 MCP transport 重連期間持續重用。明確 resume/takeover 後改用新值。 |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+指定 `machine` 時，呼叫還需要 `remote:use`，並透過遠端 worker 協定執行。
+
+### `job_stop`
+
+停止被追蹤的 local/remote job。
+
+| 參數 | 類型 | 必填/預設值 | 說明 |
+|---|---|---|---|
+| `job_id` | `string` | required |  |
+| `machine` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | required | 一律提供此欄位。沒有活動 logical Session 時傳 `null`；在 `session_manage` start/resume 後，傳回傳的 `active_run.run_id`，並在 MCP transport 重連期間持續重用。明確 resume/takeover 後改用新值。 |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+指定 `machine` 時，呼叫還需要 `remote:use`，並透過遠端 worker 協定執行。
+
+### `job_retry`
+
+重新啟動已停止或退出的被追蹤 local/remote job。
+
+| 參數 | 類型 | 必填/預設值 | 說明 |
+|---|---|---|---|
+| `job_id` | `string` | required |  |
+| `purpose` | `string \| null` | `null` |  |
+| `explanation` | `string \| null` | `null` |  |
+| `machine` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | required | 一律提供此欄位。沒有活動 logical Session 時傳 `null`；在 `session_manage` start/resume 後，傳回傳的 `active_run.run_id`，並在 MCP transport 重連期間持續重用。明確 resume/takeover 後改用新值。 |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+指定 `machine` 時，呼叫還需要 `remote:use`，並透過遠端 worker 協定執行。
+
+## 檔案與傳輸
+
+### `file_list`
+
+列出本機或 remote machine 上的檔案與目錄。
+
+| 參數 | 類型 | 必填/預設值 | 說明 |
+|---|---|---|---|
+| `path` | `string` | `"."` |  |
+| `recursive` | `boolean` | `false` |  |
+| `max_entries` | `integer` | `500` |  |
+| `machine` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | required | 一律提供此欄位。沒有活動 logical Session 時傳 `null`；在 `session_manage` start/resume 後，傳回傳的 `active_run.run_id`，並在 MCP transport 重連期間持續重用。明確 resume/takeover 後改用新值。 |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+指定 `machine` 時，呼叫還需要 `remote:use`，並透過遠端 worker 協定執行。
+
+### `file_tree`
+
+回傳本機或 remote machine 上緊湊的 directory tree。
+
+| 參數 | 類型 | 必填/預設值 | 說明 |
+|---|---|---|---|
+| `cwd` | `string` | `"."` |  |
+| `depth` | `integer` | `3` |  |
+| `max_entries` | `integer` | `500` |  |
+| `machine` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | required | 一律提供此欄位。沒有活動 logical Session 時傳 `null`；在 `session_manage` start/resume 後，傳回傳的 `active_run.run_id`，並在 MCP transport 重連期間持續重用。明確 resume/takeover 後改用新值。 |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+指定 `machine` 時，呼叫還需要 `remote:use`，並透過遠端 worker 協定執行。
+
+### `file_glob`
+
+依 glob 在本機或 remote machine 尋找 paths。
+
+| 參數 | 類型 | 必填/預設值 | 說明 |
+|---|---|---|---|
+| `pattern` | `string` | required |  |
+| `cwd` | `string` | `"."` |  |
+| `max_results` | `integer` | `500` |  |
+| `machine` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | required | 一律提供此欄位。沒有活動 logical Session 時傳 `null`；在 `session_manage` start/resume 後，傳回傳的 `active_run.run_id`，並在 MCP transport 重連期間持續重用。明確 resume/takeover 後改用新值。 |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+指定 `machine` 時，呼叫還需要 `remote:use`，並透過遠端 worker 協定執行。
+
+### `file_grep`
+
+搜尋本機或 remote machine 的檔案內容。
+
+| 參數 | 類型 | 必填/預設值 | 說明 |
+|---|---|---|---|
+| `query` | `string` | required |  |
+| `cwd` | `string` | `"."` |  |
+| `glob` | `string \| null` | `null` |  |
+| `regex` | `boolean` | `true` |  |
+| `case_sensitive` | `boolean` | `true` |  |
+| `max_results` | `integer \| null` | `null` |  |
+| `machine` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | required | 一律提供此欄位。沒有活動 logical Session 時傳 `null`；在 `session_manage` start/resume 後，傳回傳的 `active_run.run_id`，並在 MCP transport 重連期間持續重用。明確 resume/takeover 後改用新值。 |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+指定 `machine` 時，呼叫還需要 `remote:use`，並透過遠端 worker 協定執行。
+
+### `file_read`
+
+讀取本機或 remote machine 上一個檔案或一組檔案。
+
+| 參數 | 類型 | 必填/預設值 | 說明 |
+|---|---|---|---|
+| `path` | `string \| array[string]` | required |  |
+| `start_line` | `integer \| null` | `null` |  |
+| `end_line` | `integer \| null` | `null` |  |
+| `binary_preview` | `string \| null` | `null` |  |
+| `binary_preview_bytes` | `integer` | `256` |  |
+| `machine` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | required | 一律提供此欄位。沒有活動 logical Session 時傳 `null`；在 `session_manage` start/resume 後，傳回傳的 `active_run.run_id`，並在 MCP transport 重連期間持續重用。明確 resume/takeover 後改用新值。 |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+指定 `machine` 時，呼叫還需要 `remote:use`，並透過遠端 worker 協定執行。
+
+### `image_view`
+
+將 PNG、JPEG、GIF 或 WebP 檔案作為原生 MCP image content 檢視；需要視覺檢查時優先於 `file_read`。Remote image 重用現有 file-transfer protocol，因此 worker 不需要額外 image-specific RPC。
+
+| 參數 | 類型 | 必填/預設值 | 說明 |
+|---|---|---|---|
+| `path` | `string` | required |  |
+| `machine` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | required | 一律提供此欄位。沒有活動 logical Session 時傳 `null`；在 `session_manage` start/resume 後，傳回傳的 `active_run.run_id`，並在 MCP transport 重連期間持續重用。明確 resume/takeover 後改用新值。 |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+指定 `machine` 時，呼叫還需要 `remote:use`，並透過遠端 worker 協定執行。
+
+### `file_write`
+
+在本機或 remote machine 寫入 UTF-8 text file。
+
+| 參數 | 類型 | 必填/預設值 | 說明 |
+|---|---|---|---|
+| `path` | `string` | required |  |
+| `content` | `string` | required |  |
+| `overwrite` | `boolean` | `true` |  |
+| `purpose` | `string \| null` | `null` |  |
+| `explanation` | `string \| null` | `null` |  |
+| `machine` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | required | 一律提供此欄位。沒有活動 logical Session 時傳 `null`；在 `session_manage` start/resume 後，傳回傳的 `active_run.run_id`，並在 MCP transport 重連期間持續重用。明確 resume/takeover 後改用新值。 |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+指定 `machine` 時，呼叫還需要 `remote:use`，並透過遠端 worker 協定執行。
+
+### `file_edit`
+
+對一個本機或 remote file 套用一個或多個 exact-text edits。每個 edit 包含 old、new 與可選 `replace_all`；old 必須完全相符，包括 whitespace 與 indentation。
+
+| 參數 | 類型 | 必填/預設值 | 說明 |
+|---|---|---|---|
+| `path` | `string` | required |  |
+| `edits` | `array[TextEdit]` | required |  |
+| `purpose` | `string \| null` | `null` |  |
+| `explanation` | `string \| null` | `null` |  |
+| `machine` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | required | 一律提供此欄位。沒有活動 logical Session 時傳 `null`；在 `session_manage` start/resume 後，傳回傳的 `active_run.run_id`，並在 MCP transport 重連期間持續重用。明確 resume/takeover 後改用新值。 |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+指定 `machine` 時，呼叫還需要 `remote:use`，並透過遠端 worker 協定執行。
+
+### `file_delete`
+
+刪除本機或 remote file/directory。`recursive=false` 只能刪除檔案或空目錄；非空目錄必須使用 `recursive=true`，並應謹慎操作。
+
+| 參數 | 類型 | 必填/預設值 | 說明 |
+|---|---|---|---|
+| `path` | `string` | required |  |
+| `recursive` | `boolean` | `false` |  |
+| `purpose` | `string \| null` | `null` |  |
+| `explanation` | `string \| null` | `null` |  |
+| `machine` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | required | 一律提供此欄位。沒有活動 logical Session 時傳 `null`；在 `session_manage` start/resume 後，傳回傳的 `active_run.run_id`，並在 MCP transport 重連期間持續重用。明確 resume/takeover 後改用新值。 |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+指定 `machine` 時，呼叫還需要 `remote:use`，並透過遠端 worker 協定執行。
+
+### `file_patch`
+
+在本機或遠端檢查並套用 unified diff 或 file_patch envelope。
+
+| 參數 | 類型 | 必填/預設值 | 說明 |
+|---|---|---|---|
+| `patch` | `string` | required |  |
+| `cwd` | `string` | `"."` |  |
+| `purpose` | `string \| null` | `null` |  |
+| `explanation` | `string \| null` | `null` |  |
+| `machine` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | required | 一律提供此欄位。沒有活動 logical Session 時傳 `null`；在 `session_manage` start/resume 後，傳回傳的 `active_run.run_id`，並在 MCP transport 重連期間持續重用。明確 resume/takeover 後改用新值。 |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+指定 `machine` 時，呼叫還需要 `remote:use`，並透過遠端 worker 協定執行。
+
+### `remote_transfer`
+
+啟動受追蹤的 job，在 controller 與遠端機器之間複製檔案或目錄。遠端上傳使用可續傳的 raw-binary chunk；使用 `job_list`、`job_tail`、`job_stop` 和 `job_retry` 管理傳輸。
+
+| 參數 | 類型 | 必填/預設值 | 說明 |
+|---|---|---|---|
+| `source_path` | `string` | required |  |
+| `destination_path` | `string` | required |  |
+| `source_machine` | `string \| null` | `null` |  |
+| `destination_machine` | `string \| null` | `null` |  |
+| `overwrite` | `boolean` | `false` |  |
+| `chunk_size` | `integer \| null` | `null` |  |
+| `purpose` | `string \| null` | `null` |  |
+| `explanation` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | required | 一律提供此欄位。沒有活動 logical Session 時傳 `null`；在 `session_manage` start/resume 後，傳回傳的 `active_run.run_id`，並在 MCP transport 重連期間持續重用。明確 resume/takeover 後改用新值。 |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+必須至少指定 `source_machine` 和 `destination_machine` 之一。省略的端點代表 controller workspace；來源可以是檔案或目錄。
+
+### `link_create`
+
+為本機檔案建立暫時 browser-accessible URL。預設為 attachment download；需在 browser 或 Markdown image 直接渲染時設 `inline=true`。Link 是 public bearer URL，由 high-entropy token、TTL、可選 download-count limit 與明確 revocation 保護。
+
+| 參數 | 類型 | 必填/預設值 | 說明 |
+|---|---|---|---|
+| `path` | `string` | required |  |
+| `ttl_s` | `integer \| null` | `null` |  |
+| `filename` | `string \| null` | `null` |  |
+| `max_downloads` | `integer \| null` | `null` |  |
+| `inline` | `boolean` | `false` |  |
+| `session_run_id` | `string \| null` | required | 一律提供此欄位。沒有活動 logical Session 時傳 `null`；在 `session_manage` start/resume 後，傳回傳的 `active_run.run_id`，並在 MCP transport 重連期間持續重用。明確 resume/takeover 後改用新值。 |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+### `link_list`
+
+列出已產生的 local file download URLs。
+
+| 參數 | 類型 | 必填/預設值 | 說明 |
+|---|---|---|---|
+| `include_expired` | `boolean` | `false` |  |
+| `session_run_id` | `string \| null` | required | 一律提供此欄位。沒有活動 logical Session 時傳 `null`；在 `session_manage` start/resume 後，傳回傳的 `active_run.run_id`，並在 MCP transport 重連期間持續重用。明確 resume/takeover 後改用新值。 |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+### `link_revoke`
+
+撤銷已產生的 local file download URL。
+
+| 參數 | 類型 | 必填/預設值 | 說明 |
+|---|---|---|---|
+| `token` | `string` | required |  |
+| `session_run_id` | `string \| null` | required | 一律提供此欄位。沒有活動 logical Session 時傳 `null`；在 `session_manage` start/resume 後，傳回傳的 `active_run.run_id`，並在 MCP transport 重連期間持續重用。明確 resume/takeover 後改用新值。 |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+## 動態 MCP gateway
+
+### `mcp_manage`
+
+註冊、列出、讀取、啟用、停用、refresh、移除或更新 dynamic MCP servers 的隔離 environment/headers。`stdio` transport 使用 command/args/cwd，`streamable_http` transport 使用 url。Secret env/header values 會私密持久化且永不回傳。
+
+| 參數 | 類型 | 必填/預設值 | 說明 |
+|---|---|---|---|
+| `action` | `string` | required |  |
+| `name` | `string \| null` | `null` |  |
+| `transport` | `string \| null` | `null` |  |
+| `command` | `string \| null` | `null` |  |
+| `args` | `array[string] \| null` | `null` |  |
+| `cwd` | `string \| null` | `null` |  |
+| `url` | `string \| null` | `null` |  |
+| `env` | `object \| null` | `null` |  |
+| `headers` | `object \| null` | `null` |  |
+| `enabled` | `boolean` | `true` |  |
+| `overwrite` | `boolean` | `false` |  |
+| `refresh` | `boolean` | `true` |  |
+| `key` | `string \| null` | `null` |  |
+| `value` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | required | 一律提供此欄位。沒有活動 logical Session 時傳 `null`；在 `session_manage` start/resume 後，傳回傳的 `active_run.run_id`，並在 MCP transport 重連期間持續重用。明確 resume/takeover 後改用新值。 |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+### `mcp_tool_search`
+
+搜尋已啟用 dynamic MCP servers 的 cached lightweight tool summaries。Dynamic tools 不會進入本 server 的 `tools/list`；呼叫前先用回傳的 `<server>:<tool>` 名稱搭配 `mcp_tool_inspect`。
+
+| 參數 | 類型 | 必填/預設值 | 說明 |
+|---|---|---|---|
+| `query` | `string` | `""` |  |
+| `server` | `string \| null` | `null` |  |
+| `limit` | `integer` | `20` |  |
+| `session_run_id` | `string \| null` | required | 一律提供此欄位。沒有活動 logical Session 時傳 `null`；在 `session_manage` start/resume 後，傳回傳的 `active_run.run_id`，並在 MCP transport 重連期間持續重用。明確 resume/takeover 後改用新值。 |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+### `mcp_tool_inspect`
+
+回傳名為 `<server>:<tool>` 的 dynamic MCP tool 完整 cached schema；若 cache stale，先用 `mcp_manage` refresh server。
+
+| 參數 | 類型 | 必填/預設值 | 說明 |
+|---|---|---|---|
+| `name` | `string` | required |  |
+| `session_run_id` | `string \| null` | required | 一律提供此欄位。沒有活動 logical Session 時傳 `null`；在 `session_manage` start/resume 後，傳回傳的 `active_run.run_id`，並在 MCP transport 重連期間持續重用。明確 resume/takeover 後改用新值。 |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+### `mcp_tool_call`
+
+呼叫名為 `<server>:<tool>` 的 cached dynamic MCP tool。先用 `mcp_tool_search` 探索，再用 `mcp_tool_inspect` 檢查 schema；external MCP connection 僅在本次呼叫期間開啟。
+
+| 參數 | 類型 | 必填/預設值 | 說明 |
+|---|---|---|---|
+| `name` | `string` | required |  |
+| `arguments` | `object \| null` | `null` |  |
+| `timeout_s` | `integer \| null` | `null` |  |
+| `session_run_id` | `string \| null` | required | 一律提供此欄位。沒有活動 logical Session 時傳 `null`；在 `session_manage` start/resume 後，傳回傳的 `active_run.run_id`，並在 MCP transport 重連期間持續重用。明確 resume/takeover 後改用新值。 |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+## 瀏覽器自動化
+
+### `browser_session`
+
+在本機或遠端啟動、列出、關閉或清理 persistent high-level browser sessions。`start` 可開啟 URL、重用 persistent `profile_id` 或載入 `storage_state_path`；`close` 可儲存 storage state。
+
+| 參數 | 類型 | 必填/預設值 | 說明 |
+|---|---|---|---|
+| `action` | `string` | required |  |
+| `session_id` | `string \| null` | `null` |  |
+| `browser` | `string` | `"chromium"` |  |
+| `headless` | `boolean` | `true` |  |
+| `width` | `integer` | `1440` |  |
+| `height` | `integer` | `1000` |  |
+| `url` | `string \| null` | `null` |  |
+| `wait_until` | `string` | `"domcontentloaded"` |  |
+| `profile_id` | `string \| null` | `null` |  |
+| `storage_state_path` | `string \| null` | `null` |  |
+| `save_storage_state_path` | `string \| null` | `null` |  |
+| `machine` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | required | 一律提供此欄位。沒有活動 logical Session 時傳 `null`；在 `session_manage` start/resume 後，傳回傳的 `active_run.run_id`，並在 MCP transport 重連期間持續重用。明確 resume/takeover 後改用新值。 |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+指定 `machine` 時，呼叫還需要 `remote:use`，並透過遠端 worker 協定執行。
+
+### `browser_snapshot`
+
+擷取 persistent browser page：title、URL、bounded visible text、帶 `e1` 等 stable short refs 的 interactive elements、最近 page/network errors，以及可選 screenshot path。Page 導航或重新 snapshot 前，可直接將 refs 作為 `browser_act` targets。
+
+| 參數 | 類型 | 必填/預設值 | 說明 |
+|---|---|---|---|
+| `session_id` | `string` | required |  |
+| `page_id` | `string \| null` | `null` |  |
+| `include_text` | `boolean` | `true` |  |
+| `screenshot` | `boolean` | `true` |  |
+| `full_page` | `boolean` | `false` |  |
+| `max_text_chars` | `integer` | `100000` |  |
+| `max_elements` | `integer` | `100` |  |
+| `machine` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | required | 一律提供此欄位。沒有活動 logical Session 時傳 `null`；在 `session_manage` start/resume 後，傳回傳的 `active_run.run_id`，並在 MCP transport 重連期間持續重用。明確 resume/takeover 後改用新值。 |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+指定 `machine` 時，呼叫還需要 `remote:use`，並透過遠端 worker 協定執行。
+
+### `browser_act`
+
+在 persistent browser session 執行 structured actions，支援 navigate、new_page、close_page、click、fill、type、select、press、check、uncheck、hover、wait、wait_for_text、wait_for_url。Target 可為 `browser_snapshot` 的 `e1` 等 ref 或 CSS selector；只有 high-level actions 不足時才使用 `browser_run_script`。
+
+| 參數 | 類型 | 必填/預設值 | 說明 |
+|---|---|---|---|
+| `session_id` | `string` | required |  |
+| `actions` | `array[object]` | required |  |
+| `page_id` | `string \| null` | `null` |  |
+| `timeout_ms` | `integer` | `30000` |  |
+| `machine` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | required | 一律提供此欄位。沒有活動 logical Session 時傳 `null`；在 `session_manage` start/resume 後，傳回傳的 `active_run.run_id`，並在 MCP transport 重連期間持續重用。明確 resume/takeover 後改用新值。 |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+指定 `machine` 時，呼叫還需要 `remote:use`，並透過遠端 worker 協定執行。
+
+### `browser_run_script`
+
+在本機或 remote machine 執行完整 Python Playwright script。
+
+| 參數 | 類型 | 必填/預設值 | 說明 |
+|---|---|---|---|
+| `script` | `string` | required |  |
+| `cwd` | `string` | `"."` |  |
+| `timeout_s` | `integer` | `60` |  |
+| `machine` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | required | 一律提供此欄位。沒有活動 logical Session 時傳 `null`；在 `session_manage` start/resume 後，傳回傳的 `active_run.run_id`，並在 MCP transport 重連期間持續重用。明確 resume/takeover 後改用新值。 |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+指定 `machine` 時，呼叫還需要 `remote:use`，並透過遠端 worker 協定執行。
+
+## 遠端 worker 管理
+
+### `remote_manage`
+
+使用 action=invite、list、revoke 或 rename 管理 remote workers。invite 接受 name/workdir/ttl_s；revoke 需要 machine；rename 需要 machine 與 new_name。
+
+| 參數 | 類型 | 必填/預設值 | 說明 |
+|---|---|---|---|
+| `action` | `string` | required |  |
+| `name` | `string \| null` | `null` |  |
+| `workdir` | `string \| null` | `null` |  |
+| `ttl_s` | `integer \| null` | `null` |  |
+| `machine` | `string \| null` | `null` |  |
+| `new_name` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | required | 一律提供此欄位。沒有活動 logical Session 時傳 `null`；在 `session_manage` start/resume 後，傳回傳的 `active_run.run_id`，並在 MCP transport 重連期間持續重用。明確 resume/takeover 後改用新值。 |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+指定 `machine` 時，呼叫還需要 `remote:use`，並透過遠端 worker 協定執行。

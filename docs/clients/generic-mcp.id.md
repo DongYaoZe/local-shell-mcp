@@ -1,38 +1,62 @@
-# Client MCP generik
+<!-- i18n-source-sha256: 6e76d0746c53eeef3e770417742a44e122c6484afd0d91ddf6a4995387085c74 -->
+# MCP client generik
 
-Halaman ini menjelaskan skenario “Client MCP generik” dan mengikuti struktur Runtime/Client yang sama di situs.
+`local-shell-mcp` dapat digunakan oleh ChatGPT maupun MCP client lain. Client menentukan apakah akan terhubung melalui HTTP atau menjalankan server melalui stdio.
 
-## Ringkasan
+## MCP client HTTP
 
-Runtime menentukan bagaimana proses server berjalan dan workspace mana yang dikendalikan. Client menentukan bagaimana ChatGPT atau client MCP lain terhubung. Docker, ekstensi VS Code, biner mandiri, instalasi Python/pipx/sumber, dan stdio adalah pilihan Runtime; konektor ChatGPT, client MCP HTTP generik, dan client MCP stdio adalah koneksi Client.
+Gunakan HTTP mode ketika server sudah berjalan:
 
-## Kapan digunakan
-
-- Gunakan halaman ini ketika jalur Runtime atau Client yang dipilih cocok dengan judulnya.
-- Jaga agar root workspace, base URL publik, MCP endpoint, mode autentikasi, dan alat host yang tersedia tetap konsisten.
-- Untuk ChatGPT web/app, ekspos MCP endpoint HTTPS yang berakhir dengan `/mcp`.
-- Untuk client MCP lokal, gunakan HTTP localhost atau `local-shell-mcp --mode stdio` sesuai dukungan client.
-
-## Langkah
-
-1. Pilih halaman instalasi Runtime terlebih dahulu.
-2. Mulai Runtime dan periksa `/healthz` saat menggunakan mode HTTP.
-3. Pilih halaman koneksi Client berikutnya.
-4. Daftarkan MCP endpoint atau perintah stdio di Client.
-5. Panggil `environment_get` untuk memeriksa workspace dan pengaturan efektif.
-
-```text
-Runtime: Docker / VS Code extension / binary / Python / stdio
-Client:  ChatGPT connector / generic HTTP MCP / generic stdio MCP
-Endpoint: https://your-host.example.com/mcp
+```bash
+LOCAL_SHELL_MCP_WORKSPACE_ROOT=/path/to/workspace local-shell-mcp --mode mcp
 ```
 
-## Verifikasi
+Endpoint lokal:
 
-- `environment_get` mengonfirmasi pengaturan Runtime dan workspace.
-- `file_tree` mengonfirmasi file yang terlihat.
-- `run_shell` mengonfirmasi lingkungan perintah.
+```text
+http://127.0.0.1:8765/mcp
+```
 
-## Catatan
+Endpoint jaringan:
 
-Utamakan langkah kecil yang dapat diverifikasi: inspeksi, edit, diff, test, scan, dan commit. Tugas besar juga harus dipecah menjadi panggilan alat yang dapat diaudit.
+```text
+https://your-public-host.example.com/mcp
+```
+
+Gunakan OAuth untuk setiap endpoint yang dapat dijangkau di luar localhost tepercaya.
+
+## MCP client stdio
+
+Gunakan stdio mode ketika client menjalankan proses server sendiri:
+
+```bash
+LOCAL_SHELL_MCP_WORKSPACE_ROOT=/path/to/workspace local-shell-mcp --mode stdio
+```
+
+Bentuk konfigurasi client yang umum:
+
+```json
+{
+  "mcpServers": {
+    "local-shell-mcp": {
+      "command": "local-shell-mcp",
+      "args": ["--mode", "stdio"],
+      "env": {
+        "LOCAL_SHELL_MCP_WORKSPACE_ROOT": "/path/to/workspace"
+      }
+    }
+  }
+}
+```
+
+Schema client berbeda-beda. Sebagian menyebut bagian ini `mcpServers`; yang lain memakai nama berbeda.
+
+## Pemeriksaan aman pertama
+
+Untuk client yang baru terhubung, mulai dengan:
+
+```text
+Call environment_get, then file_tree on the workspace root. Do not modify files yet.
+```
+
+Kemudian jalankan tugas terbatas dengan aturan edit, test, dan Git yang eksplisit.

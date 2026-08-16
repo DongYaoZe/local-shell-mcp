@@ -1,38 +1,72 @@
+<!-- i18n-source-sha256: 3986da6ff877609189b0d88d363aff1f5f45445f0cfe5ffa608a31929078542c -->
 # Ağ bağlantısı
 
-Bu sayfa “Ağ bağlantısı” senaryosunu açıklar ve sitenin ortak Runtime/Client yapısını korur.
+Makine dışındaki HTTP MCP client’ların erişilebilir bir HTTPS origin’e ihtiyacı vardır. Bu sayfa ağ yönlendirmesini açıklar; hangi runtime’ın seçileceğini değil.
 
-## Genel bakış
-
-Runtime, sunucu sürecinin nasıl çalıştığını ve hangi workspace’i kontrol ettiğini belirler. Client, ChatGPT veya başka bir MCP istemcisinin nasıl bağlandığını belirler. Docker, VS Code eklentisi, bağımsız ikililer, Python/pipx/kaynak kurulumları ve stdio Runtime seçenekleridir; ChatGPT bağlayıcısı, genel HTTP MCP istemcisi ve stdio MCP istemcisi Client bağlantılarıdır.
-
-## Ne zaman kullanılır
-
-- Seçilen Runtime veya Client yolu bu başlıkla eşleştiğinde bu sayfayı kullanın.
-- Workspace kökü, public base URL, MCP endpoint, kimlik doğrulama modu ve kullanılabilir host araçlarını tutarlı tutun.
-- ChatGPT web/app için `/mcp` ile biten bir HTTPS MCP endpoint yayımlayın.
-- Yerel MCP istemcileri için istemci desteğine göre HTTP localhost veya `local-shell-mcp --mode stdio` kullanın.
-
-## Adımlar
-
-1. Önce Runtime kurulum sayfasını seçin.
-2. Runtime’ı başlatın ve HTTP modu kullanılıyorsa `/healthz` değerini doğrulayın.
-3. Sonra Client bağlantı sayfasını seçin.
-4. Client içinde MCP endpoint veya stdio komutunu kaydedin.
-5. Etkin workspace ve ayarları doğrulamak için `environment_get` çağırın.
+client endpoint normalde `/mcp` ile biter:
 
 ```text
-Runtime: Docker / VS Code extension / binary / Python / stdio
-Client:  ChatGPT connector / generic HTTP MCP / generic stdio MCP
-Endpoint: https://your-host.example.com/mcp
+https://your-public-host.example.com/mcp
 ```
 
-## Doğrulama
+Sunucunun public base URL ayarı yalnızca origin’i içerir:
 
-- `environment_get` Runtime ayarlarını ve workspace’i doğrular.
-- `file_tree` görünen dosyaları doğrular.
-- `run_shell` komut ortamını doğrular.
+```env
+LOCAL_SHELL_MCP_PUBLIC_BASE_URL=https://your-public-host.example.com
+```
 
-## Notlar
+Bu base URL’ye `/mcp` eklemeyin.
 
-Küçük ve doğrulanabilir adımları tercih edin: incele, düzenle, diff kontrol et, test et, tara ve commit yap. Büyük görevler de denetlenebilir araç çağrılarına bölünmelidir.
+## Bağlantı seçenekleri
+
+| Seçenek | Ne zaman kullanılır |
+|---|---|
+| Compose tunnel sidecar | Yerleşik `tunnel` profile ile Docker Compose |
+| Harici tunnel | Yerel ağ dışından erişilmesi gereken herhangi bir runtime |
+| Caddy | Basit otomatik TLS |
+| Nginx veya Nginx Proxy Manager | Mevcut Nginx altyapısı |
+| Traefik | Mevcut container-native yönlendirme |
+
+## Yollar
+
+Tüm origin’i çalışan sunucuya iletin. Önemli yollar şunlardır:
+
+| Yol | Amaç |
+|---|---|
+| `/mcp` | MCP Streamable HTTP endpoint |
+| `/healthz`, `/readyz` | Sağlık kontrolleri |
+| `/.well-known/...` | Client discovery meta verileri |
+| `/oauth/...` | Client yetkilendirme akışı |
+| `/downloads/...` | İsteğe bağlı oluşturulan dosya bağlantıları |
+| `/join/...`, `/remote/...` | İsteğe bağlı remote-worker akışı |
+
+## Proxy davranışı
+
+Proxy yolları korumalı, request body’leri iletmeli, uzun response’ları desteklemeli ve çok kısa timeout’lardan kaçınmalıdır.
+
+## Kontroller
+
+```bash
+curl -i http://127.0.0.1:8765/healthz
+curl -i https://your-public-host.example.com/healthz
+```
+
+## Yaygın hatalar
+
+| Hata | Düzeltme |
+|---|---|
+| ChatGPT’de `https://host/mcp` yerine `https://host` kullanmak | `/mcp` yalnızca client endpoint’e eklenir |
+| `LOCAL_SHELL_MCP_PUBLIC_BASE_URL=https://host/mcp` ayarlamak | Yalnızca origin’i ayarlayın |
+| Yalnızca `/mcp` yolunu yönlendirmek | Discovery ve yetkilendirme yolları da çalışsın diye tüm origin’i yönlendirin |
+| Host runtime’ı çok geniş bir workspace ile çalıştırmak | Dar workspace veya Docker kullanın |
+
+## Önerilen eşleşmeler
+
+| Runtime | Ağ deseni |
+|---|---|
+| Sunucuda Docker Compose | Mevcut reverse proxy veya Compose tunnel profile |
+| Ev makinesinde Docker Compose | Outbound tunnel |
+| Dizüstünde VS Code extension | Oturum için geçici tunnel |
+| VM’de binary | VM veya ağ sınırında reverse proxy |
+| Python/source dev server | Genellikle yalnızca localhost |
+| Stdio mode | HTTP ağı yok; yerel MCP client kullanın |

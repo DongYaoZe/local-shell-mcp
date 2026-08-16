@@ -1,38 +1,72 @@
+<!-- i18n-source-sha256: 3986da6ff877609189b0d88d363aff1f5f45445f0cfe5ffa608a31929078542c -->
 # नेटवर्क कनेक्टिविटी
 
-यह पृष्ठ “नेटवर्क कनेक्टिविटी” परिदृश्य समझाता है और साइट की समान Runtime/Client संरचना का पालन करता है।
+मशीन से बाहर स्थित HTTP MCP client को पहुँच योग्य HTTPS origin चाहिए। यह पृष्ठ network routing के बारे में है, runtime चुनने के बारे में नहीं।
 
-## सारांश
-
-Runtime यह तय करता है कि सर्वर प्रक्रिया कैसे चलेगी और कौन-सा workspace नियंत्रित होगा। Client यह तय करता है कि ChatGPT या कोई अन्य MCP क्लाइंट कैसे जुड़ेगा। Docker, VS Code एक्सटेंशन, स्वतंत्र बाइनरी, Python/pipx/source स्थापना और stdio Runtime विकल्प हैं; ChatGPT कनेक्टर, सामान्य HTTP MCP क्लाइंट और stdio MCP क्लाइंट Client कनेक्शन हैं।
-
-## कब उपयोग करें
-
-- जब चुना गया Runtime या Client पथ इस शीर्षक से मेल खाए, तब इस पृष्ठ का उपयोग करें।
-- workspace root, public base URL, MCP endpoint, authentication mode और host पर उपलब्ध टूल को संगत रखें।
-- ChatGPT web/app के लिए `/mcp` पर समाप्त होने वाला HTTPS MCP endpoint उपलब्ध कराएँ।
-- स्थानीय MCP क्लाइंट के लिए क्लाइंट समर्थन के अनुसार HTTP localhost या `local-shell-mcp --mode stdio` का उपयोग करें।
-
-## चरण
-
-1. पहले Runtime स्थापना पृष्ठ चुनें।
-2. Runtime शुरू करें और HTTP मोड में `/healthz` जाँचें।
-3. फिर Client कनेक्शन पृष्ठ चुनें।
-4. Client में MCP endpoint या stdio command पंजीकृत करें।
-5. वास्तविक workspace और settings की जाँच के लिए `environment_get` कॉल करें।
+client endpoint सामान्यतः `/mcp` पर समाप्त होता है:
 
 ```text
-Runtime: Docker / VS Code extension / binary / Python / stdio
-Client:  ChatGPT connector / generic HTTP MCP / generic stdio MCP
-Endpoint: https://your-host.example.com/mcp
+https://your-public-host.example.com/mcp
 ```
 
-## सत्यापन
+Server की public base URL setting में केवल origin होता है:
 
-- `environment_get` Runtime settings और workspace की पुष्टि करता है।
-- `file_tree` दिखाई देने वाली फ़ाइलों की पुष्टि करता है।
-- `run_shell` command environment की पुष्टि करता है।
+```env
+LOCAL_SHELL_MCP_PUBLIC_BASE_URL=https://your-public-host.example.com
+```
 
-## टिप्पणियाँ
+इस base URL में `/mcp` शामिल न करें।
 
-छोटे और सत्यापित किए जा सकने वाले चरणों को प्राथमिकता दें: निरीक्षण, संपादन, diff, test, scan और commit। बड़े कार्यों को भी audit योग्य tool calls में बाँटें।
+## कनेक्टिविटी विकल्प
+
+| विकल्प | कब उपयोग करें |
+|---|---|
+| Compose tunnel sidecar | built-in `tunnel` profile वाला Docker Compose |
+| External tunnel | कोई भी runtime जिसे local network के बाहर से पहुँच योग्य होना चाहिए |
+| Caddy | सरल automatic TLS |
+| Nginx या Nginx Proxy Manager | मौजूदा Nginx infrastructure |
+| Traefik | मौजूदा container-native routing |
+
+## Paths
+
+पूरे origin को चल रहे server पर forward करें। महत्वपूर्ण paths में शामिल हैं:
+
+| Path | उद्देश्य |
+|---|---|
+| `/mcp` | MCP Streamable HTTP endpoint |
+| `/healthz`, `/readyz` | Health checks |
+| `/.well-known/...` | Client discovery metadata |
+| `/oauth/...` | Client authorization flow |
+| `/downloads/...` | वैकल्पिक generated file links |
+| `/join/...`, `/remote/...` | वैकल्पिक remote-worker flow |
+
+## Proxy behavior
+
+Proxy को paths सुरक्षित रखने, request bodies forward करने, लंबे responses support करने और बहुत छोटे timeouts से बचने की आवश्यकता है।
+
+## Checks
+
+```bash
+curl -i http://127.0.0.1:8765/healthz
+curl -i https://your-public-host.example.com/healthz
+```
+
+## सामान्य गलतियाँ
+
+| गलती | सुधार |
+|---|---|
+| ChatGPT में `https://host/mcp` के बजाय `https://host` उपयोग करना | `/mcp` केवल client endpoint में जोड़ें |
+| `LOCAL_SHELL_MCP_PUBLIC_BASE_URL=https://host/mcp` सेट करना | केवल origin सेट करें |
+| केवल `/mcp` route करना | पूरे origin को route करें ताकि discovery और authorization paths भी काम करें |
+| Host runtime को बहुत व्यापक workspace के साथ चलाना | संकीर्ण workspace या Docker उपयोग करें |
+
+## सुझाए गए संयोजन
+
+| Runtime | Network pattern |
+|---|---|
+| Server पर Docker Compose | Existing reverse proxy या Compose tunnel profile |
+| Home machine पर Docker Compose | Outbound tunnel |
+| Laptop पर VS Code extension | Session के लिए temporary tunnel |
+| VM पर binary | VM या network edge पर reverse proxy |
+| Python/source dev server | सामान्यतः केवल localhost |
+| Stdio mode | कोई HTTP path नहीं; local MCP client उपयोग करें |

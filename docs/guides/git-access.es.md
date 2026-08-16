@@ -1,38 +1,40 @@
+<!-- i18n-source-sha256: 3b7d6ab07c5d6bad2bfb22f366893819ac8de8754c7c28bcb35f24ea5695979c -->
 # Acceso a Git
 
-Esta página describe el escenario “Acceso a Git” y mantiene la estructura Runtime/Client común del sitio.
+`local-shell-mcp` usa la interfaz de línea de comandos estándar de Git mediante `run_shell`, `shell_start` o `job_start`. Los wrappers MCP dedicados para Git no se exponen deliberadamente: la CLI es completa, familiar para los coding agents y evita duplicar cada subcomando de Git en la lista de herramientas.
 
-## Resumen
+## Flujo habitual
 
-Runtime define cómo se ejecuta el proceso del servidor y qué espacio de trabajo controla. Client define cómo se conecta ChatGPT u otro cliente MCP. Docker, la extensión de VS Code, los binarios independientes, las instalaciones desde Python/pipx/código fuente y stdio son opciones de Runtime; el conector de ChatGPT, el cliente MCP HTTP genérico y el cliente MCP stdio son conexiones de Client.
+Use comandos acotados y no interactivos siempre que sea posible:
 
-## Cuándo usarlo
-
-- Usa esta página cuando la ruta de Runtime o Client elegida coincida con el título.
-- Mantén coherentes la raíz del espacio de trabajo, la base URL pública, el MCP endpoint, el modo de autenticación y las herramientas disponibles del host.
-- Para ChatGPT web/app, expón un MCP endpoint HTTPS que termine en `/mcp`.
-- Para clientes MCP locales, usa HTTP localhost o `local-shell-mcp --mode stdio` según lo que admita el cliente.
-
-## Pasos
-
-1. Elige primero la página de instalación del Runtime.
-2. Inicia el Runtime y verifica `/healthz` cuando uses el modo HTTP.
-3. Elige después la página de conexión del Client.
-4. Registra el MCP endpoint o el comando stdio en el Client.
-5. Llama a `environment_get` para comprobar el espacio de trabajo y los ajustes efectivos.
-
-```text
-Runtime: Docker / VS Code extension / binary / Python / stdio
-Client:  ChatGPT connector / generic HTTP MCP / generic stdio MCP
-Endpoint: https://your-host.example.com/mcp
+```bash
+git status --short --branch
+git diff --stat
+git diff
+git add -- path/to/file
+git commit -m "fix: concise description"
+git push origin HEAD
 ```
 
-## Verificación
+Una secuencia típica del agent es:
 
-- `environment_get` confirma los ajustes del Runtime y el espacio de trabajo.
-- `file_tree` confirma los archivos visibles.
-- `run_shell` confirma el entorno de comandos.
+1. Inspeccionar con `run_shell(command="git status --short --branch")`.
+2. Leer y editar solo los archivos relevantes.
+3. Ejecutar pruebas específicas.
+4. Revisar con `run_shell(command="git diff --check && git diff")`.
+5. Ejecutar `secret_scan` antes de commit o push.
+6. Hacer stage, commit y push con comandos Git CLI explícitos.
 
-## Notas
+Use `machine` en la misma herramienta shell cuando el repository esté en un remote worker.
 
-Prefiere pasos pequeños y verificables: inspeccionar, editar, revisar el diff, probar, escanear y confirmar. Las tareas grandes también deben dividirse en llamadas de herramientas auditables.
+## Credenciales
+
+Los deployments Docker pueden persistir ubicaciones comunes de credentials Git bajo `/persist/credentials`. Trate ese volume como sensible. Prefiera deploy keys limitadas al repository, tokens de GitHub App de corta duración, usuarios de automatización aislados y revisión manual antes del push.
+
+## Higiene de commits
+
+Mantenga los commits enfocados, omita caches generadas y build artifacts, registre las pruebas ejecutadas y evite hacer stage de cambios no relacionados. Para comandos destructivos como reset, clean o force-push, inspeccione primero el objetivo exacto.
+
+## Solución de problemas
+
+Cuando falle `git push`, revise la remote URL, persistencia de credenciales, branch protection y permisos del token. `gh auth status` es útil si GitHub CLI está instalado.

@@ -1,3 +1,4 @@
+<!-- i18n-source-sha256: db40797f92f76326aa62db50ac4bb293edb4248791806c2fb46477a65c3e73cc -->
 # VS Code 擴展運行時
 
 VS Code 擴展是同一個 `local-shell-mcp` 服務的啓動器和便捷 UI。它屬於運行時選擇，因爲它會爲當前編輯器工作區啓動服務進程。

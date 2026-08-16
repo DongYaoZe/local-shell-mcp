@@ -1,38 +1,55 @@
+<!-- i18n-source-sha256: 4aec137923c38de0ed4a1b760b5dbd6ce99090d508ce3fe838d35ad44b4ba4f1 -->
 # Dziennik audytu
 
-Ta strona opisuje scenariusz „Dziennik audytu” i zachowuje wspólną strukturę Runtime/Client dokumentacji.
+`local-shell-mcp` zapisuje ustrukturyzowane wpisy audytu, aby ułatwić odtworzenie działań podłączonego client.
 
-## Przegląd
-
-Runtime określa, jak działa proces serwera i którym workspace steruje. Client określa, jak łączy się ChatGPT lub inny klient MCP. Docker, rozszerzenie VS Code, samodzielne pliki binarne, instalacje Python/pipx/ze źródeł i stdio to opcje Runtime; łącznik ChatGPT, ogólny klient HTTP MCP i klient MCP stdio to połączenia Client.
-
-## Kiedy używać
-
-- Użyj tej strony, gdy wybrana ścieżka Runtime lub Client odpowiada tytułowi.
-- Zachowaj spójność katalogu głównego workspace, publicznego base URL, MCP endpoint, trybu uwierzytelniania i dostępnych narzędzi hosta.
-- Dla ChatGPT web/app wystaw HTTPS MCP endpoint kończący się na `/mcp`.
-- Dla lokalnych klientów MCP użyj HTTP localhost albo `local-shell-mcp --mode stdio` zależnie od obsługi klienta.
-
-## Kroki
-
-1. Najpierw wybierz stronę instalacji Runtime.
-2. Uruchom Runtime i sprawdź `/healthz`, gdy używany jest tryb HTTP.
-3. Następnie wybierz stronę połączenia Client.
-4. Zarejestruj MCP endpoint albo polecenie stdio w Client.
-5. Wywołaj `environment_get`, aby sprawdzić rzeczywisty workspace i ustawienia.
+Domyślna ścieżka:
 
 ```text
-Runtime: Docker / VS Code extension / binary / Python / stdio
-Client:  ChatGPT connector / generic HTTP MCP / generic stdio MCP
-Endpoint: https://your-host.example.com/mcp
+/workspace/.local-shell-mcp/audit.jsonl
 ```
 
-## Weryfikacja
+## Co jest rejestrowane
 
-- `environment_get` potwierdza ustawienia Runtime i workspace.
-- `file_tree` potwierdza widoczne pliki.
-- `run_shell` potwierdza środowisko poleceń.
+Wpisy audytu obejmują zdarzenia takie jak:
 
-## Uwagi
+- Początek/koniec tool call.
+- Metadane wykonywania poleceń.
+- Timeouty i obsłużone błędy.
+- Rejestracja remote worker i aktywność jobów.
+- Tworzenie i unieważnianie file links.
+- Zdarzenia związane z uwierzytelnianiem, gdy ma to zastosowanie.
 
-Preferuj małe, weryfikowalne kroki: inspekcja, edycja, diff, test, skanowanie i commit. Duże zadania również należy dzielić na audytowalne wywołania narzędzi.
+Wrażliwe argumenty są redagowane, jeśli serwer potrafi je rozpoznać.
+
+## Odczyt dziennika
+
+Użyj narzędzia MCP:
+
+```text
+audit_tail
+```
+
+Lub sprawdź plik bezpośrednio:
+
+```bash
+tail -n 100 /workspace/.local-shell-mcp/audit.jsonl
+```
+
+## Zastosowanie operacyjne
+
+Dzienniki audytu są szczególnie przydatne do:
+
+- Przeglądania poleceń, które zmieniły pliki.
+- Sprawdzania, czy użyto remote worker.
+- Diagnozowania nieoczekiwanych awarii.
+- Wykrywania przypadkowego ujawnienia file links.
+- Wspierania incident response po błędzie publicznego deployment.
+
+## Retencja
+
+Rozmiar dziennika ogranicza `LOCAL_SHELL_MCP_MAX_AUDIT_LOG_BYTES`. Jeśli potrzebujesz dłuższej retencji, rotuj go lub eksportuj na zewnątrz.
+
+## Ograniczenia
+
+Dziennik audytu nie jest sandboxem. Pomaga w śledzeniu działań, ale nie zapobiega wykonywaniu przez podłączony model operacji w granicach skonfigurowanych uprawnień.

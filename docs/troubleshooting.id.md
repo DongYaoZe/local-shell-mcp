@@ -1,18 +1,18 @@
+<!-- i18n-source-sha256: ed71ed496e65545264c76f97a154e8e0758faf58be0ba74c24c82f3b860ff4f2 -->
 # Pemecahan masalah
 
-Check server health:
+Periksa kesehatan layanan:
 
 ```bash
-docker compose ps
-docker compose logs --tail=200 local-shell-mcp
 curl -i http://127.0.0.1:8765/healthz
 ```
 
-Common checks:
+Periksa log:
 
-- Public HTTPS URL is reachable.
-- MCP endpoint ends with `/mcp`.
-- OAuth values match the current deployment.
-- Reverse proxy supports streaming requests.
-- Remote worker invite has not expired.
-- Workspace permissions allow writes to `/workspace/.local-shell-mcp`.
+```bash
+docker compose logs --tail=100 local-shell-mcp
+```
+
+Jika ChatGPT tidak dapat terhubung, pastikan `LOCAL_SHELL_MCP_PUBLIC_BASE_URL` sama persis dengan origin HTTPS publik dan bahwa `/mcp`, metadata OAuth, serta `/healthz` dapat dijangkau melalui tunnel atau reverse proxy.
+
+Jika remote worker tidak muncul, pastikan mode remote aktif, undangan belum kedaluwarsa, dan mesin remote dapat membuat permintaan HTTPS keluar ke server kontrol.

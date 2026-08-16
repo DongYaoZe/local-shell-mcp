@@ -1,38 +1,55 @@
+<!-- i18n-source-sha256: 4aec137923c38de0ed4a1b760b5dbd6ce99090d508ce3fe838d35ad44b4ba4f1 -->
 # Log de auditoria
 
-Esta página descreve o cenário “Log de auditoria” e mantém a estrutura Runtime/Client comum do site.
+`local-shell-mcp` grava entradas de auditoria estruturadas para ajudar a reconstruir o que um client conectado fez.
 
-## Visão geral
-
-Runtime define como o processo do servidor é executado e qual workspace ele controla. Client define como ChatGPT ou outro cliente MCP se conecta. Docker, extensão do VS Code, binários independentes, instalações por Python/pipx/código-fonte e stdio são opções de Runtime; conector ChatGPT, cliente MCP HTTP genérico e cliente MCP stdio são conexões Client.
-
-## Quando usar
-
-- Use esta página quando o caminho de Runtime ou Client escolhido corresponder ao título.
-- Mantenha consistentes a raiz do workspace, a base URL pública, o MCP endpoint, o modo de autenticação e as ferramentas disponíveis no host.
-- Para ChatGPT web/app, exponha um MCP endpoint HTTPS terminado em `/mcp`.
-- Para clientes MCP locais, use HTTP localhost ou `local-shell-mcp --mode stdio` conforme o suporte do cliente.
-
-## Passos
-
-1. Escolha primeiro a página de instalação do Runtime.
-2. Inicie o Runtime e verifique `/healthz` quando usar o modo HTTP.
-3. Depois escolha a página de conexão do Client.
-4. Registre o MCP endpoint ou o comando stdio no Client.
-5. Chame `environment_get` para verificar o workspace e as configurações efetivas.
+Caminho padrão:
 
 ```text
-Runtime: Docker / VS Code extension / binary / Python / stdio
-Client:  ChatGPT connector / generic HTTP MCP / generic stdio MCP
-Endpoint: https://your-host.example.com/mcp
+/workspace/.local-shell-mcp/audit.jsonl
 ```
 
-## Verificação
+## O que é registrado
 
-- `environment_get` confirma configurações do Runtime e workspace.
-- `file_tree` confirma arquivos visíveis.
-- `run_shell` confirma o ambiente de comandos.
+As entradas de auditoria abrangem eventos como:
 
-## Notas
+- Início/fim de tool calls.
+- Metadados de execução de comandos.
+- Timeouts e erros tratados.
+- Registro de remote workers e atividade de jobs.
+- Criação e revogação de file links.
+- Eventos relacionados à autenticação, quando aplicável.
 
-Prefira etapas pequenas e verificáveis: inspecionar, editar, ver o diff, testar, escanear e fazer commit. Tarefas grandes também devem ser divididas em chamadas de ferramentas auditáveis.
+Argumentos sensíveis são ocultados quando o servidor consegue identificá-los.
+
+## Lendo o log
+
+Use a ferramenta MCP:
+
+```text
+audit_tail
+```
+
+Ou inspecione diretamente:
+
+```bash
+tail -n 100 /workspace/.local-shell-mcp/audit.jsonl
+```
+
+## Uso operacional
+
+Logs de auditoria são especialmente úteis para:
+
+- Revisar comandos que alteraram arquivos.
+- Verificar se um remote worker foi usado.
+- Depurar falhas inesperadas.
+- Detectar exposição acidental de file links.
+- Apoiar a resposta a incidentes após um erro de deployment público.
+
+## Retenção
+
+O log é limitado por `LOCAL_SHELL_MCP_MAX_AUDIT_LOG_BYTES`. Faça rotação ou exporte-o externamente se precisar de retenção longa.
+
+## Limitações
+
+Logs de auditoria não são um sandbox. Eles ajudam na rastreabilidade, mas não impedem que um modelo conectado aja dentro da autoridade configurada.

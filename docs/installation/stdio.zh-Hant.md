@@ -1,3 +1,4 @@
+<!-- i18n-source-sha256: a3d2dc835f99feed33a73ae3dd880dabab04a37d7461b99f1fa49c33ba0506e1 -->
 # Stdio 運行時
 
 stdio 模式用於本地 MCP 客戶端：客戶端把 `local-shell-mcp` 作爲子進程啓動，並通過標準輸入 / 輸出通信。

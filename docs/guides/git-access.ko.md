@@ -1,38 +1,40 @@
+<!-- i18n-source-sha256: 3b7d6ab07c5d6bad2bfb22f366893819ac8de8754c7c28bcb35f24ea5695979c -->
 # Git 접근
 
-이 페이지는 “Git 접근” 시나리오를 설명하며 문서 사이트의 공통 Runtime/Client 구조를 따릅니다.
+`local-shell-mcp`는 `run_shell`, `shell_start`, `job_start`를 통해 표준 Git CLI를 사용합니다. 전용 Git MCP wrapper는 의도적으로 제공하지 않습니다. CLI는 완전하고 coding agent에게 익숙하며, 모든 Git subcommand를 도구 목록에 중복 구현하지 않아도 되기 때문입니다.
 
-## 개요
+## 일반 워크플로
 
-Runtime은 서버 프로세스가 어떻게 실행되고 어떤 워크스페이스를 제어하는지 정합니다. Client는 ChatGPT 또는 다른 MCP 클라이언트가 어떻게 연결되는지 정합니다. Docker, VS Code 확장, 독립 실행 바이너리, Python/pipx/소스 설치, stdio는 Runtime 선택지입니다. ChatGPT 커넥터, 일반 HTTP MCP 클라이언트, stdio MCP 클라이언트는 Client 연결입니다.
+가능하면 범위가 제한된 비대화형 명령을 사용하십시오.
 
-## 사용 시점
-
-- 선택한 Runtime 또는 Client 경로가 이 페이지 제목과 일치할 때 사용합니다.
-- 워크스페이스 루트, 공개 base URL, MCP endpoint, 인증 모드, 호스트에서 사용할 수 있는 도구를 일관되게 유지합니다.
-- ChatGPT 웹/App에는 `/mcp`로 끝나는 HTTPS MCP endpoint를 노출합니다.
-- 로컬 MCP 클라이언트는 지원 범위에 따라 HTTP localhost 또는 `local-shell-mcp --mode stdio`를 사용합니다.
-
-## 단계
-
-1. 먼저 Runtime 설치 페이지를 선택합니다.
-2. Runtime을 시작하고 HTTP 모드에서는 `/healthz`를 확인합니다.
-3. 그다음 Client 연결 페이지를 선택합니다.
-4. Client에 MCP endpoint 또는 stdio 명령을 등록합니다.
-5. `environment_get`를 호출해 실제 워크스페이스와 설정을 확인합니다.
-
-```text
-Runtime: Docker / VS Code extension / binary / Python / stdio
-Client:  ChatGPT connector / generic HTTP MCP / generic stdio MCP
-Endpoint: https://your-host.example.com/mcp
+```bash
+git status --short --branch
+git diff --stat
+git diff
+git add -- path/to/file
+git commit -m "fix: concise description"
+git push origin HEAD
 ```
 
-## 검증
+일반적인 agent 순서:
 
-- `environment_get`는 Runtime 설정과 워크스페이스를 확인합니다.
-- `file_tree`는 보이는 파일을 확인합니다.
-- `run_shell`은 명령 실행 환경을 확인합니다.
+1. `run_shell(command="git status --short --branch")`로 상태를 확인합니다.
+2. 관련 파일만 읽고 수정합니다.
+3. 대상 테스트를 실행합니다.
+4. `run_shell(command="git diff --check && git diff")`로 변경을 검토합니다.
+5. commit 또는 push 전에 `secret_scan`을 실행합니다.
+6. 명시적인 Git CLI 명령으로 stage, commit, push합니다.
 
-## 참고
+repository가 remote worker에 있으면 같은 shell tool에 `machine`을 사용하십시오.
 
-작고 검증 가능한 단계, 즉 확인, 편집, diff, 테스트, 스캔, 커밋을 우선합니다. 큰 작업도 감사 가능한 도구 호출로 나눕니다.
+## Credential
+
+Docker deployment는 일반적인 Git credential 위치를 `/persist/credentials` 아래에 지속적으로 저장할 수 있습니다. 이 volume은 민감하게 취급하십시오. repository-scoped deploy key, 수명이 짧은 GitHub App token, 격리된 automation user를 우선 사용하고 push 전에 수동 검토를 수행하십시오.
+
+## Commit 관리
+
+commit을 하나의 논리 변경에 집중시키고, 생성 cache와 build artifact를 제외하며, 실행한 test를 기록하고, 관련 없는 변경을 stage하지 마십시오. reset, clean, force-push 같은 파괴적 명령은 정확한 대상을 먼저 확인하십시오.
+
+## 문제 해결
+
+`git push`가 실패하면 remote URL, credential persistence, branch protection, token permission을 확인하십시오. GitHub CLI가 설치되어 있다면 `gh auth status`가 유용합니다.

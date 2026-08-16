@@ -1,3 +1,4 @@
+<!-- i18n-source-sha256: 8b4e2e48e58e65721bf5ebf9f7b1d8aedf34d62d5a7948d36d6b9102ee1f6cc3 -->
 # 運行時選擇與部署模型
 
 `local-shell-mcp` 有兩個相互獨立的選擇：

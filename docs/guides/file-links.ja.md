@@ -1,38 +1,47 @@
+<!-- i18n-source-sha256: d758caead1c922385409aceebf498662f25f4cbf252a48d65b29d91f07e5a173 -->
 # ファイルリンク
 
-このページでは「ファイルリンク」の場面を説明し、サイト全体で共通の Runtime/Client 構造に従います。
+`local-shell-mcp` は、制御された workspace のファイルを高エントロピーの bearer URL で公開できます。AI が生成した report、archive、PDF、screenshot などの artifact を chat からダウンロードまたは表示する必要がある場合に便利です。
 
-## 概要
+## ファイルリンクを使う場面
 
-Runtime はサーバープロセスの起動方法と制御するワークスペースを決めます。Client は ChatGPT または別の MCP クライアントの接続方法を決めます。Docker、VS Code 拡張、スタンドアロンバイナリ、Python/pipx/ソースインストール、stdio は Runtime の選択肢です。ChatGPT コネクタ、汎用 HTTP MCP クライアント、stdio MCP クライアントは Client 接続です。
+ファイルリンクは次の用途に使用します。
 
-## 利用する場面
+- 生成した PDF や report。
+- Screenshot と browser artifact。
+- Build output。
+- Chat に貼るには大きすぎる log。
+- 手動確認用に準備した archive。
 
-- 選択した Runtime または Client の経路がこのページのタイトルに一致する場合に使用します。
-- ワークスペースルート、公開 base URL、MCP endpoint、認証モード、ホストで利用できるツールをそろえます。
-- ChatGPT の Web/App では `/mcp` で終わる HTTPS MCP endpoint を公開します。
-- ローカル MCP クライアントでは、対応状況に応じて HTTP localhost または `local-shell-mcp --mode stdio` を使用します。
+secret、private key、credential store、無関係な個人データにはファイルリンクを使用しないでください。
 
-## 手順
+## 一般的な流れ
 
-1. まず Runtime のインストールページを選びます。
-2. Runtime を起動し、HTTP モードでは `/healthz` を確認します。
-3. 次に Client 接続ページを選びます。
-4. Client に MCP endpoint または stdio コマンドを登録します。
-5. `environment_get` を呼び出して実際のワークスペースと設定を確認します。
+1. `/workspace` 配下でファイルを生成または見つけます。
+2. TTL と任意の download limit を指定して `link_create` を呼び出します。ファイルをブラウザーや Markdown image で直接表示したい場合は `inline=true` を指定します。既定は `false` で、attachment download になります。
+3. 返された URL を共有します。
+4. 不要になったらリンクを revoke します。
 
-```text
-Runtime: Docker / VS Code extension / binary / Python / stdio
-Client:  ChatGPT connector / generic HTTP MCP / generic stdio MCP
-Endpoint: https://your-host.example.com/mcp
-```
+## 関連ツール
 
-## 検証
+| Tool | 用途 |
+|---|---|
+| `link_create` | Workspace file 用の tokenized URL を作成します。 |
+| `link_list` | 有効なリンクを表示します。 |
+| `link_revoke` | Expiry 前にリンクを無効化します。 |
 
-- `environment_get` は Runtime 設定とワークスペースを確認します。
-- `file_tree` は見えているファイルを確認します。
-- `run_shell` はコマンド実行環境を確認します。
+## 制御項目
 
-## 注記
+設定オプションには次が含まれます。
 
-小さく検証可能な手順を優先します。確認、編集、diff、テスト、スキャン、コミットの順に進めます。大きな作業も監査可能なツール呼び出しに分解します。
+- `LOCAL_SHELL_MCP_FILE_DOWNLOAD_ENABLED`
+- `LOCAL_SHELL_MCP_FILE_DOWNLOAD_DEFAULT_TTL_S`
+- `LOCAL_SHELL_MCP_FILE_DOWNLOAD_MAX_TTL_S`
+- `LOCAL_SHELL_MCP_FILE_DOWNLOAD_DEFAULT_MAX_DOWNLOADS`
+- `LOCAL_SHELL_MCP_FILE_DOWNLOAD_MAX_FILE_BYTES`
+
+機密性の高い artifact には短い TTL を使用し、単一の受信者向けリンクでは maximum download count を設定してください。
+
+## セキュリティ上の注意
+
+ファイルリンクは bearer URL です。URL を知っている人は、期限切れ、download limit 到達、または revoke されるまでファイルをダウンロードできます。一時的な secret と同様に扱ってください。Inline response には CSP sandbox と `X-Content-Type-Options: nosniff` が含まれるため、active format が LSM origin にアクセスしたり、sandbox なしで same-origin content として実行されたりすることを防ぎます。

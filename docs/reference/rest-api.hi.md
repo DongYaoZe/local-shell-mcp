@@ -1,38 +1,44 @@
+<!-- i18n-source-sha256: 87dd7fb66311534dcd5a7217bba8c809f71fe6189e8c39b3e265da923cc82d22 -->
 # REST API
 
-यह पृष्ठ “REST API” परिदृश्य समझाता है और साइट की समान Runtime/Client संरचना का पालन करता है।
+मुख्य interface `/mcp` पर MCP है। Health checks, file links और चुनी हुई service operations के लिए REST surface भी उपलब्ध है।
 
-## सारांश
+## Health
 
-Runtime यह तय करता है कि सर्वर प्रक्रिया कैसे चलेगी और कौन-सा workspace नियंत्रित होगा। Client यह तय करता है कि ChatGPT या कोई अन्य MCP क्लाइंट कैसे जुड़ेगा। Docker, VS Code एक्सटेंशन, स्वतंत्र बाइनरी, Python/pipx/source स्थापना और stdio Runtime विकल्प हैं; ChatGPT कनेक्टर, सामान्य HTTP MCP क्लाइंट और stdio MCP क्लाइंट Client कनेक्शन हैं।
-
-## कब उपयोग करें
-
-- जब चुना गया Runtime या Client पथ इस शीर्षक से मेल खाए, तब इस पृष्ठ का उपयोग करें।
-- workspace root, public base URL, MCP endpoint, authentication mode और host पर उपलब्ध टूल को संगत रखें।
-- ChatGPT web/app के लिए `/mcp` पर समाप्त होने वाला HTTPS MCP endpoint उपलब्ध कराएँ।
-- स्थानीय MCP क्लाइंट के लिए क्लाइंट समर्थन के अनुसार HTTP localhost या `local-shell-mcp --mode stdio` का उपयोग करें।
-
-## चरण
-
-1. पहले Runtime स्थापना पृष्ठ चुनें।
-2. Runtime शुरू करें और HTTP मोड में `/healthz` जाँचें।
-3. फिर Client कनेक्शन पृष्ठ चुनें।
-4. Client में MCP endpoint या stdio command पंजीकृत करें।
-5. वास्तविक workspace और settings की जाँच के लिए `environment_get` कॉल करें।
-
-```text
-Runtime: Docker / VS Code extension / binary / Python / stdio
-Client:  ChatGPT connector / generic HTTP MCP / generic stdio MCP
-Endpoint: https://your-host.example.com/mcp
+```http
+GET /healthz
 ```
 
-## सत्यापन
+Server health और basic status लौटाता है।
 
-- `environment_get` Runtime settings और workspace की पुष्टि करता है।
-- `file_tree` दिखाई देने वाली फ़ाइलों की पुष्टि करता है।
-- `run_shell` command environment की पुष्टि करता है।
+## MCP
 
-## टिप्पणियाँ
+```http
+POST /mcp
+```
 
-छोटे और सत्यापित किए जा सकने वाले चरणों को प्राथमिकता दें: निरीक्षण, संपादन, diff, test, scan और commit। बड़े कार्यों को भी audit योग्य tool calls में बाँटें।
+ChatGPT और अन्य MCP client द्वारा उपयोग किया जाने वाला Streamable HTTP MCP endpoint।
+
+## REST के माध्यम से tool calls
+
+REST tool calls एक समान success/error envelopes का उपयोग करते हैं। Validation errors raw framework exceptions के बजाय structured `ok: false` payload लौटाते हैं।
+
+## Agent Skills
+
+स्थिर Skills registry REST के माध्यम से भी उपलब्ध है:
+
+```text
+GET  /tools/skill_list
+POST /tools/skill_load       {"name": "debugging"}
+POST /tools/skill_read  {"name": "debugging", "path": "checklist.md"}
+```
+
+Skill directories में बदलाव अगली call पर दिखाई देते हैं और MCP tool list को नहीं बदलते।
+
+## File links
+
+Tokenized file downloads built-in HTTP app से serve होते हैं। Links bearer URL हैं जिनमें TTL, वैकल्पिक maximum-download limit और revocation support है।
+
+## Authentication
+
+Public deployments में OAuth का उपयोग करना चाहिए। Development के लिए localhost bypass सक्षम किया जा सकता है, लेकिन unauthenticated public access असुरक्षित है।

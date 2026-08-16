@@ -1,12 +1,8 @@
+<!-- i18n-source-sha256: 1f30fc9935125c84fb0838d17ec894d78aaa6253fe3903356414aac716ba2adc -->
 # Sicherheit
 
-Bei öffentlicher Bereitstellung OAuth aktivieren und weder Docker-Socket, Host-Root noch langlebige Zugangsdaten einbinden.
+Verwenden Sie OAuth für öffentliche Bereitstellungen. Wählen Sie starke Werte für `LOCAL_SHELL_MCP_OAUTH_ADMIN_PIN` und `LOCAL_SHELL_MCP_OAUTH_JWT_SECRET` und halten Sie sie geheim.
 
-Mandatory rules:
+Standardmäßig sind Pfadoperationen auf den Workspace beschränkt und sensible Pfadbestandteile werden blockiert. Der Full-container-Modus hebt die eingebauten Workspace- und Pfadbeschränkungen auf und ist nur für wegwerfbare Container oder VMs vorgesehen.
 
-1. Keep OAuth enabled for public deployments.
-2. Do not mount `/var/run/docker.sock`.
-3. Do not mount the host root filesystem.
-4. Do not expose unauthenticated MCP tools on the public internet.
-5. Treat file links and credential volumes as sensitive.
-6. Use disposable containers or VMs when granting broad authority.
+Generierte Datei-Download-Links sind öffentliche Bearer-URLs. Sie werden durch hochentropische Tokens, TTLs, optionale Download-Anzahllimits, optionale Größenlimits und Widerruf geschützt.
