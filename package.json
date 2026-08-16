@@ -33,7 +33,10 @@
         "@deepseek-ai/dsh-client-ui-conversation"
       ],
       "platform": "web"
-    }
+    },
+    "category": "extension",
+    "displayName": "Local Shell MCP",
+    "image": "https://raw.githubusercontent.com/fwerkor/local-shell-mcp/main/docs/assets/logo.svg"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
