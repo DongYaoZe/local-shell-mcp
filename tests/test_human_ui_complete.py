@@ -969,8 +969,11 @@ async def test_tmux_scrollback_uses_copy_mode_without_replacing_terminal_stream(
             mode = "copy-mode"
             position = 0
             return SimpleNamespace(ok=True, stdout="", stderr="")
-        if args[:2] == ["send-keys", "-X"] and args[-2] == "goto-line":
-            position = int(args[-1])
+        if args[:2] == ["send-keys", "-X"] and args[-1] == "history-bottom":
+            position = 0
+            return SimpleNamespace(ok=True, stdout="", stderr="")
+        if args[0] == "send-keys" and args[-1] == "scroll-up":
+            position = int(args[args.index("-N") + 1])
             return SimpleNamespace(ok=True, stdout="", stderr="")
         if args[:2] == ["send-keys", "-X"] and args[-1] == "cancel":
             mode = ""
@@ -992,12 +995,13 @@ async def test_tmux_scrollback_uses_copy_mode_without_replacing_terminal_stream(
     state = await ui._tmux_scroll_to(process, 120)
     assert state["position"] == 120
     assert any(call[0] == "copy-mode" for call in calls)
-    assert any(call[-2:] == ["goto-line", "120"] for call in calls)
+    assert any(call[-1] == "history-bottom" for call in calls)
+    assert any(call[-1] == "scroll-up" and call[call.index("-N") + 1] == "120" for call in calls)
 
     state = await ui._tmux_scroll_to(process, 0)
     assert state["position"] == 0
     assert any(call[-1] == "cancel" for call in calls)
-    assert all(call[call.index("-t") + 1] == "=demo.test" for call in calls if "-t" in call)
+    assert all(call[call.index("-t") + 1] == "=demo.test:" for call in calls if "-t" in call)
 
     unsupported = await ui._tmux_scrollback_state(SimpleNamespace())
     assert unsupported == {
@@ -1029,7 +1033,15 @@ async def test_tmux_scrollback_state_rejects_invalid_tmux_results(monkeypatch, r
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("failure", "message"), [("cancel", "leave"), ("copy-mode", "enter"), ("goto-line", "scroll")])
+@pytest.mark.parametrize(
+    ("failure", "message"),
+    [
+        ("cancel", "leave"),
+        ("copy-mode", "enter"),
+        ("history-bottom", "scroll"),
+        ("scroll-up", "scroll"),
+    ],
+)
 async def test_tmux_scroll_reports_control_failures(monkeypatch, failure, message):
     mode = "copy-mode" if failure == "cancel" else ""
     position = 3 if failure == "cancel" else 0
@@ -1038,7 +1050,7 @@ async def test_tmux_scroll_reports_control_failures(monkeypatch, failure, messag
         nonlocal mode, position
         if args[0] == "display-message":
             return SimpleNamespace(ok=True, stdout=f"20\t{mode}\t{position if mode else ''}\n", stderr="")
-        action = "copy-mode" if args[0] == "copy-mode" else args[-2] if args[-1].isdigit() else args[-1]
+        action = "copy-mode" if args[0] == "copy-mode" else args[-1]
         if action == failure:
             return SimpleNamespace(ok=False, stdout="", stderr="")
         if args[0] == "copy-mode":
@@ -1103,6 +1115,54 @@ async def test_tmux_scrollback_cleanup_waits_for_last_attachment(monkeypatch):
     await ui._release_tmux_scrollback_attachment(process, 1, first)
     assert scroll_requests == [0]
     assert copy_mode is False
+
+
+@pytest.mark.asyncio
+async def test_tmux_scrollback_cleanup_restores_preexisting_copy_position(monkeypatch):
+    copy_mode = True
+    position = 17
+    calls = []
+    process = SimpleNamespace(_tmux_session_id="shared")
+
+    async def fake_state(process):
+        return {
+            "type": "scrollback",
+            "supported": True,
+            "history": 50,
+            "position": position if copy_mode else 0,
+            "copy_mode": copy_mode,
+        }
+
+    async def fake_tmux(args, timeout_s=10, *, bypass_limit=False):
+        nonlocal copy_mode, position
+        calls.append(list(args))
+        assert bypass_limit is True
+        if args[0] == "copy-mode":
+            copy_mode = True
+            position = 0
+            return SimpleNamespace(ok=True, stdout="", stderr="")
+        if args[:2] == ["send-keys", "-X"] and args[-1] == "history-bottom":
+            position = 0
+            return SimpleNamespace(ok=True, stdout="", stderr="")
+        if args[0] == "send-keys" and args[-1] == "scroll-up":
+            position = int(args[args.index("-N") + 1])
+            return SimpleNamespace(ok=True, stdout="", stderr="")
+        raise AssertionError(args)
+
+    monkeypatch.setattr(ui, "_tmux_scrollback_state", fake_state)
+    monkeypatch.setattr(ui, "tmux", fake_tmux)
+
+    registration = await ui._register_tmux_scrollback_attachment(process, 1)
+    copy_mode = False
+    position = 0
+
+    await ui._release_tmux_scrollback_attachment(process, 1, registration)
+
+    assert copy_mode is True
+    assert position == 17
+    assert ["copy-mode", "-t", "=shared:"] in calls
+    assert ["send-keys", "-X", "-t", "=shared:", "history-bottom"] in calls
+    assert ["send-keys", "-N", "17", "-X", "-t", "=shared:", "scroll-up"] in calls
 
 
 @pytest.mark.asyncio
