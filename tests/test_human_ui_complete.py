@@ -1177,9 +1177,7 @@ async def test_tmux_scrollback_attachment_coordination_error_paths(monkeypatch):
 
     monkeypatch.setattr(ui, "_tmux_scrollback_state", failing_state)
     registration = await ui._register_tmux_scrollback_attachment(process, 2)
-    assert registration is not None
-    assert registration[1].initial_copy_mode is None
-    await ui._release_tmux_scrollback_attachment(process, 2, registration)
+    assert registration is None
     assert "error-case" not in ui._TMUX_SCROLLBACK_ATTACHMENTS
 
     stale_group = ui._TmuxScrollbackAttachmentGroup()
@@ -1194,6 +1192,105 @@ async def test_tmux_scrollback_attachment_coordination_error_paths(monkeypatch):
         cleanup_process, 4, ("cleanup-error", cleanup_group)
     )
     assert "cleanup-error" not in ui._TMUX_SCROLLBACK_ATTACHMENTS
+
+
+@pytest.mark.asyncio
+async def test_tmux_scrollback_requests_are_serialized_per_session(monkeypatch):
+    group = ui._TmuxScrollbackAttachmentGroup()
+    group.initial_copy_mode = False
+    registration = ("shared", group)
+    process = SimpleNamespace(_tmux_session_id="shared")
+    position = 0
+    active = 0
+    max_active = 0
+
+    async def fake_state(process):
+        return {
+            "type": "scrollback",
+            "supported": True,
+            "history": 100,
+            "position": position,
+            "copy_mode": position > 0,
+        }
+
+    async def fake_scroll(process, requested):
+        nonlocal active, max_active, position
+        active += 1
+        max_active = max(max_active, active)
+        await asyncio.sleep(0.01)
+        position = requested
+        active -= 1
+        return await fake_state(process)
+
+    monkeypatch.setattr(ui, "_tmux_scrollback_state", fake_state)
+    monkeypatch.setattr(ui, "_tmux_scroll_to", fake_scroll)
+
+    await asyncio.gather(
+        ui._tmux_apply_scrollback_request(process, registration, {"position": 20}),
+        ui._tmux_apply_scrollback_request(process, registration, {"position": 35}),
+    )
+
+    assert max_active == 1
+    assert position == 35
+    assert group.owned_copy_mode is True
+
+
+@pytest.mark.asyncio
+async def test_tmux_terminal_input_leaves_webui_owned_copy_mode(monkeypatch):
+    group = ui._TmuxScrollbackAttachmentGroup()
+    group.initial_copy_mode = False
+    group.owned_copy_mode = True
+    registration = ("shared", group)
+    events = []
+
+    class Process:
+        _tmux_session_id = "shared"
+
+        async def write(self, data):
+            events.append(("write", data))
+
+    async def fake_scroll(process, position):
+        events.append(("scroll", position))
+        return {
+            "type": "scrollback",
+            "supported": True,
+            "history": 100,
+            "position": 0,
+            "copy_mode": False,
+        }
+
+    monkeypatch.setattr(ui, "_tmux_scroll_to", fake_scroll)
+
+    await ui._tmux_write_terminal_input(Process(), registration, b"echo ok\r")
+
+    assert events == [("scroll", 0), ("write", b"echo ok\r")]
+    assert group.owned_copy_mode is False
+
+
+@pytest.mark.asyncio
+async def test_tmux_scrollback_state_suppresses_internal_audit(monkeypatch):
+    active = False
+
+    class AuditContext:
+        def __enter__(self):
+            nonlocal active
+            active = True
+
+        def __exit__(self, exc_type, exc, tb):
+            nonlocal active
+            active = False
+
+    async def fake_tmux(args, timeout_s=10, *, bypass_limit=False):
+        assert active is True
+        return SimpleNamespace(ok=True, stdout="10\t\t\n", stderr="")
+
+    monkeypatch.setattr(ui, "suppress_audit", lambda: AuditContext())
+    monkeypatch.setattr(ui, "tmux", fake_tmux)
+
+    state = await ui._tmux_scrollback_state(SimpleNamespace(_tmux_session_id="demo"))
+
+    assert state["history"] == 10
+    assert active is False
 
 
 @pytest.mark.asyncio

@@ -1800,16 +1800,17 @@ async def _tmux_scrollback_state(process: Any) -> dict[str, Any]:
         }
 
     target = f"={session_id}:"
-    result = await tmux(
-        [
-            "display-message",
-            "-p",
-            "-t",
-            target,
-            "#{history_size}\t#{pane_mode}\t#{scroll_position}",
-        ],
-        bypass_limit=True,
-    )
+    with suppress_audit():
+        result = await tmux(
+            [
+                "display-message",
+                "-p",
+                "-t",
+                target,
+                "#{history_size}\t#{pane_mode}\t#{scroll_position}",
+            ],
+            bypass_limit=True,
+        )
     if not result.ok:
         raise RuntimeError(result.stderr or result.stdout or "Unable to read tmux scrollback state")
     parts = result.stdout.rstrip("\r\n").split("\t")
@@ -1910,6 +1911,7 @@ class _TmuxScrollbackAttachmentGroup:
         self.members: set[int] = set()
         self.initial_copy_mode: bool | None = None
         self.initial_position = 0
+        self.owned_copy_mode = False
 
 
 _TMUX_SCROLLBACK_ATTACHMENTS: dict[str, _TmuxScrollbackAttachmentGroup] = {}
@@ -1934,10 +1936,15 @@ async def _register_tmux_scrollback_attachment(
                     _LOGGER.debug(
                         "Unable to read initial Native WebUI scrollback state", exc_info=True
                     )
-                else:
-                    if state.get("supported"):
-                        group.initial_copy_mode = bool(state.get("copy_mode"))
-                        group.initial_position = int(state.get("position") or 0)
+                    if _TMUX_SCROLLBACK_ATTACHMENTS.get(key) is group:
+                        _TMUX_SCROLLBACK_ATTACHMENTS.pop(key, None)
+                    return None
+                if not state.get("supported"):
+                    if _TMUX_SCROLLBACK_ATTACHMENTS.get(key) is group:
+                        _TMUX_SCROLLBACK_ATTACHMENTS.pop(key, None)
+                    return None
+                group.initial_copy_mode = bool(state.get("copy_mode"))
+                group.initial_position = int(state.get("position") or 0)
             group.members.add(marker)
             return key, group
 
@@ -1972,6 +1979,43 @@ async def _release_tmux_scrollback_attachment(
         finally:
             if _TMUX_SCROLLBACK_ATTACHMENTS.get(key) is group:
                 _TMUX_SCROLLBACK_ATTACHMENTS.pop(key, None)
+
+
+async def _tmux_apply_scrollback_request(
+    process: Any,
+    registration: tuple[str, _TmuxScrollbackAttachmentGroup],
+    control: dict[str, Any],
+) -> dict[str, Any]:
+    _, group = registration
+    async with group.lock:
+        state = await _tmux_scrollback_state(process)
+        current = int(state["position"])
+        history = int(state["history"])
+        if "position" in control:
+            requested = int(control.get("position") or 0)
+        else:
+            requested = current + int(control.get("offset") or 0)
+        requested = max(0, min(requested, history))
+        state = await _tmux_scroll_to(process, requested)
+        if group.initial_copy_mode is False:
+            group.owned_copy_mode = requested > 0 and bool(state.get("copy_mode"))
+        return state
+
+
+async def _tmux_write_terminal_input(
+    process: Any,
+    registration: tuple[str, _TmuxScrollbackAttachmentGroup] | None,
+    data: bytes,
+) -> None:
+    if registration is None:
+        await process.write(data)
+        return
+    _, group = registration
+    async with group.lock:
+        if group.owned_copy_mode:
+            await _tmux_scroll_to(process, 0)
+            group.owned_copy_mode = False
+        await process.write(data)
 
 
 def _validate_tui_api_base(value: str) -> str:
@@ -2253,6 +2297,7 @@ async def ui_shell_websocket(websocket: WebSocket) -> None:
             scrollback_registration = await _register_tmux_scrollback_attachment(process, marker)
         except Exception:
             _LOGGER.debug("Unable to register Native WebUI scrollback attachment", exc_info=True)
+    scrollback_available = scrollback_enabled and scrollback_registration is not None
 
     def live_credential_valid() -> bool:
         if not live_id or not live_token:
@@ -2268,7 +2313,7 @@ async def ui_shell_websocket(websocket: WebSocket) -> None:
 
     async def send_scrollback_state(*, force: bool = False) -> None:
         nonlocal scrollback_refresh_task, scrollback_updated_at
-        if not scrollback_enabled:
+        if not scrollback_available or scrollback_registration is None:
             return
         now = loop.time()
         remaining = 0.75 - (now - scrollback_updated_at)
@@ -2293,7 +2338,9 @@ async def ui_shell_websocket(websocket: WebSocket) -> None:
                 scrollback_refresh_task = asyncio.create_task(delayed_refresh())
             return
         try:
-            state = await _tmux_scrollback_state(process)
+            _, group = scrollback_registration
+            async with group.lock:
+                state = await _tmux_scrollback_state(process)
         except Exception:
             _LOGGER.debug("Unable to read Native WebUI scrollback state", exc_info=True)
             return
@@ -2346,7 +2393,7 @@ async def ui_shell_websocket(websocket: WebSocket) -> None:
                 return
             if message.get("bytes") is not None:
                 data = message["bytes"]
-                await process.write(data)
+                await _tmux_write_terminal_input(process, scrollback_registration, data)
                 continue
             text = message.get("text")
             if not text:
@@ -2354,7 +2401,7 @@ async def ui_shell_websocket(websocket: WebSocket) -> None:
             try:
                 control = json.loads(text)
             except json.JSONDecodeError:
-                await process.write(text.encode())
+                await _tmux_write_terminal_input(process, scrollback_registration, text.encode())
                 continue
             if not isinstance(control, dict):
                 continue
@@ -2381,17 +2428,11 @@ async def ui_shell_websocket(websocket: WebSocket) -> None:
                 if asyncio.iscoroutine(resized):
                     await resized
                 await send_scrollback_state()
-            elif scrollback_enabled and control.get("type") == "scrollback":
+            elif scrollback_available and scrollback_registration is not None and control.get("type") == "scrollback":
                 try:
-                    state = await _tmux_scrollback_state(process)
-                    current = int(state["position"])
-                    history = int(state["history"])
-                    if "position" in control:
-                        requested = int(control.get("position") or 0)
-                    else:
-                        requested = current + int(control.get("offset") or 0)
-                    requested = max(0, min(requested, history))
-                    state = await _tmux_scroll_to(process, requested)
+                    state = await _tmux_apply_scrollback_request(
+                        process, scrollback_registration, control
+                    )
                 except (TypeError, ValueError):
                     await websocket.close(code=4400, reason="Invalid scrollback request")
                     return
