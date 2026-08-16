@@ -1,0 +1,28 @@
+{
+  "name": "local-shell-mcp-dsh",
+  "version": "4.0.0",
+  "description": "DeepSeek Harness bundle for the full local-shell-mcp MCP tool surface.",
+  "private": true,
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/fwerkor/local-shell-mcp.git"
+  },
+  "keywords": [
+    "deepseek",
+    "harness",
+    "dsh",
+    "dsh-plugin",
+    "mcp",
+    "remote-worker"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "files": [
+    "cordis.patch.yml",
+    "LICENSE"
+  ]
+}
