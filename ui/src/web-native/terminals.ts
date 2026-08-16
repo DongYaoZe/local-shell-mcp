@@ -36,6 +36,8 @@ export class TerminalsController extends BaseController {
   private scrollRequestTimer: number | null = null
   private scrollbackSyncTimer: number | null = null
   private pendingScrollPosition: number | null = null
+  private scrollRequestInFlight: number | null = null
+  private scrollRequestSequence = 0
   private history: string[] = []
   private historyIndex = 0
   private lastSearch = ""
@@ -326,12 +328,18 @@ export class TerminalsController extends BaseController {
       return false
     }
     if (payload.type !== "scrollback") return false
+    const requestId = typeof payload.request_id === "number" && Number.isFinite(payload.request_id) ? Math.floor(payload.request_id) : null
     const supported = payload.supported === true
     const history = typeof payload.history === "number" && Number.isFinite(payload.history) ? Math.max(0, Math.floor(payload.history)) : 0
     const position = typeof payload.position === "number" && Number.isFinite(payload.position) ? Math.max(0, Math.floor(payload.position)) : 0
     this.scrollbackSupported = supported
     this.scrollbackHistory = history
-    this.scrollbackPosition = Math.min(position, history)
+    const pending = this.pendingScrollPosition
+    this.scrollbackPosition = pending === null ? Math.min(position, history) : Math.min(pending, history)
+    if (requestId !== null && requestId === this.scrollRequestInFlight) {
+      this.scrollRequestInFlight = null
+      if (this.pendingScrollPosition !== null) this.scheduleScrollRequest(0)
+    }
     this.renderScrollbar()
     return true
   }
@@ -354,7 +362,12 @@ export class TerminalsController extends BaseController {
   private queueScrollRequest(position: number): void {
     if (!this.scrollbackSupported || this.socket?.readyState !== WebSocket.OPEN) return
     this.pendingScrollPosition = Math.max(0, Math.min(position, this.scrollbackHistory))
-    if (this.scrollRequestTimer !== null) return
+    if (this.scrollRequestInFlight !== null) return
+    this.scheduleScrollRequest(40)
+  }
+
+  private scheduleScrollRequest(delay: number): void {
+    if (this.scrollRequestTimer !== null || this.scrollRequestInFlight !== null) return
     this.scrollRequestTimer = window.setTimeout(() => {
       this.scrollRequestTimer = null
       const socket = this.socket
@@ -363,10 +376,12 @@ export class TerminalsController extends BaseController {
         return
       }
       if (this.pendingScrollPosition === null) return
-      const payload = { type: "scrollback", position: this.pendingScrollPosition }
+      const requestId = ++this.scrollRequestSequence
+      const payload = { type: "scrollback", position: this.pendingScrollPosition, request_id: requestId }
       this.pendingScrollPosition = null
+      this.scrollRequestInFlight = requestId
       socket.send(JSON.stringify(payload))
-    }, 40)
+    }, delay)
   }
 
   private onScrollbarScroll(): void {
@@ -434,6 +449,7 @@ export class TerminalsController extends BaseController {
     if (this.scrollbackSyncTimer !== null) window.clearTimeout(this.scrollbackSyncTimer)
     this.scrollbackSyncTimer = null
     this.pendingScrollPosition = null
+    this.scrollRequestInFlight = null
     const socket = this.socket
     this.socket = null
     socket?.close()

@@ -1941,6 +1941,8 @@ class _TmuxScrollbackAttachmentGroup:
         self.initial_position = 0
         self.owned_copy_mode = False
         self.pane_id: str | None = None
+        self.prefix_pending = False
+        self.binding_sync_pending = False
 
 
 _TMUX_SCROLLBACK_ATTACHMENTS: dict[str, _TmuxScrollbackAttachmentGroup] = {}
@@ -2038,7 +2040,12 @@ async def _release_tmux_scrollback_attachment(
             return
         try:
             try:
-                await _tmux_sync_attachment_pane(process, group)
+                await _tmux_sync_attachment_pane(
+                    process,
+                    group,
+                    claim_copy_mode=group.binding_sync_pending,
+                )
+                group.binding_sync_pending = False
             except Exception:
                 _LOGGER.debug(
                     "Unable to refresh Native WebUI tmux pane before detach",
@@ -2067,7 +2074,19 @@ async def _tmux_apply_scrollback_request(
         else:
             requested = current + int(control.get("offset") or 0)
         requested = max(0, min(requested, history))
-        state = await _tmux_scroll_to(process, requested, group.pane_id)
+        if group.initial_copy_mode is False and requested > 0:
+            group.owned_copy_mode = True
+        try:
+            state = await _tmux_scroll_to(process, requested, group.pane_id)
+        except Exception:
+            try:
+                await _tmux_restore_attachment_baseline(process, group)
+            except Exception:
+                _LOGGER.debug(
+                    "Unable to roll back failed Native WebUI scrollback mutation",
+                    exc_info=True,
+                )
+            raise
         if group.initial_copy_mode is False:
             group.owned_copy_mode = requested > 0 and bool(state.get("copy_mode"))
         return state
@@ -2094,12 +2113,30 @@ async def _tmux_write_terminal_input(
         return
     _, group = registration
     async with group.lock:
-        if group.owned_copy_mode:
+        if group.binding_sync_pending:
+            await _tmux_sync_attachment_pane(process, group, claim_copy_mode=True)
+            group.binding_sync_pending = False
+        elif group.owned_copy_mode:
             await _tmux_sync_attachment_pane(process, group)
         if group.owned_copy_mode:
             await _tmux_scroll_to(process, 0, group.pane_id)
             group.owned_copy_mode = False
+        binding_command = group.prefix_pending
         await process.write(data)
+        if binding_command:
+            group.prefix_pending = False
+            group.binding_sync_pending = True
+        if _tmux_input_may_be_prefix(data):
+            if binding_command:
+                group.binding_sync_pending = True
+            group.prefix_pending = True
+
+
+def _tmux_input_may_be_prefix(data: bytes) -> bool:
+    if len(data) != 1:
+        return False
+    value = data[0]
+    return value < 0x20 and value not in {0x09, 0x0A, 0x0D, 0x1B}
 
 
 def _validate_tui_api_base(value: str) -> str:
@@ -2424,7 +2461,12 @@ async def ui_shell_websocket(websocket: WebSocket) -> None:
         try:
             _, group = scrollback_registration
             async with group.lock:
-                state = await _tmux_sync_attachment_pane(process, group)
+                state = await _tmux_sync_attachment_pane(
+                    process,
+                    group,
+                    claim_copy_mode=group.binding_sync_pending,
+                )
+                group.binding_sync_pending = False
         except Exception:
             _LOGGER.debug("Unable to read Native WebUI scrollback state", exc_info=True)
             return
@@ -2517,12 +2559,15 @@ async def ui_shell_websocket(websocket: WebSocket) -> None:
                     state = await _tmux_apply_scrollback_request(
                         process, scrollback_registration, control
                     )
-                except (TypeError, ValueError):
+                except (TypeError, ValueError, OverflowError):
                     await websocket.close(code=4400, reason="Invalid scrollback request")
                     return
                 except Exception:
                     _LOGGER.debug("Unable to scroll Native WebUI terminal", exc_info=True)
                     continue
+                request_id = control.get("request_id")
+                if isinstance(request_id, int) and not isinstance(request_id, bool):
+                    state = {**state, "request_id": request_id}
                 async with send_lock:
                     await websocket.send_text(json.dumps(state, separators=(",", ":")))
             elif (

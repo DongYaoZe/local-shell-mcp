@@ -71,4 +71,50 @@ describe("Native WebUI terminal scrolling", () => {
     expect(controller.scrollbackPosition).toBe(30)
     expect(requested).toBe(30)
   })
+
+  test("keeps at most one scroll request in flight", async () => {
+    const previousWindow = (globalThis as any).window
+    ;(globalThis as any).window = { setTimeout, clearTimeout }
+    const sent: string[] = []
+    const socket = {
+      readyState: WebSocket.OPEN,
+      send: (value: string) => { sent.push(value) },
+    }
+    const controller: any = {
+      scrollbackSupported: true,
+      scrollbackHistory: 100,
+      scrollbackPosition: 0,
+      pendingScrollPosition: null,
+      scrollRequestTimer: null,
+      scrollRequestInFlight: null,
+      scrollRequestSequence: 0,
+      socket,
+      renderScrollbar: () => {},
+    }
+    controller.scheduleScrollRequest = (delay: number) =>
+      (TerminalsController.prototype as any).scheduleScrollRequest.call(controller, delay)
+
+    try {
+      ;(TerminalsController.prototype as any).queueScrollRequest.call(controller, 10)
+      await Bun.sleep(50)
+      expect(sent.length).toBe(1)
+      expect(JSON.parse(sent[0])).toEqual({ type: "scrollback", position: 10, request_id: 1 })
+
+      ;(TerminalsController.prototype as any).queueScrollRequest.call(controller, 20)
+      ;(TerminalsController.prototype as any).queueScrollRequest.call(controller, 30)
+      await Bun.sleep(50)
+      expect(sent.length).toBe(1)
+
+      ;(TerminalsController.prototype as any).handleSocketControl.call(
+        controller,
+        JSON.stringify({ type: "scrollback", supported: true, history: 100, position: 10, request_id: 1 }),
+      )
+      await Bun.sleep(10)
+
+      expect(sent.length).toBe(2)
+      expect(JSON.parse(sent[1])).toEqual({ type: "scrollback", position: 30, request_id: 2 })
+    } finally {
+      ;(globalThis as any).window = previousWindow
+    }
+  })
 })
