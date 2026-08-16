@@ -748,12 +748,29 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
             live_session_key = mcp_session_key(mcp)
             live_manager = get_live_channel_manager()
             logical_manager = get_session_runtime_manager()
+            principal_subject = _current_principal_subject()
             live_arguments = _live_event_arguments(__tool_name, safe_call_arguments)
             logical_lease = None
-            if __tool_name not in {"session_manage", "live_workspace_reconnect"}:
+            normalized_tool_action = str(call_arguments.get("action") or "").strip().lower()
+            session_get_tracks_activity = False
+            if __tool_name == "session_manage" and normalized_tool_action == "get":
+                current_session_id = await asyncio.to_thread(
+                    logical_manager.current_session_id,
+                    live_session_key,
+                    subject=principal_subject,
+                )
+                requested_session_id = str(call_arguments.get("session_id") or "").strip()
+                session_get_tracks_activity = bool(
+                    current_session_id
+                    and (not requested_session_id or requested_session_id == current_session_id)
+                )
+            if (
+                __tool_name not in {"session_manage", "live_workspace_reconnect"}
+                or session_get_tracks_activity
+            ):
                 require_run_token = not (
-                    __tool_name == "plan_manage"
-                    and str(call_arguments.get("action") or "").strip().lower() == "get"
+                    (__tool_name == "plan_manage" and normalized_tool_action == "get")
+                    or session_get_tracks_activity
                 )
                 logical_lease = await asyncio.to_thread(
                     logical_manager.begin_tool_call,
@@ -762,7 +779,7 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
                     expected_run_id=(
                         str(session_run_id) if session_run_id is not None else None
                     ),
-                    subject=_current_principal_subject(),
+                    subject=principal_subject,
                     require_run_token=require_run_token,
                     data=live_arguments,
                 )
@@ -2915,16 +2932,18 @@ def _register_maintenance_tools(mcp: FastMCP, read_only_tool: ToolAnnotations) -
         )
         if isinstance(result, dict) and result.get("ok"):
             data = result.get("data")
-            if isinstance(data, dict) and data.get("session_id") and action.strip().lower() in {
-                "start", "resume"
+            normalized_action = action.strip().lower()
+            if isinstance(data, dict) and data.get("session_id") and normalized_action in {
+                "start",
+                "resume",
             }:
                 get_live_channel_manager().bind_logical_session(
                     session_key, str(data["session_id"]), subject
                 )
-            if isinstance(data, dict) and action.strip().lower() == "delete":
-                deleted_session_id = str(data.get("session_id") or session_id or "")
-                if deleted_session_id:
-                    get_live_channel_manager().detach_logical_session(deleted_session_id)
+            if isinstance(data, dict) and normalized_action in {"finish", "cancel", "delete"}:
+                terminal_session_id = str(data.get("session_id") or session_id or "")
+                if terminal_session_id:
+                    get_live_channel_manager().detach_logical_session(terminal_session_id)
         return result
 
     @mcp.tool(structured_output=True, annotations=read_only_tool, meta=shell_read_meta)

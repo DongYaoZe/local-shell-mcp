@@ -117,6 +117,74 @@ def test_live_workspace_tokens_rotate_and_events_are_bounded():
     assert channel.events[0]["seq"] == channel.seq - LIVE_EVENT_LIMIT + 1
 
 
+def test_live_channel_public_state_resolves_and_tolerates_missing_logical_session(
+    tmp_path, monkeypatch
+):
+    _configure(tmp_path, monkeypatch, auth="none")
+    sessions = session_runtime_module.get_session_runtime_manager()
+    started = sessions.manage("mcp:state", "user", action="start", objective="State")
+    sessions.manage_plan(
+        "mcp:state",
+        action="start",
+        objective="State",
+        steps=[{"id": "work", "text": "Work"}],
+    )
+    channel, _ = live_channel_module.get_live_channel_manager().open(
+        session_key="mcp:state",
+        subject="user",
+        scopes=tuple(ALL_OAUTH_SCOPES),
+        logical_session_id=started["session_id"],
+    )
+
+    state = channel.public_state()
+    assert state["session_id"] == started["session_id"]
+    assert state["session"]["objective"] == "State"
+    assert state["plan"]["status"] == "active"
+
+    channel.logical_session_id = "s_missing"
+    missing = channel.public_state()
+    assert missing["session_id"] == "s_missing"
+    assert missing["session"] is None
+    assert missing["plan"] is None
+
+
+def test_mcp_session_key_supports_http_nonweak_and_weak_sessions():
+    class RequestContext:
+        def __init__(self, session, headers=None):
+            self.session = session
+            self.request = type("Request", (), {"headers": headers})()
+
+    class Context:
+        def __init__(self, request_context):
+            self.request_context = request_context
+
+    class Mcp:
+        def __init__(self, request_context):
+            self.context = Context(request_context)
+
+        def get_context(self):
+            return self.context
+
+    class NonWeakSession:
+        __slots__ = ("_lsm_live_session_key",)
+
+    class WeakSession:
+        pass
+
+    http = Mcp(RequestContext(WeakSession(), {"mcp-session-id": "transport-1"}))
+    assert live_channel_module.mcp_session_key(http) == "mcp-http:transport-1"
+
+    nonweak = Mcp(RequestContext(NonWeakSession()))
+    first_nonweak = live_channel_module.mcp_session_key(nonweak)
+    assert first_nonweak.startswith("mcp-session:")
+    assert live_channel_module.mcp_session_key(nonweak) == first_nonweak
+
+    weak = Mcp(RequestContext(WeakSession()))
+    first_weak = live_channel_module.mcp_session_key(weak)
+    assert first_weak.startswith("mcp-session:")
+    assert live_channel_module.mcp_session_key(weak) == first_weak
+
+
 def test_app_reattach_does_not_shorten_shared_channel_expiry():
     manager = LiveChannelManager()
     now = time.time()
@@ -536,6 +604,25 @@ async def test_live_workspace_expiry_publish_and_wait_paths():
     await publisher
     assert waited[-1]["type"] == "job.progress"
 
+    batch_after = channel.seq
+    empty_batch = await manager.wait_event_batch(channel, batch_after, timeout_s=0.01)
+    assert empty_batch["events"] == []
+    assert empty_batch["cursor"] == batch_after
+
+    async def publish_batch_later() -> None:
+        await asyncio.sleep(0.01)
+        manager.publish_channel(
+            channel.live_id,
+            "job.batch-progress",
+            actor="system",
+            data={"progress": 75},
+        )
+
+    batch_publisher = asyncio.create_task(publish_batch_later())
+    waited_batch = await manager.wait_event_batch(channel, batch_after, timeout_s=0.5)
+    await batch_publisher
+    assert waited_batch["events"][-1]["type"] == "job.batch-progress"
+
     for credential in manager._credentials.values():
         if credential["live_id"] == channel.live_id:
             credential["expires_at"] = 0
@@ -922,6 +1009,44 @@ async def test_live_workspace_reconnect_ignores_deleted_cached_session(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("action", "terminal_event"),
+    [("finish", "session.completed"), ("cancel", "session.cancelled")],
+)
+async def test_terminal_session_detaches_live_workspace_before_unattached_tools(
+    tmp_path, monkeypatch, action, terminal_event
+):
+    _configure(tmp_path, monkeypatch, auth="none")
+    mcp = build_mcp()
+    _, started = await mcp.call_tool(
+        "session_manage", {"action": "start", "objective": "Terminal boundary"}
+    )
+    session_id = started["data"]["session_id"]
+    run_id = started["data"]["active_run"]["run_id"]
+    await mcp.call_tool("open_live_workspace", {"cwd": ".", "session_run_id": run_id})
+    channel = live_channel_module.get_live_channel_manager().active_for_session("direct")
+    assert channel is not None and channel.logical_session_id == session_id
+
+    await mcp.call_tool(
+        "session_manage",
+        {"action": action, "session_id": session_id, "session_run_id": run_id},
+    )
+
+    assert channel.logical_session_id is None
+    _, listed = await mcp.call_tool("list_files", {"path": "."})
+    assert listed["ok"] is True
+    session = session_runtime_module.get_session_runtime_manager().get(
+        session_id, subject="local-mcp-client"
+    )
+    assert session["recent_activity"][-1]["type"] == terminal_event
+    assert not any(
+        event["data"].get("tool") == "list_files"
+        for event in session["recent_activity"]
+        if event["type"].startswith("tool.")
+    )
+
+
+@pytest.mark.asyncio
 async def test_live_workspace_reconnect_drops_attachment_after_principal_change(
     tmp_path, monkeypatch
 ):
@@ -1160,6 +1285,43 @@ async def test_mcp_run_lease_blocks_stale_same_transport_agent(tmp_path, monkeyp
     )
     assert written["ok"] is True
     assert (tmp_path / "current.txt").read_text(encoding="utf-8") == "current run"
+
+
+@pytest.mark.asyncio
+async def test_session_get_refreshes_attached_plan_agent_activity(tmp_path, monkeypatch):
+    _configure(tmp_path, monkeypatch, auth="none")
+    mcp = build_mcp()
+    _, started = await mcp.call_tool(
+        "session_manage", {"action": "start", "objective": "Inspect without takeover"}
+    )
+    session_id = started["data"]["session_id"]
+    run_id = started["data"]["active_run"]["run_id"]
+    await mcp.call_tool(
+        "plan_manage",
+        {
+            "action": "start",
+            "session_run_id": run_id,
+            "objective": "Inspect without takeover",
+            "steps": [{"id": "inspect", "text": "Inspect"}],
+        },
+    )
+    manager = session_runtime_module.get_session_runtime_manager()
+    logical = manager._sessions[session_id]
+    assert logical.plan is not None
+    old_activity = time.time() - session_runtime_module.PLAN_EXECUTION_LEASE_S - 5
+    logical.plan.last_agent_activity = old_activity
+    manager._save_locked(logical)
+
+    _, fetched = await mcp.call_tool(
+        "session_manage", {"action": "get", "session_id": session_id}
+    )
+
+    assert fetched["data"]["session_id"] == session_id
+    current = manager.plan_state(session_id)
+    assert current is not None
+    assert current["last_agent_activity"] > old_activity
+    assert current["continuation_due"] is False
+    assert manager.claim_plan_continuation(session_id, subject="local-mcp-client") is None
 
 
 @pytest.mark.asyncio
@@ -1462,6 +1624,60 @@ def test_live_http_token_cors_and_collaborative_human_mutation(tmp_path, monkeyp
             json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
         )
         assert mcp_attempt.status_code in {401, 403}
+
+
+def test_human_plan_action_does_not_publish_across_session_rebind(tmp_path, monkeypatch):
+    _configure(tmp_path, monkeypatch, auth="oauth")
+    session_manager = session_runtime_module.get_session_runtime_manager()
+    first = session_manager.manage(
+        "mcp:http-first", "user", action="start", objective="First task"
+    )
+    second = session_manager.manage(
+        "mcp:http-second", "user", action="start", objective="Second task"
+    )
+    session_manager.manage_plan(
+        "mcp:http-first",
+        action="start",
+        objective="First task",
+        steps=[{"id": "first", "text": "First"}],
+    )
+    session_manager.manage_plan(
+        "mcp:http-second",
+        action="start",
+        objective="Second task",
+        steps=[{"id": "second", "text": "Second"}],
+    )
+    live_manager = live_channel_module.get_live_channel_manager()
+    channel, token = live_manager.open(
+        session_key="mcp:http-first",
+        subject="user",
+        scopes=tuple(ALL_OAUTH_SCOPES),
+        logical_session_id=first["session_id"],
+    )
+    original_manage = session_manager.manage_plan_for_session
+
+    def rebind_after_plan_action(session_id, **kwargs):  # noqa: ANN001, ANN003, ANN202
+        result = original_manage(session_id, **kwargs)
+        assert live_manager.bind_logical_session(
+            "mcp:http-first", second["session_id"], "user"
+        ) is channel
+        return result
+
+    monkeypatch.setattr(session_manager, "manage_plan_for_session", rebind_after_plan_action)
+    app = _build_mcp_http_app(build_mcp())
+    with TestClient(app, base_url="http://testserver") as client:
+        response = client.post(
+            "/api/live/plan",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"action": "pause", "note": "Pause the first task"},
+        )
+
+    assert response.status_code == 409
+    assert "binding changed" in response.json()["message"]
+    assert channel.logical_session_id == second["session_id"]
+    assert session_manager.plan_state(first["session_id"])["status"] == "blocked"
+    assert session_manager.plan_state(second["session_id"])["status"] == "active"
+    assert not any(event["type"] == "plan.blocked" for event in channel.events)
 
 
 def test_live_http_token_authenticates_when_global_auth_is_disabled(tmp_path, monkeypatch):

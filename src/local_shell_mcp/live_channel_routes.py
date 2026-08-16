@@ -192,60 +192,46 @@ async def live_plan_control(request: Request) -> Response:
         require_scopes(principal, ("shell:read", "shell:write"))
         body = await request.json()
         action = str(body.get("action") or "").strip().lower()
-        if not channel.logical_session_id:
-            raise HTTPException(status_code=409, detail="Live Workspace is not attached to a logical session")
         session_manager = get_session_runtime_manager()
         live_manager = get_live_channel_manager()
-        if action == "pause":
-            note = str(body.get("note") or "Paused by user").strip() or "Paused by user"
-            result = await asyncio.to_thread(
-                session_manager.manage_plan_for_session,
-                channel.logical_session_id,
-                action="block",
-                note=note,
-                actor="human",
-                subject=channel.subject,
+        session_id, binding_generation = live_manager.binding_state(channel)
+        if not session_id:
+            raise HTTPException(status_code=409, detail="Live Workspace is not attached to a logical session")
+        if action not in {"pause", "resume", "cancel"}:
+            raise HTTPException(status_code=400, detail="action must be pause, resume, or cancel")
+
+        runtime_action = "block" if action == "pause" else action
+        kwargs: dict[str, Any] = {
+            "action": runtime_action,
+            "actor": "human",
+            "subject": channel.subject,
+        }
+        if action in {"pause", "cancel"}:
+            default_note = "Paused by user" if action == "pause" else "Cancelled by user"
+            kwargs["note"] = str(body.get("note") or default_note).strip() or default_note
+
+        result = await asyncio.to_thread(
+            session_manager.manage_plan_for_session,
+            session_id,
+            **kwargs,
+        )
+        if not live_manager.binding_matches(channel, session_id, binding_generation):
+            raise HTTPException(
+                status_code=409,
+                detail="Live Session binding changed while applying the Plan action; refresh the Workspace",
             )
-            live_manager.publish_channel(
-                channel.live_id,
-                "plan.blocked",
-                actor="human",
-                data={"plan_id": result["plan"]["plan_id"]},
-            )
-            return _ok(result)
-        if action == "resume":
-            result = await asyncio.to_thread(
-                session_manager.manage_plan_for_session,
-                channel.logical_session_id,
-                action="resume",
-                actor="human",
-                subject=channel.subject,
-            )
-            live_manager.publish_channel(
-                channel.live_id,
-                "plan.resumed",
-                actor="human",
-                data={"plan_id": result["plan"]["plan_id"]},
-            )
-            return _ok(result)
-        if action == "cancel":
-            note = str(body.get("note") or "Cancelled by user").strip() or "Cancelled by user"
-            result = await asyncio.to_thread(
-                session_manager.manage_plan_for_session,
-                channel.logical_session_id,
-                action="cancel",
-                note=note,
-                actor="human",
-                subject=channel.subject,
-            )
-            live_manager.publish_channel(
-                channel.live_id,
-                "plan.cancelled",
-                actor="human",
-                data={"plan_id": result["plan"]["plan_id"]},
-            )
-            return _ok(result)
-        raise HTTPException(status_code=400, detail="action must be pause, resume, or cancel")
+
+        live_manager.publish_channel(
+            channel.live_id,
+            {
+                "pause": "plan.blocked",
+                "resume": "plan.resumed",
+                "cancel": "plan.cancelled",
+            }[action],
+            actor="human",
+            data={"plan_id": result["plan"]["plan_id"]},
+        )
+        return _ok(result)
     except Exception as exc:
         return _error(exc)
 

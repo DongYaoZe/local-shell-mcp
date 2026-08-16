@@ -596,6 +596,10 @@ class LiveChannelManager:
                 and channel.binding_generation == binding_generation
             )
 
+    def binding_state(self, channel: LiveChannel) -> tuple[str | None, int]:
+        with self._lock:
+            return channel.logical_session_id, channel.binding_generation
+
     async def wait_events(
         self,
         channel: LiveChannel,
