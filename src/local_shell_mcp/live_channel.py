@@ -369,8 +369,24 @@ class LiveChannelManager:
             live_id = self._session_channels.get(session_key)
             return self._channels.get(live_id or "")
 
+    def _drop_other_model_session_mappings_locked(
+        self, live_id: str, *, keep_session_key: str
+    ) -> None:
+        for key, mapped_live_id in list(self._session_channels.items()):
+            if (
+                key != keep_session_key
+                and key not in self._app_session_keys
+                and mapped_live_id == live_id
+            ):
+                self._session_channels.pop(key, None)
+
     def bind_logical_session(
-        self, session_key: str, logical_session_id: str, subject: str
+        self,
+        session_key: str,
+        logical_session_id: str,
+        subject: str,
+        *,
+        exclusive_model_owner: bool = False,
     ) -> LiveChannel | None:
         with self._lock:
             self._prune_locked()
@@ -400,6 +416,10 @@ class LiveChannelManager:
                             data={"session_id": logical_session_id},
                         )
                     self._session_channels[session_key] = target_channel.live_id
+                    if exclusive_model_owner:
+                        self._drop_other_model_session_mappings_locked(
+                            target_channel.live_id, keep_session_key=session_key
+                        )
                     target_channel.logical_session_id = logical_session_id
                     self._consume_recovery_claim_locked(subject, target_channel.live_id)
                     self._publish_locked(
@@ -416,6 +436,10 @@ class LiveChannelManager:
                 if self._session_channels.get(session_key) == channel.live_id:
                     self._session_channels.pop(session_key, None)
                 return None
+            if exclusive_model_owner:
+                self._drop_other_model_session_mappings_locked(
+                    channel.live_id, keep_session_key=session_key
+                )
             previous_session_id = channel.logical_session_id
             if (
                 previous_session_id

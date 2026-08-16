@@ -613,6 +613,54 @@ def _install_session_run_arguments(mcp: FastMCP) -> None:
         tool.parameters = extended_model.model_json_schema()
 
 
+_PENDING_SESSION_LEASE_CLEANUPS: set[asyncio.Task[None]] = set()
+
+
+async def _retry_session_tool_cleanup(
+    manager: Any,
+    lease: dict[str, Any],
+    *,
+    tool_name: str,
+    call_id: str,
+) -> None:
+    delay_s = 0.25
+    while True:
+        try:
+            cleaned = await asyncio.to_thread(manager.retry_tool_call_cleanup, lease)
+        except Exception as exc:  # noqa: BLE001 - retry until durable state recovers.
+            with suppress(Exception):
+                audit(
+                    "session_lease_cleanup_retry_failed",
+                    tool=tool_name,
+                    call_id=call_id,
+                    error=f"{type(exc).__name__}: {exc}",
+                )
+        else:
+            if cleaned:
+                return
+        await asyncio.sleep(delay_s)
+        delay_s = min(30.0, delay_s * 2)
+
+
+def _schedule_session_tool_cleanup_retry(
+    manager: Any,
+    lease: dict[str, Any],
+    *,
+    tool_name: str,
+    call_id: str,
+) -> None:
+    task = asyncio.create_task(
+        _retry_session_tool_cleanup(
+            manager,
+            lease,
+            tool_name=tool_name,
+            call_id=call_id,
+        )
+    )
+    _PENDING_SESSION_LEASE_CLEANUPS.add(task)
+    task.add_done_callback(_PENDING_SESSION_LEASE_CLEANUPS.discard)
+
+
 async def _finish_session_tool_activity(
     manager: Any,
     lease: dict[str, Any] | None,
@@ -630,8 +678,9 @@ async def _finish_session_tool_activity(
     except Exception as exc:  # noqa: BLE001 - activity failures must not mask tool results.
         persistence_error = f"{type(exc).__name__}: {exc}"
     if persistence_error:
-        # Lease cleanup is best-effort telemetry and must never mask the
-        # original tool result or cancellation path.
+        # Completion persistence must never mask the original tool result, but
+        # leaving the durable in-flight lease behind can block takeover for the
+        # full stale window. Keep retrying only the lease removal in background.
         with suppress(Exception):
             audit(
                 "session_activity_persistence_failed",
@@ -639,6 +688,13 @@ async def _finish_session_tool_activity(
                 call_id=call_id,
                 stage=stage,
                 error=persistence_error,
+            )
+        if lease is not None:
+            _schedule_session_tool_cleanup_retry(
+                manager,
+                lease,
+                tool_name=tool_name,
+                call_id=call_id,
             )
 
 
@@ -784,6 +840,7 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
                     data=live_arguments,
                 )
             logical_activity_finished = False
+            live_lifecycle_channel_id: str | None = None
             lease_heartbeat_task = (
                 asyncio.create_task(
                     _renew_session_tool_lease(
@@ -813,14 +870,25 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
                             live_session_key,
                             str(logical_lease["session_id"]),
                             live_subject,
+                            exclusive_model_owner=True,
                         )
                     if attached_live is None:
                         live_manager.claim_recovery_session(live_session_key, live_subject)
-                live_manager.publish_for_session(
-                    live_session_key,
-                    "tool.started",
-                    data={"call_id": call_id, **live_arguments},
-                )
+                # Session lifecycle controls can rebind or detach the transport's
+                # channel while they execute. Their semantic session.* events are
+                # already durable, so keep them out of the ephemeral running-tool
+                # stream. For every other tool, pin start/end events to the same
+                # captured channel even if the transport is rebound concurrently.
+                if __tool_name != "session_manage":
+                    lifecycle_channel = live_manager.active_for_session(live_session_key)
+                    if lifecycle_channel is not None:
+                        live_lifecycle_channel_id = lifecycle_channel.live_id
+                        live_manager.publish_channel(
+                            live_lifecycle_channel_id,
+                            "tool.started",
+                            actor="agent",
+                            data={"call_id": call_id, **live_arguments},
+                        )
                 audit(
                     "mcp_tool_call_start",
                     call_id=call_id,
@@ -833,6 +901,22 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
                     lease_heartbeat_task.cancel()
                     with suppress(asyncio.CancelledError, Exception):
                         await lease_heartbeat_task
+                if live_lifecycle_channel_id is not None:
+                    live_manager.publish_channel(
+                        live_lifecycle_channel_id,
+                        "tool.cancelled"
+                        if isinstance(setup_exc, asyncio.CancelledError)
+                        else "tool.failed",
+                        actor="agent",
+                        data={
+                            "call_id": call_id,
+                            "ok": False,
+                            "duration_ms": round((time.monotonic() - started_at) * 1000),
+                            "error": (str(setup_exc) or type(setup_exc).__name__)[:500],
+                            "error_type": type(setup_exc).__name__,
+                            **live_arguments,
+                        },
+                    )
                 if logical_lease is not None:
                     setup_data = {
                         "call_id": call_id,
@@ -890,11 +974,13 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
                     **live_arguments,
                     **_live_result_summary(result),
                 }
-                live_manager.publish_for_session(
-                    live_session_key,
-                    "tool.completed" if call_ok else "tool.failed",
-                    data=completion_data,
-                )
+                if live_lifecycle_channel_id is not None:
+                    live_manager.publish_channel(
+                        live_lifecycle_channel_id,
+                        "tool.completed" if call_ok else "tool.failed",
+                        actor="agent",
+                        data=completion_data,
+                    )
                 await _finish_session_tool_activity(
                     logical_manager,
                     logical_lease,
@@ -936,11 +1022,13 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
                     "error_type": type(exc).__name__,
                     **live_arguments,
                 }
-                live_manager.publish_for_session(
-                    live_session_key,
-                    "tool.failed",
-                    data=failure_data,
-                )
+                if live_lifecycle_channel_id is not None:
+                    live_manager.publish_channel(
+                        live_lifecycle_channel_id,
+                        "tool.failed",
+                        actor="agent",
+                        data=failure_data,
+                    )
                 await _finish_session_tool_activity(
                     logical_manager,
                     logical_lease,
@@ -971,11 +1059,13 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
                     "error_type": type(exc).__name__,
                     **live_arguments,
                 }
-                live_manager.publish_for_session(
-                    live_session_key,
-                    "tool.failed",
-                    data=failure_data,
-                )
+                if live_lifecycle_channel_id is not None:
+                    live_manager.publish_channel(
+                        live_lifecycle_channel_id,
+                        "tool.failed",
+                        actor="agent",
+                        data=failure_data,
+                    )
                 await _finish_session_tool_activity(
                     logical_manager,
                     logical_lease,
@@ -1000,6 +1090,13 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
                         "cancelled": True,
                         **live_arguments,
                     }
+                    if live_lifecycle_channel_id is not None:
+                        live_manager.publish_channel(
+                            live_lifecycle_channel_id,
+                            "tool.cancelled",
+                            actor="agent",
+                            data=cancellation_data,
+                        )
                     await _finish_session_tool_activity(
                         logical_manager,
                         logical_lease,
@@ -2938,7 +3035,10 @@ def _register_maintenance_tools(mcp: FastMCP, read_only_tool: ToolAnnotations) -
                 "resume",
             }:
                 get_live_channel_manager().bind_logical_session(
-                    session_key, str(data["session_id"]), subject
+                    session_key,
+                    str(data["session_id"]),
+                    subject,
+                    exclusive_model_owner=True,
                 )
             if isinstance(data, dict) and normalized_action in {"finish", "cancel", "delete"}:
                 terminal_session_id = str(data.get("session_id") or session_id or "")
