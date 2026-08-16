@@ -327,8 +327,15 @@ export class TerminalsController extends BaseController {
     } catch {
       return false
     }
-    if (payload.type !== "scrollback") return false
     const requestId = typeof payload.request_id === "number" && Number.isFinite(payload.request_id) ? Math.floor(payload.request_id) : null
+    if (payload.type === "scrollback-ack") {
+      if (requestId !== null && requestId === this.scrollRequestInFlight) {
+        this.scrollRequestInFlight = null
+        if (this.pendingScrollPosition !== null) this.scheduleScrollRequest(0)
+      }
+      return true
+    }
+    if (payload.type !== "scrollback") return false
     const supported = payload.supported === true
     const history = typeof payload.history === "number" && Number.isFinite(payload.history) ? Math.max(0, Math.floor(payload.history)) : 0
     const position = typeof payload.position === "number" && Number.isFinite(payload.position) ? Math.max(0, Math.floor(payload.position)) : 0

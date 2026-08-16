@@ -117,4 +117,22 @@ describe("Native WebUI terminal scrolling", () => {
       ;(globalThis as any).window = previousWindow
     }
   })
+
+  test("releases an in-flight request after a failure acknowledgement", () => {
+    let scheduled = -1
+    const controller: any = {
+      scrollRequestInFlight: 7,
+      pendingScrollPosition: 42,
+      scheduleScrollRequest: (delay: number) => { scheduled = delay },
+    }
+
+    const handled = (TerminalsController.prototype as any).handleSocketControl.call(
+      controller,
+      JSON.stringify({ type: "scrollback-ack", request_id: 7 }),
+    )
+
+    expect(handled).toBe(true)
+    expect(controller.scrollRequestInFlight).toBe(null)
+    expect(scheduled).toBe(0)
+  })
 })

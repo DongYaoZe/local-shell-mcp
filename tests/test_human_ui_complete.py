@@ -1825,6 +1825,88 @@ async def test_native_shell_websocket_exposes_opt_in_tmux_scrollback(tmp_path, m
 
 
 @pytest.mark.asyncio
+async def test_native_shell_websocket_acks_failed_scrollback_request(tmp_path, monkeypatch):
+    _configure(tmp_path, monkeypatch)
+
+    class Process:
+        _tmux_session_id = "demo"
+
+        async def read(self):
+            await asyncio.sleep(0.05)
+            return b""
+
+        async def write(self, data):
+            return None
+
+        async def resize(self, cols, rows):
+            return None
+
+        async def exit_code(self):
+            return None
+
+        async def close(self):
+            return None
+
+    class Socket:
+        headers = {"sec-websocket-protocol": "lsm-ui"}
+        query_params = {"machine": "local", "session_id": "demo", "scrollback": "1"}
+
+        def __init__(self):
+            self.messages = [
+                {
+                    "type": "websocket.receive",
+                    "text": json.dumps(
+                        {"type": "scrollback", "position": 25, "request_id": 9}
+                    ),
+                },
+                {"type": "websocket.disconnect"},
+            ]
+            self.sent_text = []
+
+        async def accept(self, subprotocol=None):
+            return None
+
+        async def close(self, code=1000, reason=""):
+            return None
+
+        async def send_bytes(self, data):
+            return None
+
+        async def send_text(self, data):
+            self.sent_text.append(json.loads(data))
+
+        async def receive(self):
+            await asyncio.sleep(0)
+            return self.messages.pop(0)
+
+    async def fake_spawn(*args):
+        return Process()
+
+    async def fake_state(process, pane_id=None):
+        return {
+            "type": "scrollback",
+            "supported": True,
+            "history": 100,
+            "position": 0,
+            "copy_mode": False,
+        }
+
+    async def failing_scroll(process, position, pane_id=None):
+        raise RuntimeError("tmux mutation failed")
+
+    monkeypatch.setattr(ui, "_authorize_websocket", lambda websocket: True)
+    monkeypatch.setattr(ui, "_spawn_shell_process", fake_spawn)
+    _stub_tmux_scrollback(monkeypatch, fake_state)
+    monkeypatch.setattr(ui, "_tmux_scroll_to", failing_scroll)
+    ui._ACTIVE_UI_TERMINALS.clear()
+    socket = Socket()
+
+    await ui.ui_shell_websocket(socket)
+
+    assert {"type": "scrollback-ack", "request_id": 9} in socket.sent_text
+
+
+@pytest.mark.asyncio
 async def test_native_shell_websocket_sends_trailing_scrollback_refresh(tmp_path, monkeypatch):
     _configure(tmp_path, monkeypatch)
     history = 0

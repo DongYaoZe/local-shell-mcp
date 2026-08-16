@@ -2564,6 +2564,15 @@ async def ui_shell_websocket(websocket: WebSocket) -> None:
                     return
                 except Exception:
                     _LOGGER.debug("Unable to scroll Native WebUI terminal", exc_info=True)
+                    request_id = control.get("request_id")
+                    if isinstance(request_id, int) and not isinstance(request_id, bool):
+                        async with send_lock:
+                            await websocket.send_text(
+                                json.dumps(
+                                    {"type": "scrollback-ack", "request_id": request_id},
+                                    separators=(",", ":"),
+                                )
+                            )
                     continue
                 request_id = control.get("request_id")
                 if isinstance(request_id, int) and not isinstance(request_id, bool):
