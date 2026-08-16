@@ -214,6 +214,7 @@ async def test_all_public_tool_wrappers_local_and_remote(tmp_path, monkeypatch):
     mcp = tools.build_mcp()
     local_cases = {
         "workspace_open": {},
+        "open_live_workspace": {},
         "live_workspace_reconnect": {},
         "environment_get": {},
         "skill_list": {},

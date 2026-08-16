@@ -142,3 +142,15 @@ async def test_v4_tool_rename_tombstones_point_to_canonical_surface() -> None:
         assert result["data"]["status"] == "stale_tool_snapshot"
         assert result["data"]["replacement"] == replacement
         assert result["data"]["removed_in"] == "4.0.0"
+
+
+async def test_registered_compatibility_alias_wins_over_tombstone() -> None:
+    mcp = DeprecatedToolFastMCP("test")
+
+    @mcp.tool(name="open_live_workspace")
+    async def compatibility_alias() -> dict[str, bool]:
+        return {"opened": True}
+
+    _content, structured = await mcp.call_tool("open_live_workspace", {})
+
+    assert structured == {"opened": True}

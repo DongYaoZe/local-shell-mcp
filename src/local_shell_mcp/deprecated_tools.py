@@ -147,7 +147,10 @@ class DeprecatedToolFastMCP(_FastMCP):
 
     async def call_tool(self, name: str, arguments: dict[str, Any]) -> Any:
         deprecated = DEPRECATED_TOOLS.get(name)
-        if deprecated is not None:
+        # A deliberately registered compatibility alias must remain executable.
+        # Tombstones only cover removed names that are absent from the real tool
+        # manager; HTTP tools/call dispatches through that manager directly.
+        if deprecated is not None and name not in self._tool_manager._tools:  # noqa: SLF001
             return _deprecated_tool_result(name, deprecated)
         return await super().call_tool(name, arguments)
 

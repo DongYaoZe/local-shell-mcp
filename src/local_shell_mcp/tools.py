@@ -444,9 +444,11 @@ def _serialize_audit_value(value: Any) -> Any:
 
 def _safe_audit_result(tool_name: str, value: Any) -> Any:
     serialized = _serialize_audit_value(value)
-    if tool_name not in {"workspace_open", "live_workspace_reconnect"} or not isinstance(
-        serialized, dict
-    ):
+    if tool_name not in {
+        "workspace_open",
+        "open_live_workspace",
+        "live_workspace_reconnect",
+    } or not isinstance(serialized, dict):
         return serialized
     sanitized = dict(serialized)
     sanitized.pop("meta", None)
@@ -905,7 +907,11 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
                         stage="started",
                         error=str(logical_lease["persistence_error"]),
                     )
-                if __tool_name not in {"workspace_open", "live_workspace_reconnect"}:
+                if __tool_name not in {
+                    "workspace_open",
+                    "open_live_workspace",
+                    "live_workspace_reconnect",
+                }:
                     live_subject = _current_principal_subject()
                     attached_live = None
                     if logical_lease and logical_lease.get("session_id"):
@@ -1243,6 +1249,7 @@ READ_ONLY_OPEN_WORLD_TOOL_NAMES = {
 NON_DESTRUCTIVE_MUTATION_TOOL_NAMES = {
     "link_create",
     "workspace_open",
+    "open_live_workspace",
 }
 
 
@@ -3389,6 +3396,29 @@ def _register_live_workspace_tools(
         cwd: str = ".",
     ) -> LiveChannelResult:
         """Open or reuse the interactive Live Workspace for real-time human/agent collaboration. Call it once for an active task and reuse the self-reconnecting floating workspace instead of reopening it repeatedly. Use it when terminal output, files/diffs, jobs, remotes, or audit activity would materially improve the workflow."""
+        return await build_live_channel_result(
+            machine=machine,
+            cwd=cwd,
+            live_id=None,
+            session_id=None,
+            app_reattach=False,
+        )
+
+    @mcp.tool(
+        structured_output=True,
+        annotations=ToolAnnotations(
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=False,
+        ),
+        meta=tool_meta,
+    )
+    async def open_live_workspace(
+        machine: str | None = None,
+        cwd: str = ".",
+    ) -> LiveChannelResult:
+        """Compatibility alias for workspace_open used by cached ChatGPT tool recipients. Open or reuse the same interactive Live Workspace; new clients should call workspace_open."""
         return await build_live_channel_result(
             machine=machine,
             cwd=cwd,
