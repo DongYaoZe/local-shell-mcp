@@ -1,6 +1,6 @@
 # DeepSeek Harness (DSH)
 
-`local-shell-mcp` can be installed directly into a DeepSeek Harness Web profile. The repository ships a DSH-aware bridge that keeps the complete LSM tool surface, maps each DSH Session to a stable PR 162 logical-session identity, and contributes **Live Workspace** as a native DSH conversation view.
+`local-shell-mcp` can be installed directly into a DeepSeek Harness Web profile. The repository ships a DSH-aware bridge that keeps the complete LSM tool surface, maps each DSH Session to a stable v4 logical-session identity, and contributes **Live Workspace** as a native DSH conversation view.
 
 LSM remains the authority for execution state: local and remote machines, logical Sessions and Goal plans, persistent terminals, jobs, browser sessions, Dynamic MCP, file links, audit data, and the Live Workspace timeline all stay in the LSM controller.
 
@@ -66,31 +66,31 @@ The bridge deliberately keeps the complete model-facing LSM catalog, including R
 
 ## DSH Session and LSM logical Session binding
 
-The integration is based on PR 162's logical-session runtime. Each DSH Session gets its own upstream Streamable HTTP MCP client. The bridge also sends an opaque, deterministic session-affinity value derived from the DSH Session id.
+The integration is based on the v4 logical-session runtime. Each DSH Session gets its own upstream Streamable HTTP MCP client. The bridge also sends an opaque, deterministic session-affinity value derived from the DSH Session id.
 
 That gives the following identity chain:
 
 ```text
 DSH Session A
   -> stable LSM session affinity A
-  -> PR 162 MCP session key A
+  -> v4 MCP session key A
   -> LSM logical Session / active run A
   -> Live Workspace A
 
 DSH Session B
   -> stable LSM session affinity B
-  -> PR 162 MCP session key B
+  -> v4 MCP session key B
   -> LSM logical Session / active run B
   -> Live Workspace B
 ```
 
-Tool activity from different DSH conversations therefore does not merge into one Live Workspace timeline. A DSH restart recreates the MCP transport with the same affinity, so the existing PR 162 logical Session and active run remain attached as long as the LSM controller still owns that Session.
+Tool activity from different DSH conversations therefore does not merge into one Live Workspace timeline. A DSH restart recreates the MCP transport with the same affinity, so the existing v4 logical Session and active run remain attached as long as the LSM controller still owns that Session.
 
 The bridge also pings active MCP clients periodically so LSM's normal MCP idle-session cleanup does not break long-lived DSH conversations.
 
 ## Live Workspace inside DSH
 
-The DSH browser plugin adds a **Live Workspace** entry to `conversation.view`. It reuses the existing PR 162 Live Workspace implementation rather than maintaining a second UI/state model.
+The DSH browser plugin adds a **Live Workspace** entry to `conversation.view`. It reuses the existing v4 Live Workspace implementation rather than maintaining a second UI/state model.
 
 The view is scoped to the current DSH Session and shows the corresponding LSM logical Session, Plan/Goal state, Activity, terminals, files, diff, jobs, remotes, and audit data. Live Workspace actions such as **Ask** and Goal auto-continuation are routed back into the same DSH conversation.
 
@@ -146,7 +146,7 @@ If workers connect from outside the controller host, configure LSM's public URL 
 
 The bundle does not launch another LSM process. It can start while LSM is unavailable: the catalog connection reconnects with backoff and synchronizes the tool catalog after LSM appears.
 
-Model tool calls are **not automatically replayed** after an ambiguous transport failure, because replaying a mutating shell/file/remote call could execute it twice. The stable session-affinity key and keepalive handle normal MCP transport recreation and idle periods without changing PR 162 logical-session ownership; an actual LSM controller replacement still follows the normal durable Session recovery rules of that deployment.
+Model tool calls are **not automatically replayed** after an ambiguous transport failure, because replaying a mutating shell/file/remote call could execute it twice. The stable session-affinity key and keepalive handle normal MCP transport recreation and idle periods without changing v4 logical-session ownership; an actual LSM controller replacement still follows the normal durable Session recovery rules of that deployment.
 
 Removing the plugin only removes the DSH-side integration:
 

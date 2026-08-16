@@ -1,6 +1,6 @@
 # DeepSeek Harness（DSH）
 
-`local-shell-mcp` 可以直接安装到 DeepSeek Harness Web profile。仓库内置一层面向 DSH 的桥接：保留完整 LSM 工具面，把每个 DSH Session 稳定映射到 PR 162 的 Logical Session，并把 **Live Workspace** 作为 DSH 原生 `conversation.view` 页面挂入会话。
+`local-shell-mcp` 可以直接安装到 DeepSeek Harness Web profile。仓库内置一层面向 DSH 的桥接：保留完整 LSM 工具面，把每个 DSH Session 稳定映射到 v4 Logical Session，并把 **Live Workspace** 作为 DSH 原生 `conversation.view` 页面挂入会话。
 
 执行状态仍由 LSM 负责：本机/远程机器、Logical Session 与 Goal Plan、持久终端、Jobs、Browser Session、Dynamic MCP、文件链接、Audit 和 Live Workspace timeline 都只有 LSM controller 这一份权威状态。
 
@@ -64,22 +64,22 @@ mcp__lsm__plan_manage
 
 该 bridge **不会主动裁剪 LSM 的模型工具面**，Remote Worker 能力也完整保留。内部的 `live_workspace_reconnect` 是 app-only 工具，只由 bridge 使用，不暴露给模型。如果某个 DSH 部署希望减少模型可见工具，应在更后的 DSH layer 使用 `ctx.tools.restrict()`，而不是修改 LSM bundle。
 
-## DSH Session 如何绑定 PR 162 Logical Session
+## DSH Session 如何绑定 v4 Logical Session
 
-实现直接建立在 PR 162 的 Logical Session runtime 上。每个 DSH Session 都拥有独立的上游 Streamable HTTP MCP client，同时 bridge 会根据 DSH Session id 计算一个不透明、稳定的 session-affinity 值发送给 LSM。
+实现直接建立在 v4 Logical Session runtime 上。每个 DSH Session 都拥有独立的上游 Streamable HTTP MCP client，同时 bridge 会根据 DSH Session id 计算一个不透明、稳定的 session-affinity 值发送给 LSM。
 
 因此身份链是：
 
 ```text
 DSH Session A
   -> 稳定 affinity A
-  -> PR 162 MCP session key A
+  -> v4 MCP session key A
   -> LSM Logical Session / active run A
   -> Live Workspace A
 
 DSH Session B
   -> 稳定 affinity B
-  -> PR 162 MCP session key B
+  -> v4 MCP session key B
   -> LSM Logical Session / active run B
   -> Live Workspace B
 ```
@@ -90,7 +90,7 @@ bridge 还会定期 ping 活跃的 MCP client，避免 LSM 正常的 MCP idle-se
 
 ## DSH 内的 Live Workspace
 
-浏览器侧插件会给 `conversation.view` 增加 **Live Workspace** 页面。它直接复用 PR 162 已有的 Live Workspace 实现，不复制第二套 UI 状态系统。
+浏览器侧插件会给 `conversation.view` 增加 **Live Workspace** 页面。它直接复用 v4 已有的 Live Workspace 实现，不复制第二套 UI 状态系统。
 
 页面按当前 DSH Session 隔离，能看到对应的 LSM Logical Session、Plan/Goal、Activity、Terminal、Files、Diff、Jobs、Remotes 和 Audit。Live Workspace 中的 **Ask** 以及 Goal 自动续跑消息，也会回到当前这一个 DSH conversation。
 

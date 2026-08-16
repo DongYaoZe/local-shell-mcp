@@ -1,6 +1,6 @@
 # DeepSeek Harness bundle: load the LSM-aware bridge rather than a generic
 # process-wide MCP client. The bridge keeps the full LSM model tool surface,
-# uses one upstream MCP transport per DSH Session so PR 162 logical-session
+# uses one upstream MCP transport per DSH Session so v4 logical-session
 # ownership stays isolated, and contributes a per-session Live Workspace view.
 -
   insert:
