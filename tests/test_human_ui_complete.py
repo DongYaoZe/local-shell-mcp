@@ -41,6 +41,14 @@ def _configure(
     get_settings.cache_clear()
 
 
+def _stub_tmux_scrollback(monkeypatch, fake_state, pane_id: str = "%1") -> None:
+    async def fake_baseline(process):
+        return await fake_state(process, pane_id), pane_id
+
+    monkeypatch.setattr(ui, "_tmux_scrollback_state", fake_state)
+    monkeypatch.setattr(ui, "_tmux_scrollback_baseline", fake_baseline)
+
+
 def _request(path: str = "/", *, query: bytes = b"", method: str = "GET") -> Request:
     return Request(
         {
@@ -1086,7 +1094,7 @@ async def test_tmux_scrollback_cleanup_waits_for_last_attachment(monkeypatch):
     scroll_requests = []
     process = SimpleNamespace(_tmux_session_id="shared")
 
-    async def fake_state(process):
+    async def fake_state(process, pane_id=None):
         return {
             "type": "scrollback",
             "supported": True,
@@ -1095,13 +1103,13 @@ async def test_tmux_scrollback_cleanup_waits_for_last_attachment(monkeypatch):
             "copy_mode": copy_mode,
         }
 
-    async def fake_scroll(process, position):
+    async def fake_scroll(process, position, pane_id=None):
         nonlocal copy_mode
         scroll_requests.append(position)
         copy_mode = position > 0
         return await fake_state(process)
 
-    monkeypatch.setattr(ui, "_tmux_scrollback_state", fake_state)
+    _stub_tmux_scrollback(monkeypatch, fake_state)
     monkeypatch.setattr(ui, "_tmux_scroll_to", fake_scroll)
 
     first = await ui._register_tmux_scrollback_attachment(process, 1)
@@ -1124,7 +1132,7 @@ async def test_tmux_scrollback_cleanup_restores_preexisting_copy_position(monkey
     calls = []
     process = SimpleNamespace(_tmux_session_id="shared")
 
-    async def fake_state(process):
+    async def fake_state(process, pane_id=None):
         return {
             "type": "scrollback",
             "supported": True,
@@ -1149,7 +1157,7 @@ async def test_tmux_scrollback_cleanup_restores_preexisting_copy_position(monkey
             return SimpleNamespace(ok=True, stdout="", stderr="")
         raise AssertionError(args)
 
-    monkeypatch.setattr(ui, "_tmux_scrollback_state", fake_state)
+    _stub_tmux_scrollback(monkeypatch, fake_state)
     monkeypatch.setattr(ui, "tmux", fake_tmux)
 
     registration = await ui._register_tmux_scrollback_attachment(process, 1)
@@ -1160,9 +1168,9 @@ async def test_tmux_scrollback_cleanup_restores_preexisting_copy_position(monkey
 
     assert copy_mode is True
     assert position == 17
-    assert ["copy-mode", "-t", "=shared:"] in calls
-    assert ["send-keys", "-X", "-t", "=shared:", "history-bottom"] in calls
-    assert ["send-keys", "-N", "17", "-X", "-t", "=shared:", "scroll-up"] in calls
+    assert ["copy-mode", "-t", "%1"] in calls
+    assert ["send-keys", "-X", "-t", "%1", "history-bottom"] in calls
+    assert ["send-keys", "-N", "17", "-X", "-t", "%1", "scroll-up"] in calls
 
 
 @pytest.mark.asyncio
@@ -1204,7 +1212,7 @@ async def test_tmux_scrollback_requests_are_serialized_per_session(monkeypatch):
     active = 0
     max_active = 0
 
-    async def fake_state(process):
+    async def fake_state(process, pane_id=None):
         return {
             "type": "scrollback",
             "supported": True,
@@ -1213,7 +1221,7 @@ async def test_tmux_scrollback_requests_are_serialized_per_session(monkeypatch):
             "copy_mode": position > 0,
         }
 
-    async def fake_scroll(process, requested):
+    async def fake_scroll(process, requested, pane_id=None):
         nonlocal active, max_active, position
         active += 1
         max_active = max(max_active, active)
@@ -1222,7 +1230,7 @@ async def test_tmux_scrollback_requests_are_serialized_per_session(monkeypatch):
         active -= 1
         return await fake_state(process)
 
-    monkeypatch.setattr(ui, "_tmux_scrollback_state", fake_state)
+    _stub_tmux_scrollback(monkeypatch, fake_state)
     monkeypatch.setattr(ui, "_tmux_scroll_to", fake_scroll)
 
     await asyncio.gather(
@@ -1233,6 +1241,43 @@ async def test_tmux_scrollback_requests_are_serialized_per_session(monkeypatch):
     assert max_active == 1
     assert position == 35
     assert group.owned_copy_mode is True
+
+
+@pytest.mark.asyncio
+async def test_tmux_scrollback_requests_stay_on_registered_pane(monkeypatch):
+    group = ui._TmuxScrollbackAttachmentGroup()
+    group.initial_copy_mode = False
+    group.pane_id = "%7"
+    registration = ("shared", group)
+    process = SimpleNamespace(_tmux_session_id="shared")
+    targets = []
+
+    async def fake_state(process, pane_id=None):
+        targets.append(("state", pane_id))
+        return {
+            "type": "scrollback",
+            "supported": True,
+            "history": 100,
+            "position": 0,
+            "copy_mode": False,
+        }
+
+    async def fake_scroll(process, requested, pane_id=None):
+        targets.append(("scroll", pane_id))
+        return {
+            "type": "scrollback",
+            "supported": True,
+            "history": 100,
+            "position": requested,
+            "copy_mode": requested > 0,
+        }
+
+    monkeypatch.setattr(ui, "_tmux_scrollback_state", fake_state)
+    monkeypatch.setattr(ui, "_tmux_scroll_to", fake_scroll)
+
+    await ui._tmux_apply_scrollback_request(process, registration, {"position": 12})
+
+    assert targets == [("state", "%7"), ("scroll", "%7")]
 
 
 @pytest.mark.asyncio
@@ -1249,7 +1294,7 @@ async def test_tmux_terminal_input_leaves_webui_owned_copy_mode(monkeypatch):
         async def write(self, data):
             events.append(("write", data))
 
-    async def fake_scroll(process, position):
+    async def fake_scroll(process, position, pane_id=None):
         events.append(("scroll", position))
         return {
             "type": "scrollback",
@@ -1290,6 +1335,47 @@ async def test_tmux_scrollback_state_suppresses_internal_audit(monkeypatch):
     state = await ui._tmux_scrollback_state(SimpleNamespace(_tmux_session_id="demo"))
 
     assert state["history"] == 10
+    assert active is False
+
+
+@pytest.mark.asyncio
+async def test_tmux_scroll_mutations_suppress_internal_audit(monkeypatch):
+    active = False
+    calls = []
+
+    class AuditContext:
+        def __enter__(self):
+            nonlocal active
+            active = True
+
+        def __exit__(self, exc_type, exc, tb):
+            nonlocal active
+            active = False
+
+    async def fake_state(process, pane_id=None):
+        return {
+            "type": "scrollback",
+            "supported": True,
+            "history": 100,
+            "position": 0,
+            "copy_mode": False,
+        }
+
+    async def fake_tmux(args, timeout_s=10, *, bypass_limit=False):
+        assert active is True
+        assert bypass_limit is True
+        calls.append(list(args))
+        return SimpleNamespace(ok=True, stdout="", stderr="")
+
+    monkeypatch.setattr(ui, "suppress_audit", lambda: AuditContext())
+    monkeypatch.setattr(ui, "_tmux_scrollback_state", fake_state)
+    monkeypatch.setattr(ui, "tmux", fake_tmux)
+
+    await ui._tmux_scroll_to(SimpleNamespace(_tmux_session_id="demo"), 5, "%9")
+
+    assert ["copy-mode", "-t", "%9"] in calls
+    assert ["send-keys", "-X", "-t", "%9", "history-bottom"] in calls
+    assert ["send-keys", "-N", "5", "-X", "-t", "%9", "scroll-up"] in calls
     assert active is False
 
 
@@ -1500,7 +1586,7 @@ async def test_native_shell_websocket_exposes_opt_in_tmux_scrollback(tmp_path, m
 
     requested = []
 
-    async def fake_state(process):
+    async def fake_state(process, pane_id=None):
         position = requested[-1] if requested else 10
         return {
             "type": "scrollback",
@@ -1510,7 +1596,7 @@ async def test_native_shell_websocket_exposes_opt_in_tmux_scrollback(tmp_path, m
             "copy_mode": bool(requested and position > 0),
         }
 
-    async def fake_scroll(process, position):
+    async def fake_scroll(process, position, pane_id=None):
         requested.append(position)
         return {
             "type": "scrollback",
@@ -1522,7 +1608,7 @@ async def test_native_shell_websocket_exposes_opt_in_tmux_scrollback(tmp_path, m
 
     monkeypatch.setattr(ui, "_authorize_websocket", lambda websocket: True)
     monkeypatch.setattr(ui, "_spawn_shell_process", fake_spawn)
-    monkeypatch.setattr(ui, "_tmux_scrollback_state", fake_state)
+    _stub_tmux_scrollback(monkeypatch, fake_state)
     monkeypatch.setattr(ui, "_tmux_scroll_to", fake_scroll)
     ui._ACTIVE_UI_TERMINALS.clear()
     socket = Socket()
@@ -1599,7 +1685,7 @@ async def test_native_shell_websocket_sends_trailing_scrollback_refresh(tmp_path
     async def fake_spawn(*args):
         return Process()
 
-    async def fake_state(process):
+    async def fake_state(process, pane_id=None):
         return {
             "type": "scrollback",
             "supported": True,
@@ -1610,7 +1696,7 @@ async def test_native_shell_websocket_sends_trailing_scrollback_refresh(tmp_path
 
     monkeypatch.setattr(ui, "_authorize_websocket", lambda websocket: True)
     monkeypatch.setattr(ui, "_spawn_shell_process", fake_spawn)
-    monkeypatch.setattr(ui, "_tmux_scrollback_state", fake_state)
+    _stub_tmux_scrollback(monkeypatch, fake_state)
     ui._ACTIVE_UI_TERMINALS.clear()
     socket = Socket()
 
@@ -1676,7 +1762,7 @@ async def test_native_shell_websocket_preserves_preexisting_tmux_copy_mode(tmp_p
     async def fake_spawn(*args):
         return Process()
 
-    async def fake_state(process):
+    async def fake_state(process, pane_id=None):
         return {
             "type": "scrollback",
             "supported": True,
@@ -1687,7 +1773,7 @@ async def test_native_shell_websocket_preserves_preexisting_tmux_copy_mode(tmp_p
 
     requested = []
 
-    async def fake_scroll(process, position):
+    async def fake_scroll(process, position, pane_id=None):
         requested.append(position)
         return {
             "type": "scrollback",
@@ -1699,7 +1785,7 @@ async def test_native_shell_websocket_preserves_preexisting_tmux_copy_mode(tmp_p
 
     monkeypatch.setattr(ui, "_authorize_websocket", lambda websocket: True)
     monkeypatch.setattr(ui, "_spawn_shell_process", fake_spawn)
-    monkeypatch.setattr(ui, "_tmux_scrollback_state", fake_state)
+    _stub_tmux_scrollback(monkeypatch, fake_state)
     monkeypatch.setattr(ui, "_tmux_scroll_to", fake_scroll)
     ui._ACTIVE_UI_TERMINALS.clear()
 
@@ -1764,7 +1850,7 @@ async def test_native_shell_websocket_cleans_up_tmux_mouse_copy_mode(tmp_path, m
     async def fake_spawn(*args):
         return Process()
 
-    async def fake_state(process):
+    async def fake_state(process, pane_id=None):
         return {
             "type": "scrollback",
             "supported": True,
@@ -1773,7 +1859,7 @@ async def test_native_shell_websocket_cleans_up_tmux_mouse_copy_mode(tmp_path, m
             "copy_mode": copy_mode,
         }
 
-    async def fake_scroll(process, position):
+    async def fake_scroll(process, position, pane_id=None):
         nonlocal copy_mode
         requested.append(position)
         copy_mode = position > 0
@@ -1781,7 +1867,7 @@ async def test_native_shell_websocket_cleans_up_tmux_mouse_copy_mode(tmp_path, m
 
     monkeypatch.setattr(ui, "_authorize_websocket", lambda websocket: True)
     monkeypatch.setattr(ui, "_spawn_shell_process", fake_spawn)
-    monkeypatch.setattr(ui, "_tmux_scrollback_state", fake_state)
+    _stub_tmux_scrollback(monkeypatch, fake_state)
     monkeypatch.setattr(ui, "_tmux_scroll_to", fake_scroll)
     ui._ACTIVE_UI_TERMINALS.clear()
 
@@ -1847,12 +1933,12 @@ async def test_native_shell_websocket_rejects_invalid_scrollback_request(tmp_pat
     async def fake_spawn(*args):
         return Process()
 
-    async def fake_state(process):
+    async def fake_state(process, pane_id=None):
         return {"type": "scrollback", "supported": True, "history": 100, "position": 10}
 
     monkeypatch.setattr(ui, "_authorize_websocket", lambda websocket: True)
     monkeypatch.setattr(ui, "_spawn_shell_process", fake_spawn)
-    monkeypatch.setattr(ui, "_tmux_scrollback_state", fake_state)
+    _stub_tmux_scrollback(monkeypatch, fake_state)
     ui._ACTIVE_UI_TERMINALS.clear()
     socket = Socket()
 

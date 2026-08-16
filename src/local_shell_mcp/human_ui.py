@@ -1788,32 +1788,12 @@ async def _spawn_shell_process(machine: str, session_id: str, cols: int, rows: i
     return _PollingShellProcess(machine, session_id, cols, rows)
 
 
-async def _tmux_scrollback_state(process: Any) -> dict[str, Any]:
-    session_id = getattr(process, "_tmux_session_id", None)
-    if not session_id:
-        return {
-            "type": "scrollback",
-            "supported": False,
-            "history": 0,
-            "position": 0,
-            "copy_mode": False,
-        }
-
-    target = f"={session_id}:"
+async def _tmux_scrollback_command(args: list[str]):  # noqa: ANN201
     with suppress_audit():
-        result = await tmux(
-            [
-                "display-message",
-                "-p",
-                "-t",
-                target,
-                "#{history_size}\t#{pane_mode}\t#{scroll_position}",
-            ],
-            bypass_limit=True,
-        )
-    if not result.ok:
-        raise RuntimeError(result.stderr or result.stdout or "Unable to read tmux scrollback state")
-    parts = result.stdout.rstrip("\r\n").split("\t")
+        return await tmux(args, bypass_limit=True)
+
+
+def _parse_tmux_scrollback_state(parts: list[str]) -> dict[str, Any]:
     if len(parts) != 3:
         raise RuntimeError("Unexpected tmux scrollback state")
     copy_mode = parts[1] == "copy-mode"
@@ -1831,13 +1811,64 @@ async def _tmux_scrollback_state(process: Any) -> dict[str, Any]:
     }
 
 
-async def _tmux_scroll_to(process: Any, position: int) -> dict[str, Any]:
+async def _tmux_scrollback_state(
+    process: Any, pane_id: str | None = None
+) -> dict[str, Any]:
     session_id = getattr(process, "_tmux_session_id", None)
     if not session_id:
-        return await _tmux_scrollback_state(process)
+        return {
+            "type": "scrollback",
+            "supported": False,
+            "history": 0,
+            "position": 0,
+            "copy_mode": False,
+        }
 
-    tmux_target = f"={session_id}:"
-    state = await _tmux_scrollback_state(process)
+    target = pane_id or f"={session_id}:"
+    result = await _tmux_scrollback_command(
+        [
+            "display-message",
+            "-p",
+            "-t",
+            target,
+            "#{history_size}\t#{pane_mode}\t#{scroll_position}",
+        ]
+    )
+    if not result.ok:
+        raise RuntimeError(result.stderr or result.stdout or "Unable to read tmux scrollback state")
+    return _parse_tmux_scrollback_state(result.stdout.rstrip("\r\n").split("\t"))
+
+
+async def _tmux_scrollback_baseline(process: Any) -> tuple[dict[str, Any], str]:
+    session_id = getattr(process, "_tmux_session_id", None)
+    if not session_id:
+        raise RuntimeError("tmux session unavailable")
+    result = await _tmux_scrollback_command(
+        [
+            "display-message",
+            "-p",
+            "-t",
+            f"={session_id}:",
+            "#{pane_id}\t#{history_size}\t#{pane_mode}\t#{scroll_position}",
+        ]
+    )
+    if not result.ok:
+        raise RuntimeError(result.stderr or result.stdout or "Unable to read tmux scrollback baseline")
+    parts = result.stdout.rstrip("\r\n").split("\t")
+    if len(parts) != 4 or not parts[0].startswith("%"):
+        raise RuntimeError("Unexpected tmux scrollback baseline")
+    return _parse_tmux_scrollback_state(parts[1:]), parts[0]
+
+
+async def _tmux_scroll_to(
+    process: Any, position: int, pane_id: str | None = None
+) -> dict[str, Any]:
+    session_id = getattr(process, "_tmux_session_id", None)
+    if not session_id:
+        return await _tmux_scrollback_state(process, pane_id)
+
+    tmux_target = pane_id or f"={session_id}:"
+    state = await _tmux_scrollback_state(process, pane_id)
     history = int(state["history"])
     target = max(0, min(int(position), history))
     current = int(state["position"])
@@ -1845,59 +1876,56 @@ async def _tmux_scroll_to(process: Any, position: int) -> dict[str, Any]:
 
     if target == 0:
         if copy_mode:
-            result = await tmux(
-                ["send-keys", "-X", "-t", tmux_target, "cancel"],
-                bypass_limit=True,
+            result = await _tmux_scrollback_command(
+                ["send-keys", "-X", "-t", tmux_target, "cancel"]
             )
             if not result.ok:
                 raise RuntimeError(result.stderr or result.stdout or "Unable to leave tmux copy mode")
-        return await _tmux_scrollback_state(process)
+        return await _tmux_scrollback_state(process, pane_id)
 
     if target == current and copy_mode:
         return state
     if not copy_mode:
-        result = await tmux(["copy-mode", "-t", tmux_target], bypass_limit=True)
+        result = await _tmux_scrollback_command(["copy-mode", "-t", tmux_target])
         if not result.ok:
             raise RuntimeError(result.stderr or result.stdout or "Unable to enter tmux copy mode")
-    result = await tmux(
-        ["send-keys", "-X", "-t", tmux_target, "history-bottom"],
-        bypass_limit=True,
+    result = await _tmux_scrollback_command(
+        ["send-keys", "-X", "-t", tmux_target, "history-bottom"]
     )
     if not result.ok:
         raise RuntimeError(result.stderr or result.stdout or "Unable to scroll tmux history")
-    result = await tmux(
-        ["send-keys", "-N", str(target), "-X", "-t", tmux_target, "scroll-up"],
-        bypass_limit=True,
+    result = await _tmux_scrollback_command(
+        ["send-keys", "-N", str(target), "-X", "-t", tmux_target, "scroll-up"]
     )
     if not result.ok:
         raise RuntimeError(result.stderr or result.stdout or "Unable to scroll tmux history")
-    return await _tmux_scrollback_state(process)
+    return await _tmux_scrollback_state(process, pane_id)
 
 
-async def _tmux_restore_copy_mode_position(process: Any, position: int) -> None:
+async def _tmux_restore_copy_mode_position(
+    process: Any, position: int, pane_id: str | None = None
+) -> None:
     session_id = getattr(process, "_tmux_session_id", None)
     if not session_id:
         return
-    target = f"={session_id}:"
-    state = await _tmux_scrollback_state(process)
+    target = pane_id or f"={session_id}:"
+    state = await _tmux_scrollback_state(process, pane_id)
     history = int(state["history"])
     requested = max(0, min(int(position), history))
     if state.get("copy_mode") and int(state.get("position") or 0) == requested:
         return
     if not state.get("copy_mode"):
-        result = await tmux(["copy-mode", "-t", target], bypass_limit=True)
+        result = await _tmux_scrollback_command(["copy-mode", "-t", target])
         if not result.ok:
             raise RuntimeError(result.stderr or result.stdout or "Unable to restore tmux copy mode")
-    result = await tmux(
-        ["send-keys", "-X", "-t", target, "history-bottom"],
-        bypass_limit=True,
+    result = await _tmux_scrollback_command(
+        ["send-keys", "-X", "-t", target, "history-bottom"]
     )
     if not result.ok:
         raise RuntimeError(result.stderr or result.stdout or "Unable to restore tmux scrollback position")
     if requested:
-        result = await tmux(
-            ["send-keys", "-N", str(requested), "-X", "-t", target, "scroll-up"],
-            bypass_limit=True,
+        result = await _tmux_scrollback_command(
+            ["send-keys", "-N", str(requested), "-X", "-t", target, "scroll-up"]
         )
         if not result.ok:
             raise RuntimeError(
@@ -1912,6 +1940,7 @@ class _TmuxScrollbackAttachmentGroup:
         self.initial_copy_mode: bool | None = None
         self.initial_position = 0
         self.owned_copy_mode = False
+        self.pane_id: str | None = None
 
 
 _TMUX_SCROLLBACK_ATTACHMENTS: dict[str, _TmuxScrollbackAttachmentGroup] = {}
@@ -1931,7 +1960,7 @@ async def _register_tmux_scrollback_attachment(
                 continue
             if not group.members:
                 try:
-                    state = await _tmux_scrollback_state(process)
+                    state, pane_id = await _tmux_scrollback_baseline(process)
                 except Exception:
                     _LOGGER.debug(
                         "Unable to read initial Native WebUI scrollback state", exc_info=True
@@ -1945,6 +1974,7 @@ async def _register_tmux_scrollback_attachment(
                     return None
                 group.initial_copy_mode = bool(state.get("copy_mode"))
                 group.initial_position = int(state.get("position") or 0)
+                group.pane_id = pane_id
             group.members.add(marker)
             return key, group
 
@@ -1964,16 +1994,18 @@ async def _release_tmux_scrollback_attachment(
         if group.members:
             return
         try:
-            final_state = await _tmux_scrollback_state(process)
+            final_state = await _tmux_scrollback_state(process, group.pane_id)
             final_copy_mode = bool(final_state.get("copy_mode"))
             final_position = int(final_state.get("position") or 0)
             if group.initial_copy_mode is False:
                 if final_copy_mode:
-                    await _tmux_scroll_to(process, 0)
+                    await _tmux_scroll_to(process, 0, group.pane_id)
             elif group.initial_copy_mode is True and (
                 not final_copy_mode or final_position != group.initial_position
             ):
-                await _tmux_restore_copy_mode_position(process, group.initial_position)
+                await _tmux_restore_copy_mode_position(
+                    process, group.initial_position, group.pane_id
+                )
         except Exception:
             _LOGGER.debug("Unable to leave Native WebUI tmux copy mode", exc_info=True)
         finally:
@@ -1988,7 +2020,7 @@ async def _tmux_apply_scrollback_request(
 ) -> dict[str, Any]:
     _, group = registration
     async with group.lock:
-        state = await _tmux_scrollback_state(process)
+        state = await _tmux_scrollback_state(process, group.pane_id)
         current = int(state["position"])
         history = int(state["history"])
         if "position" in control:
@@ -1996,7 +2028,7 @@ async def _tmux_apply_scrollback_request(
         else:
             requested = current + int(control.get("offset") or 0)
         requested = max(0, min(requested, history))
-        state = await _tmux_scroll_to(process, requested)
+        state = await _tmux_scroll_to(process, requested, group.pane_id)
         if group.initial_copy_mode is False:
             group.owned_copy_mode = requested > 0 and bool(state.get("copy_mode"))
         return state
@@ -2013,7 +2045,7 @@ async def _tmux_write_terminal_input(
     _, group = registration
     async with group.lock:
         if group.owned_copy_mode:
-            await _tmux_scroll_to(process, 0)
+            await _tmux_scroll_to(process, 0, group.pane_id)
             group.owned_copy_mode = False
         await process.write(data)
 
@@ -2340,7 +2372,7 @@ async def ui_shell_websocket(websocket: WebSocket) -> None:
         try:
             _, group = scrollback_registration
             async with group.lock:
-                state = await _tmux_scrollback_state(process)
+                state = await _tmux_scrollback_state(process, group.pane_id)
         except Exception:
             _LOGGER.debug("Unable to read Native WebUI scrollback state", exc_info=True)
             return
