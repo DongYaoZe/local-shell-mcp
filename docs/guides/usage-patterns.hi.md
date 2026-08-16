@@ -1,38 +1,110 @@
-# उपयोग पैटर्न
+<!-- i18n-source-sha256: 0b086e03bb7fd910e016db31a703908be74f7858846c091c8e784a62e00ec6ca -->
+# उपयोग पैटर्न और prompting guide
 
-यह पृष्ठ “उपयोग पैटर्न” परिदृश्य समझाता है और साइट की समान Runtime/Client संरचना का पालन करता है।
+`local-shell-mcp` शक्तिशाली tools देता है। अच्छे परिणामों के लिए model से पहले निरीक्षण, छोटे कदमों में कार्य, verification और बदली चीजों की रिपोर्ट माँगें।
 
-## सारांश
+## सामान्य operating loop
 
-Runtime यह तय करता है कि सर्वर प्रक्रिया कैसे चलेगी और कौन-सा workspace नियंत्रित होगा। Client यह तय करता है कि ChatGPT या कोई अन्य MCP क्लाइंट कैसे जुड़ेगा। Docker, VS Code एक्सटेंशन, स्वतंत्र बाइनरी, Python/pipx/source स्थापना और stdio Runtime विकल्प हैं; ChatGPT कनेक्टर, सामान्य HTTP MCP क्लाइंट और stdio MCP क्लाइंट Client कनेक्शन हैं।
+अधिकांश coding tasks में यह loop उपयोग करें:
 
-## कब उपयोग करें
+1. Inspect: `environment_get`, `file_tree`, `file_grep`, `file_read` और `git status` जैसे commands के लिए `run_shell`।
+2. Plan: model से शामिल न्यूनतम files और tests पहचानने को कहें।
+3. Edit: `file_edit`, `file_patch` या shell commands उपयोग करें।
+4. Verify: `run_shell` या persistent shells से targeted tests/builds चलाएँ।
+5. Review: `run_shell` से `git diff` चलाएँ, फिर जरूरत पर `secret_scan` और `audit_tail`।
+6. Commit/export: `run_shell` से स्पष्ट Git CLI commands या `link_create` उपयोग करें।
 
-- जब चुना गया Runtime या Client पथ इस शीर्षक से मेल खाए, तब इस पृष्ठ का उपयोग करें।
-- workspace root, public base URL, MCP endpoint, authentication mode और host पर उपलब्ध टूल को संगत रखें।
-- ChatGPT web/app के लिए `/mcp` पर समाप्त होने वाला HTTPS MCP endpoint उपलब्ध कराएँ।
-- स्थानीय MCP क्लाइंट के लिए क्लाइंट समर्थन के अनुसार HTTP localhost या `local-shell-mcp --mode stdio` का उपयोग करें।
+## Tool चयन
 
-## चरण
+| Task | प्राथमिकता | बचें |
+|---|---|---|
+| छोटा one-shot command | `run_shell` | हर command के लिए persistent shell शुरू करना |
+| लंबा dev server, REPL, watch task | `shell_start` + `shell_read` + `shell_send` | timeout तक `run_shell` block करना |
+| Structured analysis या file generation | `run_python` | जटिल JSON/text के लिए fragile shell pipelines |
+| छोटा exact edit | `file_edit` | अनावश्यक पूरा file rewrite |
+| एक file में एक या कई replacements | `file_edit` with an `edits` array | फिर पढ़े बिना stale edits दोहराना |
+| Multi-file patch | `file_patch` | Ad hoc shell edits |
+| Files खोजना | `file_tree`, `file_glob` | बड़े repositories की पूरी recursive listing |
+| Code खोजना | `file_grep` | कई files बिना उद्देश्य पढ़ना |
+| Browser evidence | `browser_snapshot`, `browser_run_script` | page name/route से अनुमान लगाना |
+| Downloadable artifacts | `link_create` | बड़ा binary content chat में paste करना |
+| Remote machine work | normal tools with `machine`, plus `remote_transfer` | outbound worker पर्याप्त होने पर inbound SSH खोलना |
 
-1. पहले Runtime स्थापना पृष्ठ चुनें।
-2. Runtime शुरू करें और HTTP मोड में `/healthz` जाँचें।
-3. फिर Client कनेक्शन पृष्ठ चुनें।
-4. Client में MCP endpoint या stdio command पंजीकृत करें।
-5. वास्तविक workspace और settings की जाँच के लिए `environment_get` कॉल करें।
+## Prompt templates
+
+### Read-only repository orientation
 
 ```text
-Runtime: Docker / VS Code extension / binary / Python / stdio
-Client:  ChatGPT connector / generic HTTP MCP / generic stdio MCP
-Endpoint: https://your-host.example.com/mcp
+local-shell-mcp उपयोग करें। repository layout और git status देखें। Files न बदलें। बदलाव से पहले मुख्य components, अनुमानित test commands और स्पष्ट risks का सार दें।
 ```
 
-## सत्यापन
+### Focused bug fix
 
-- `environment_get` Runtime settings और workspace की पुष्टि करता है।
-- `file_tree` दिखाई देने वाली फ़ाइलों की पुष्टि करता है।
-- `run_shell` command environment की पुष्टि करता है।
+```text
+Bug ठीक करने के लिए local-shell-mcp उपयोग करें। पहले सबसे छोटे relevant command से उसे reproduce या locate करें। Edit से पहले files पढ़ें। Minimal patch बनाएँ, targeted verification चलाएँ, फिर git diff और ठीक-ठीक चलाए गए tests दिखाएँ। मेरी स्वीकृति से पहले commit न करें।
+```
 
-## टिप्पणियाँ
+### Commit और push workflow
 
-छोटे और सत्यापित किए जा सकने वाले चरणों को प्राथमिकता दें: निरीक्षण, संपादन, diff, test, scan और commit। बड़े कार्यों को भी audit योग्य tool calls में बाँटें।
+```text
+local-shell-mcp उपयोग करें। git status और diff जाँचें, relevant tests और secret_scan चलाएँ, concise message के साथ एक focused commit बनाएँ, फिर current branch push करें। Cache, build artifacts या unrelated formatting शामिल न करें।
+```
+
+### Long-running process
+
+```text
+Dev server को persistent shell session में शुरू करें, ready होने तक output पढ़ें, फिर browser tools से page verify करें। session id रखें और verification के बाद session kill करें।
+```
+
+### Remote worker task
+
+```text
+Connected remote worker <machine> उपयोग करें। पहले machine=<machine> के साथ environment_get, फिर उसी machine के साथ file_list कॉल करें। केवल configured remote workdir में काम करें। छोटे commands के लिए run_shell और लंबे काम के लिए shell_start या job_start उपयोग करें।
+```
+
+## Repositories के साथ काम
+
+Open-source changes के लिए अनुशंसित sequence:
+
+1. `run_shell` से `git status --short --branch` चलाएँ।
+2. जब upstream state महत्वपूर्ण हो तो explicit Git CLI commands से fetch और branches inspect करें।
+3. Edit से पहले `file_grep` और `file_read` उपयोग करें।
+4. Minimal patch बनाएँ।
+5. पहले targeted tests, फिर संभव हो तो broader tests चलाएँ।
+6. Commit/push से पहले `secret_scan` चलाएँ।
+7. Explicit stage और commit concise message के साथ करें।
+
+Reviewable history के लिए logical change प्रति एक commit माँगें।
+
+## Generated artifacts के साथ काम
+
+PDFs, reports, screenshots, archives या logs के लिए:
+
+1. Workspace के अंदर file generate करें।
+2. File मौजूद है और expected size का है, यह verify करें।
+3. Short TTL और optional `max_downloads` के साथ `link_create` उपयोग करें।
+4. Link की जरूरत खत्म होने पर revoke करें।
+
+Private keys, credential directories या unrelated personal data के public links न बनाएँ।
+
+## Remote machines के साथ काम
+
+Remote worker mode तब उपयोगी है जब machine outbound HTTPS कर सकती हो पर inbound SSH स्वीकार नहीं कर सकती।
+
+अच्छी practices:
+
+- `remote_manage(action="invite", ...)` या `remote_manage(action="rename", ...)` से machines बनाएँ/rename करें।
+- काम से पहले `environment_get(machine=...)` कॉल करें।
+- `remote_transfer` से controller/worker या worker/worker transfer jobs शुरू करें और normal `job_*` tools से manage करें।
+- Task के बाद `remote_manage(action="revoke", ...)` से workers revoke करें।
+
+## Anti-patterns
+
+जब तक environment disposable न हो और consequences समझे न गए हों, इन निर्देशों से बचें:
+
+- Host-launched server पर “जो चाहिए globally install करो”.
+- Time bounds या verification criteria के बिना “चलाते रहो जब तक काम न करे”.
+- Generated artifacts वाले repository में “सब commit करो”.
+- Convenience के लिए “पूरा home directory expose करो”.
+- “पूरे workspace का file link बनाओ”.
+- `LOCAL_SHELL_MCP_AUTH_MODE=none` के साथ public deployment चलाना.

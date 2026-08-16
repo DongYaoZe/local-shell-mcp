@@ -1,38 +1,63 @@
-# stdio モード
+<!-- i18n-source-sha256: a3d2dc835f99feed33a73ae3dd880dabab04a37d7461b99f1fa49c33ba0506e1 -->
+# Stdio runtime
 
-このページでは「stdio モード」の場面を説明し、サイト全体で共通の Runtime/Client 構造に従います。
+Stdio mode は、`local-shell-mcp` を child process として起動し、標準入力/標準出力で通信するローカル MCP client 向けです。
 
-## 概要
+これは公開 HTTP deployment ではありません。ChatGPT はユーザーのマシン上で process を起動できないため、ChatGPT web/app から直接使用することはできません。
 
-Runtime はサーバープロセスの起動方法と制御するワークスペースを決めます。Client は ChatGPT または別の MCP クライアントの接続方法を決めます。Docker、VS Code 拡張、スタンドアロンバイナリ、Python/pipx/ソースインストール、stdio は Runtime の選択肢です。ChatGPT コネクタ、汎用 HTTP MCP クライアント、stdio MCP クライアントは Client 接続です。
+## stdio を使う場面
 
-## 利用する場面
+次の場合に stdio mode を使用します。
 
-- 選択した Runtime または Client の経路がこのページのタイトルに一致する場合に使用します。
-- ワークスペースルート、公開 base URL、MCP endpoint、認証モード、ホストで利用できるツールをそろえます。
-- ChatGPT の Web/App では `/mcp` で終わる HTTPS MCP endpoint を公開します。
-- ローカル MCP クライアントでは、対応状況に応じて HTTP localhost または `local-shell-mcp --mode stdio` を使用します。
+- MCP client が command-based server definition をサポートしている。
+- client と制御対象 workspace が同じマシン上にある。
+- OAuth、公開 HTTPS、reverse proxy、tunnel が不要。
+- server lifecycle を client に管理させたい。
 
-## 手順
+次の場合は stdio mode を使用しないでください。
 
-1. まず Runtime のインストールページを選びます。
-2. Runtime を起動し、HTTP モードでは `/healthz` を確認します。
-3. 次に Client 接続ページを選びます。
-4. Client に MCP endpoint または stdio コマンドを登録します。
-5. `environment_get` を呼び出して実際のワークスペースと設定を確認します。
+- client が ChatGPT web/app。
+- 複数の remote client が同じ server を必要とする。
+- HTTP 経由の tokenized file download が必要。
+- HTTP で提供される remote-worker join route が必要。
 
-```text
-Runtime: Docker / VS Code extension / binary / Python / stdio
-Client:  ChatGPT connector / generic HTTP MCP / generic stdio MCP
-Endpoint: https://your-host.example.com/mcp
+## コマンド
+
+```bash
+LOCAL_SHELL_MCP_WORKSPACE_ROOT=/path/to/workspace local-shell-mcp --mode stdio
 ```
 
-## 検証
+一般的な MCP client 設定には通常、次のような内容が含まれます。
 
-- `environment_get` は Runtime 設定とワークスペースを確認します。
-- `file_tree` は見えているファイルを確認します。
-- `run_shell` はコマンド実行環境を確認します。
+```json
+{
+  "mcpServers": {
+    "local-shell-mcp": {
+      "command": "local-shell-mcp",
+      "args": ["--mode", "stdio"],
+      "env": {
+        "LOCAL_SHELL_MCP_WORKSPACE_ROOT": "/path/to/workspace"
+      }
+    }
+  }
+}
+```
 
-## 注記
+schema は client に合わせて調整してください。`servers`、`tools`、`mcpServers`、`contextServers` などの名前を使う client があります。
 
-小さく検証可能な手順を優先します。確認、編集、diff、テスト、スキャン、コミットの順に進めます。大きな作業も監査可能なツール呼び出しに分解します。
+## HTTP mode との動作差
+
+| 項目 | Stdio mode | HTTP MCP mode |
+|---|---|---|
+| Transport | stdin/stdout | HTTP streamable MCP endpoint |
+| Endpoint | なし | `/mcp` |
+| OAuth | 不要 | 公開利用では推奨 |
+| Health endpoint | なし | `/healthz`, `/readyz` |
+| 公開 ChatGPT からの利用 | 不可 | HTTPS の背後で可能 |
+| Server lifecycle | client が process を起動 | process/runtime を自分で管理 |
+
+それ以外の tool surface は、configuration と client support の範囲内で同じ server-side implementation を使用します。
+
+## 安全上の注意
+
+Stdio mode は多くの場合 MCP client と同じ user で host 上に直接実行されます。workspace root を狭くし、広範な filesystem access は避けてください。stdio 自体が破棄可能な container/VM 内で実行されている場合を除き、full-container mode は無効のままにしてください。

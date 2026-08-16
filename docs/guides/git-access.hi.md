@@ -1,38 +1,40 @@
-# Git पहुँच
+<!-- i18n-source-sha256: 3b7d6ab07c5d6bad2bfb22f366893819ac8de8754c7c28bcb35f24ea5695979c -->
+# Git access
 
-यह पृष्ठ “Git पहुँच” परिदृश्य समझाता है और साइट की समान Runtime/Client संरचना का पालन करता है।
+`local-shell-mcp` `run_shell`, `shell_start` या `job_start` के माध्यम से standard Git CLI उपयोग करता है। Dedicated Git MCP wrappers जानबूझकर expose नहीं किए जाते: CLI पूर्ण है, coding agents को परिचित है और tool list में हर Git subcommand की नकल करने से बचाता है।
 
-## सारांश
+## सामान्य workflow
 
-Runtime यह तय करता है कि सर्वर प्रक्रिया कैसे चलेगी और कौन-सा workspace नियंत्रित होगा। Client यह तय करता है कि ChatGPT या कोई अन्य MCP क्लाइंट कैसे जुड़ेगा। Docker, VS Code एक्सटेंशन, स्वतंत्र बाइनरी, Python/pipx/source स्थापना और stdio Runtime विकल्प हैं; ChatGPT कनेक्टर, सामान्य HTTP MCP क्लाइंट और stdio MCP क्लाइंट Client कनेक्शन हैं।
+जहाँ संभव हो bounded, non-interactive commands उपयोग करें:
 
-## कब उपयोग करें
-
-- जब चुना गया Runtime या Client पथ इस शीर्षक से मेल खाए, तब इस पृष्ठ का उपयोग करें।
-- workspace root, public base URL, MCP endpoint, authentication mode और host पर उपलब्ध टूल को संगत रखें।
-- ChatGPT web/app के लिए `/mcp` पर समाप्त होने वाला HTTPS MCP endpoint उपलब्ध कराएँ।
-- स्थानीय MCP क्लाइंट के लिए क्लाइंट समर्थन के अनुसार HTTP localhost या `local-shell-mcp --mode stdio` का उपयोग करें।
-
-## चरण
-
-1. पहले Runtime स्थापना पृष्ठ चुनें।
-2. Runtime शुरू करें और HTTP मोड में `/healthz` जाँचें।
-3. फिर Client कनेक्शन पृष्ठ चुनें।
-4. Client में MCP endpoint या stdio command पंजीकृत करें।
-5. वास्तविक workspace और settings की जाँच के लिए `environment_get` कॉल करें।
-
-```text
-Runtime: Docker / VS Code extension / binary / Python / stdio
-Client:  ChatGPT connector / generic HTTP MCP / generic stdio MCP
-Endpoint: https://your-host.example.com/mcp
+```bash
+git status --short --branch
+git diff --stat
+git diff
+git add -- path/to/file
+git commit -m "fix: concise description"
+git push origin HEAD
 ```
 
-## सत्यापन
+एक सामान्य agent sequence:
 
-- `environment_get` Runtime settings और workspace की पुष्टि करता है।
-- `file_tree` दिखाई देने वाली फ़ाइलों की पुष्टि करता है।
-- `run_shell` command environment की पुष्टि करता है।
+1. `run_shell(command="git status --short --branch")` से inspect करें।
+2. केवल संबंधित files पढ़ें और edit करें।
+3. Targeted tests चलाएँ।
+4. `run_shell(command="git diff --check && git diff")` से review करें।
+5. Commit या push से पहले `secret_scan` चलाएँ।
+6. Explicit Git CLI commands से stage, commit और push करें।
 
-## टिप्पणियाँ
+जब repository remote worker पर हो तो उसी shell tool में `machine` उपयोग करें।
 
-छोटे और सत्यापित किए जा सकने वाले चरणों को प्राथमिकता दें: निरीक्षण, संपादन, diff, test, scan और commit। बड़े कार्यों को भी audit योग्य tool calls में बाँटें।
+## Credentials
+
+Docker deployments `/persist/credentials` के नीचे सामान्य Git credential locations persist कर सकते हैं। इस volume को sensitive मानें। Repository-scoped deploy keys, short-lived GitHub App tokens, isolated automation users और push से पहले manual review को प्राथमिकता दें।
+
+## Commit hygiene
+
+Commits को focused रखें, generated caches और build artifacts हटाएँ, चलाए गए tests दर्ज करें और unrelated changes stage न करें। Reset, clean या force-push जैसे destructive commands के लिए पहले exact target inspect करें।
+
+## Troubleshooting
+
+`git push` fail होने पर remote URL, credential persistence, branch protection और token permissions जाँचें। GitHub CLI installed हो तो `gh auth status` उपयोगी है।

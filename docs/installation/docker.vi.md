@@ -1,38 +1,184 @@
-# Docker Compose
+<!-- i18n-source-sha256: 56d5f11100a1906c167afd36354f29742515a26289c62a03f044f3852ce2eaed -->
+# Runtime Docker Compose
 
-Trang này mô tả kịch bản “Docker Compose” và giữ cấu trúc Runtime/Client chung của trang tài liệu.
+Docker Compose là runtime khuyến nghị cho phần lớn người dùng. Nó cung cấp cho model workspace Linux được kiểm soát, toolchain tái lập, persistent credentials, hỗ trợ browser automation và đường upgrade dễ dàng.
 
-## Tổng quan
+Đây là lựa chọn runtime. Có thể kết nối với ChatGPT, generic HTTP MCP client hoặc giữ local để testing.
 
-Runtime xác định tiến trình server chạy như thế nào và điều khiển workspace nào. Client xác định ChatGPT hoặc client MCP khác kết nối như thế nào. Docker, tiện ích VS Code, tệp nhị phân độc lập, cài đặt Python/pipx/mã nguồn và stdio là lựa chọn Runtime; trình kết nối ChatGPT, client MCP HTTP chung và client MCP stdio là kết nối Client.
+## Docker image bao gồm gì
 
-## Khi nào dùng
+Image dựa trên Playwright Python image và cài development toolchain rộng. Mục tiêu là để AI coding agent xử lý nhiều repository mà không cần rebuild runtime cho từng project.
 
-- Dùng trang này khi đường dẫn Runtime hoặc Client đã chọn khớp với tiêu đề.
-- Giữ nhất quán workspace root, public base URL, MCP endpoint, chế độ xác thực và các công cụ host khả dụng.
-- Với ChatGPT web/app, hãy công bố MCP endpoint HTTPS kết thúc bằng `/mcp`.
-- Với client MCP cục bộ, dùng HTTP localhost hoặc `local-shell-mcp --mode stdio` tùy khả năng hỗ trợ của client.
+Các category có sẵn:
 
-## Các bước
+| Category | Ví dụ |
+|---|---|
+| Shell và inspection | Bash, curl, wget, jq, ripgrep, tree, tmux, patch, file |
+| Git và credentials | Git, GitHub CLI, OpenSSH client, credential persistence volume |
+| C/C++ build | build-essential, clang, cmake, ninja, autoconf, automake, gdb, lldb |
+| Python | Python, pip, venv, pipx, package development dependencies |
+| JavaScript/TypeScript | Node.js, npm, yarn, pnpm, TypeScript, ts-node |
+| Ngôn ngữ khác | Go, Rust, Java, Ruby, PHP, Perl, Lua, R |
+| Browser automation | Playwright browsers and browser dependencies |
+| Document tooling | LibreOffice, Pandoc, Poppler utilities, OCR tooling |
 
-1. Trước tiên chọn trang cài đặt Runtime.
-2. Khởi động Runtime và kiểm tra `/healthz` khi dùng chế độ HTTP.
-3. Sau đó chọn trang kết nối Client.
-4. Đăng ký MCP endpoint hoặc lệnh stdio trong Client.
-5. Gọi `environment_get` để kiểm tra workspace và cấu hình thực tế.
+Exact image content là convenience layer, không phải stable API. Project-specific dependencies vẫn thuộc workspace hoặc project build scripts.
 
-```text
-Runtime: Docker / VS Code extension / binary / Python / stdio
-Client:  ChatGPT connector / generic HTTP MCP / generic stdio MCP
-Endpoint: https://your-host.example.com/mcp
+## Basic local run
+
+```bash
+git clone https://github.com/fwerkor/local-shell-mcp.git
+cd local-shell-mcp
+cp .env.example .env
+mkdir -p workspaces/default
+docker compose up -d
+curl -i http://127.0.0.1:8765/healthz
 ```
 
-## Xác minh
+Default Compose file bind service vào localhost:
 
-- `environment_get` xác nhận cấu hình Runtime và workspace.
-- `file_tree` xác nhận các tệp nhìn thấy được.
-- `run_shell` xác nhận môi trường lệnh.
+```text
+127.0.0.1:8765 -> container:8765
+```
 
-## Ghi chú
+Phù hợp cho local testing và reverse proxy chạy trên cùng host.
 
-Ưu tiên các bước nhỏ và có thể xác minh: kiểm tra, chỉnh sửa, diff, test, scan và commit. Tác vụ lớn cũng nên được chia thành các lời gọi công cụ có thể audit.
+## Workspace layout
+
+Default Compose runtime mount:
+
+| Host path hoặc volume | Container path | Purpose |
+|---|---|---|
+| `./workspaces/default` | `/workspace` | Controlled workspace hiển thị cho tools |
+| `local-shell-mcp-credentials` volume | `/persist/credentials` | Persistent Git/GitHub/SSH/GPG-style credential state |
+
+Dùng một workspace directory cho mỗi trust boundary. Đừng mount toàn bộ home directory chỉ vì tiện.
+
+## Required public settings
+
+Cho ChatGPT hoặc public HTTP MCP client, cấu hình `.env`:
+
+```env
+LOCAL_SHELL_MCP_PUBLIC_BASE_URL=https://your-public-host.example.com
+LOCAL_SHELL_MCP_AUTH_MODE=oauth
+LOCAL_SHELL_MCP_OAUTH_ADMIN_PIN=change-me-long-random-pin
+LOCAL_SHELL_MCP_OAUTH_JWT_SECRET=change-me-64-hex-random-secret
+```
+
+Generate JWT secret bằng command như:
+
+```bash
+openssl rand -hex 32
+```
+
+Public MCP URL:
+
+```text
+https://your-public-host.example.com/mcp
+```
+
+## Cloudflare Tunnel sidecar
+
+Compose file có optional `cloudflared` service sau profile `tunnel`. Nó chạy tunnel cạnh MCP server.
+
+Cấu hình `.env`:
+
+```env
+CLOUDFLARE_TUNNEL_TOKEN=<token from Cloudflare Tunnel>
+LOCAL_SHELL_MCP_PUBLIC_BASE_URL=https://your-public-host.example.com
+LOCAL_SHELL_MCP_AUTH_MODE=oauth
+LOCAL_SHELL_MCP_OAUTH_ADMIN_PIN=<strong pin>
+LOCAL_SHELL_MCP_OAUTH_JWT_SECRET=<strong random secret>
+```
+
+Khởi động cả hai service:
+
+```bash
+docker compose --profile tunnel up -d
+```
+
+Trong Cloudflare Zero Trust, route public hostname tới:
+
+```text
+http://local-shell-mcp:8765
+```
+
+Đây là Cloudflare Tunnel, không phải Cloudflare Access. `local-shell-mcp` vẫn tự xử lý OAuth cho ChatGPT.
+Compose service tin forwarded headers vì published port giới hạn ở localhost; nhờ đó giữ public caller address cho OAuth PIN rate limiting. Nếu expose container port trực tiếp, thay `LOCAL_SHELL_MCP_FORWARDED_ALLOW_IPS=*` bằng địa chỉ rõ ràng của trusted reverse proxies.
+
+## Reverse proxy không có tunnel sidecar
+
+Nếu đã dùng Caddy, Nginx, Traefik hoặc Nginx Proxy Manager, giữ normal Compose service và forward HTTPS tới:
+
+```text
+http://127.0.0.1:8765
+```
+
+Proxy phải forward các routes này mà không strip path:
+
+| Route | Purpose |
+|---|---|
+| `/mcp` | MCP streamable HTTP endpoint |
+| `/healthz`, `/readyz` | Health checks |
+| `/.well-known/oauth-protected-resource` | OAuth resource metadata |
+| `/.well-known/oauth-authorization-server` | OAuth authorization-server metadata |
+| `/oauth/register` | Dynamic client registration |
+| `/oauth/authorize` | Browser authorization page |
+| `/oauth/token` | Token exchange |
+| `/downloads/<token>` | Optional generated file downloads |
+| `/join/<token>`, `/remote/*` | Optional remote-worker bootstrap / polling |
+
+Xem [network connectivity](../clients/connectivity.md) cho yêu cầu về proxy behavior.
+
+## Full-container mode
+
+`LOCAL_SHELL_MCP_ALLOW_FULL_CONTAINER=false` giới hạn filesystem operations trong workspace. Đây là default an toàn hơn.
+
+Chỉ set `true` khi container cố ý disposable và model cần operate toàn bộ container filesystem. Khi bật, built-in command/path denylist restrictions bị loại bỏ.
+
+```env
+LOCAL_SHELL_MCP_ALLOW_FULL_CONTAINER=true
+```
+
+Không bật full-container mode trên host-launched runtime như VS Code extension hoặc binary chạy trực tiếp trên laptop.
+
+## Credentials
+
+Docker runtime có thể persist common developer credentials trong dedicated volume. Hữu ích cho GitHub CLI login, Git HTTPS credential helpers, `.netrc`, SSH config và GPG state.
+
+Xem credential volume là sensitive. Ưu tiên repository-scoped deploy keys, fine-grained tokens hoặc short-lived credentials. Không đặt broad personal credentials trong workspace mà model đọc tự do.
+
+Có thể SSH-agent forwarding bằng cách mount SSH agent socket, nhưng việc này mở rộng trust từ container tới active agent. Chỉ dùng khi hiểu exposure.
+
+## Cập nhật
+
+```bash
+docker compose pull
+docker compose up -d
+curl -i http://127.0.0.1:8765/healthz
+```
+
+Với tunnel sidecar:
+
+```bash
+docker compose --profile tunnel pull
+docker compose --profile tunnel up -d
+curl -i http://127.0.0.1:8765/healthz
+```
+
+Sau upgrade, trước tiên yêu cầu client chạy read-only check:
+
+```text
+Dùng local-shell-mcp. Gọi environment_get và chạy file_list trên root workspace. Không sửa file.
+```
+
+## Troubleshooting
+
+| Triệu chứng | Kiểm tra |
+|---|---|
+| `/healthz` lỗi local | `docker compose ps`, `docker compose logs --tail=200 local-shell-mcp` |
+| ChatGPT không discover tools | Public URL phải kết thúc `/mcp`; `LOCAL_SHELL_MCP_PUBLIC_BASE_URL` không được chứa `/mcp` |
+| OAuth page lỗi | Admin PIN và JWT secret phải được set cho public OAuth deployments |
+| Tools không thấy file | Xác nhận host directory dự kiến được mount tới `/workspace` |
+| Browser tools lỗi | Xác nhận Playwright image current; thử `run_shell` cho target browser |
+| Git auth biến mất | Kiểm tra credential volume và recreated container có dùng cùng volume không |

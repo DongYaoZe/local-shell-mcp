@@ -1,38 +1,47 @@
+<!-- i18n-source-sha256: d758caead1c922385409aceebf498662f25f4cbf252a48d65b29d91f07e5a173 -->
 # Liens de fichiers
 
-Cette page décrit le scénario « Liens de fichiers » et conserve la structure Runtime/Client commune du site.
+`local-shell-mcp` peut exposer des fichiers du workspace contrôlé via des bearer URL à forte entropie. C’est utile lorsque l’IA génère des rapports, archives, PDF, screenshots ou autres artifacts qui doivent être téléchargés ou affichés dans le chat.
 
-## Vue d’ensemble
+## Quand utiliser les liens de fichiers
 
-Runtime définit la manière dont le processus serveur s’exécute et l’espace de travail qu’il contrôle. Client définit la manière dont ChatGPT ou un autre client MCP se connecte. Docker, l’extension VS Code, les binaires autonomes, les installations Python/pipx/source et stdio sont des choix de Runtime ; le connecteur ChatGPT, le client MCP HTTP générique et le client MCP stdio sont des connexions Client.
+Utilisez-les pour :
 
-## Quand l’utiliser
+- Les PDF ou rapports générés.
+- Les screenshots et artifacts du navigateur.
+- Les sorties de build.
+- Les logs trop volumineux pour être collés.
+- Les archives préparées pour une inspection manuelle.
 
-- Utilisez cette page lorsque le chemin Runtime ou Client choisi correspond à son titre.
-- Gardez cohérents la racine de l’espace de travail, la base URL publique, le MCP endpoint, le mode d’authentification et les outils disponibles sur l’hôte.
-- Pour ChatGPT web/app, exposez un MCP endpoint HTTPS se terminant par `/mcp`.
-- Pour les clients MCP locaux, utilisez HTTP localhost ou `local-shell-mcp --mode stdio` selon les capacités du client.
+N’utilisez pas les liens de fichiers pour des secrets, private keys, magasins de credentials ou données personnelles sans rapport avec la tâche.
 
-## Étapes
+## Flux typique
 
-1. Choisissez d’abord la page d’installation du Runtime.
-2. Démarrez le Runtime et vérifiez `/healthz` lorsque le mode HTTP est utilisé.
-3. Choisissez ensuite la page de connexion Client.
-4. Enregistrez le MCP endpoint ou la commande stdio dans le Client.
-5. Appelez `environment_get` pour vérifier l’espace de travail et les paramètres effectifs.
+1. Générez ou localisez un fichier sous `/workspace`.
+2. Appelez `link_create` avec un TTL et une limite facultative de téléchargements. Définissez `inline=true` lorsque le fichier doit être rendu directement dans un navigateur ou comme image Markdown ; la valeur par défaut est `false`, ce qui force un téléchargement en attachment.
+3. Partagez l’URL renvoyée.
+4. Révoquez le lien lorsqu’il n’est plus nécessaire.
 
-```text
-Runtime: Docker / VS Code extension / binary / Python / stdio
-Client:  ChatGPT connector / generic HTTP MCP / generic stdio MCP
-Endpoint: https://your-host.example.com/mcp
-```
+## Outils concernés
 
-## Vérification
+| Tool | Rôle |
+|---|---|
+| `link_create` | Créer une URL tokenisée pour un fichier du workspace. |
+| `link_list` | Afficher les liens actifs. |
+| `link_revoke` | Désactiver un lien avant son expiration. |
 
-- `environment_get` confirme les paramètres du Runtime et l’espace de travail.
-- `file_tree` confirme les fichiers visibles.
-- `run_shell` confirme l’environnement de commande.
+## Contrôles
 
-## Notes
+Les options de configuration comprennent :
 
-Privilégiez les étapes petites et vérifiables : inspecter, modifier, examiner le diff, tester, analyser et valider. Les tâches importantes doivent aussi être décomposées en appels d’outils auditables.
+- `LOCAL_SHELL_MCP_FILE_DOWNLOAD_ENABLED`
+- `LOCAL_SHELL_MCP_FILE_DOWNLOAD_DEFAULT_TTL_S`
+- `LOCAL_SHELL_MCP_FILE_DOWNLOAD_MAX_TTL_S`
+- `LOCAL_SHELL_MCP_FILE_DOWNLOAD_DEFAULT_MAX_DOWNLOADS`
+- `LOCAL_SHELL_MCP_FILE_DOWNLOAD_MAX_FILE_BYTES`
+
+Utilisez des TTL plus courts pour les artifacts sensibles et définissez un maximum download count lorsque le lien est destiné à un seul destinataire.
+
+## Notes de sécurité
+
+Les liens de fichiers sont des bearer URL. Toute personne disposant de l’URL peut télécharger le fichier jusqu’à son expiration, l’atteinte de sa download limit ou sa révocation. Traitez-les comme des secrets temporaires. Les réponses inline incluent un CSP sandbox et `X-Content-Type-Options: nosniff`, empêchant les formats actifs d’accéder au LSM origin ou de s’exécuter comme contenu same-origin non sandboxé.

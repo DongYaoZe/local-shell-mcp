@@ -1,38 +1,23 @@
+<!-- i18n-source-sha256: 91695da5acbb82a8550b150249a9b97f17470140a72b27233e2470a93305e7fb -->
 # Tự động hóa trình duyệt
 
-Trang này mô tả kịch bản “Tự động hóa trình duyệt” và giữ cấu trúc Runtime/Client chung của trang tài liệu.
+Các tool trình duyệt dùng Playwright để kiểm tra trang, thu thập bằng chứng và chạy workflow trình duyệt có thể tái lập. Tool surface công khai được cố ý giữ nhỏ.
 
-## Tổng quan
+## Công cụ
 
-Runtime xác định tiến trình server chạy như thế nào và điều khiển workspace nào. Client xác định ChatGPT hoặc client MCP khác kết nối như thế nào. Docker, tiện ích VS Code, tệp nhị phân độc lập, cài đặt Python/pipx/mã nguồn và stdio là lựa chọn Runtime; trình kết nối ChatGPT, client MCP HTTP chung và client MCP stdio là kết nối Client.
+| Tool | Mục đích |
+|---|---|
+| `browser_session` | Bắt đầu, liệt kê, đóng hoặc dọn các phiên trình duyệt bền vững; tùy chọn dùng lại profile hoặc storage state. |
+| `browser_snapshot` | Đọc văn bản trang có giới hạn, lỗi page/network và phần tử tương tác với ref ngắn như `e1`; tùy chọn chụp screenshot. |
+| `browser_act` | Chạy navigation, click, fill, select, key, wait và thao tác nhiều trang có cấu trúc bằng snapshot ref hoặc CSS selector. |
+| `browser_run_script` | Chạy Python Playwright script đầy đủ khi tập hành động cấp cao không đủ. |
 
-## Khi nào dùng
+Mọi tool trình duyệt đều nhận `machine` tùy chọn. Các phụ thuộc trình duyệt phải được cài sẵn trên controller hoặc worker được chọn; việc cài đặt dùng lệnh shell thông thường như `python -m playwright install chromium`.
 
-- Dùng trang này khi đường dẫn Runtime hoặc Client đã chọn khớp với tiêu đề.
-- Giữ nhất quán workspace root, public base URL, MCP endpoint, chế độ xác thực và các công cụ host khả dụng.
-- Với ChatGPT web/app, hãy công bố MCP endpoint HTTPS kết thúc bằng `/mcp`.
-- Với client MCP cục bộ, dùng HTTP localhost hoặc `local-shell-mcp --mode stdio` tùy khả năng hỗ trợ của client.
+## Luồng thường dùng
 
-## Các bước
+Với công việc tương tác, gọi `browser_session(action="start", url=...)`, sau đó `browser_snapshot`. Snapshot trả về các tham chiếu ngắn như `e1` và `e2`; truyền trực tiếp chúng cho `browser_act`, ví dụ `{"action": "click", "target": "e1"}` hoặc `{"action": "fill", "target": "e2", "value": "..."}`. Chụp snapshot mới sau navigation vì element ref là tham chiếu trạng thái trang, không phải selector vĩnh viễn.
 
-1. Trước tiên chọn trang cài đặt Runtime.
-2. Khởi động Runtime và kiểm tra `/healthz` khi dùng chế độ HTTP.
-3. Sau đó chọn trang kết nối Client.
-4. Đăng ký MCP endpoint hoặc lệnh stdio trong Client.
-5. Gọi `environment_get` để kiểm tra workspace và cấu hình thực tế.
+Với kiểm tra thông thường và screenshot, ưu tiên `browser_session` cùng `browser_snapshot`; snapshot có thể trả về visible text có giới hạn và lưu screenshot. Dùng `browser_run_script` cho JavaScript evaluation, logic capture/PDF tùy chỉnh hoặc tương tác không được `browser_act` biểu diễn.
 
-```text
-Runtime: Docker / VS Code extension / binary / Python / stdio
-Client:  ChatGPT connector / generic HTTP MCP / generic stdio MCP
-Endpoint: https://your-host.example.com/mcp
-```
-
-## Xác minh
-
-- `environment_get` xác nhận cấu hình Runtime và workspace.
-- `file_tree` xác nhận các tệp nhìn thấy được.
-- `run_shell` xác nhận môi trường lệnh.
-
-## Ghi chú
-
-Ưu tiên các bước nhỏ và có thể xác minh: kiểm tra, chỉnh sửa, diff, test, scan và commit. Tác vụ lớn cũng nên được chia thành các lời gọi công cụ có thể audit.
+Giữ script có giới hạn, đặt timeout rõ ràng, lưu artifact dưới workspace và tránh nhập credential trừ khi môi trường dành riêng cho tác vụ.

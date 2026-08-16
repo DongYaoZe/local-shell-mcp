@@ -1,3 +1,4 @@
+<!-- i18n-source-sha256: f0abfd8b2a3118c630bf6693921a7e5f95ad61e089bfa6645a583467a0b9832e -->
 # Pertanyaan umum
 
 Halaman ini membahas masalah Client dan reverse proxy yang sering terjadi dan dapat terlihat seperti kegagalan LSM meskipun server sebenarnya sehat.

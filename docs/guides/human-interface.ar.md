@@ -1,0 +1,195 @@
+<!-- i18n-source-sha256: 8c683835be3adb3bf08d9d69b1731f61a39753bf255170fc663cf9456a0df54f -->
+# واجهة المستخدم
+
+يوفر `local-shell-mcp` واجهتين بشريتين متوافقتين فوق نفس service API وworkspace وسجل persistent terminals وسجل remote workers وسجل تدقيق MCP:
+
+- **Web UI** لوحة معلومات أصلية في المتصفح ومهيأة للفحص التشغيلي السريع.
+- **OpenTUI** التطبيق الكامل الموجّه للطرفية، ويظل متاحًا داخل المتصفح وكأمر طرفية أصلي.
+
+لا ينشئ أي من الوضعين control plane منفصلًا. تبديل الواجهة لا يغير الأجهزة المتصلة أو Sessions أو jobs أو الصلاحيات أو بيانات التدقيق.
+
+## تشغيل الخدمة
+
+شغّل `local-shell-mcp` بالطريقة المعتادة:
+
+```bash
+local-shell-mcp --mode mcp
+```
+
+## ChatGPT Live Workspace
+
+عندما يستطيع ChatGPT عرض MCP Apps، يفتح `workspace_open` عرضًا تعاونيًا عائمًا للـ logical Session المرتبطة حاليًا. تمتلك Session حالة المهمة الدائمة؛ أما Live Workspace فيعرض النشاط المباشر وتحكم الإنسان فقط. لذلك لا تؤدي إعادة اتصال التطبيق أو تغيير ChatGPT/MCP transport إلى إعادة ضبط Session.
+
+يكون handoff النموذجي كما يلي:
+
+```text
+session_manage(action="start", objective=...)
+        -> session_id
+... tool work + session_manage(action="report", ...) ...
+new agent run
+session_manage(action="resume", session_id=..., takeover=true)
+        -> inherited progress, Plan, and recent activity
+workspace_open()
+        -> reconnectable view of that Session
+```
+
+يستبدل `takeover=true` agent run أقدم ما زال active. تُرفض أي tool call لاحقة من run المستبدلة حتى ينفذ ذلك agent resume صريحًا للـ Session مرة أخرى. لا ترتبط Sessions بـ machine أو working directory؛ وتظل معلمات الأدوات العادية هي التي تختار أهداف local/remote والمسارات.
+
+يُمكّن Plan اختياري عبر `plan_manage` وضع Goal للـ Session. إذا كان Plan active ولم يحدث agent activity لمدة 15 دقيقة، يمكن لـ Live Workspace المرتبط طلب المتابعة من ChatGPT. تبدأ continuation بتنفيذ resume لنفس `session_id` وتُحد بحد أقصى 10 محاولات سواء قُبلت أو رُفضت. لا تستمر Plans ذات الحالات blocked أو completed أو cancelled تلقائيًا؛ وتبقى Plan active التي أصبحت كل steps فيها completed/skipped مؤهلة لـ cleanup continuation كي يتمكن agent المستأنف من finish Plan. تحدّث أدوات تحكم الإنسان pause/resume/cancel الـ Plan المملوكة للـ Session، لا حالة Live Workspace المؤقتة.
+
+## واجهة المتصفح
+
+افتح:
+
+```text
+http://127.0.0.1:8765/ui
+```
+
+في النشر العام استخدم HTTPS origin المضبوط:
+
+```text
+https://your-public-host.example.com/ui
+```
+
+تستخدم واجهة المتصفح خادم OAuth ونطاقات scope نفسها المستخدمة في MCP. تكون هيكلية الصفحة والموارد الثابتة عامة حتى يمكن تحميل شاشة الدخول، بينما تبقى `/api/ui/*` وWebSocket الخاص بطرفية OpenTUI محمية. تُخزَّن access tokens فقط في session storage للمتصفح.
+
+### اختيار الواجهة
+
+توفر شاشة OAuth مدخلين:
+
+- **Open Web UI** يمنح التفويض ويفتح لوحة المعلومات الأصلية.
+- **Continue to OpenTUI** يمنح التفويض ويفتح واجهة الطرفية مع الحفاظ على سلوك المتصفح السابق.
+
+بعد التفويض يمكن التبديل بين Web UI وOpenTUI من محدد الواجهة في الشريط الجانبي دون تسجيل دخول جديد. تُحفظ الصفحة الأصلية الحالية عند الانتقال مؤقتًا إلى OpenTUI.
+
+يمكن حفظ المسارات في الإشارات المرجعية:
+
+```text
+/ui/#/overview
+/ui/#/machines
+/ui/#/workloads
+/ui/#/activity
+/ui/#/console
+```
+
+`#/web` و`#/dashboard` اسمان بديلان لـ Overview، و`#/tui` و`#/opentui` اسمان بديلان لـ Console.
+
+## Web UI الأصلية
+
+تستطلع Web UI الأصلية API واجهة المستخدم الحالية كل خمس ثوانٍ وتعرض عناصر تحكم أصلية للمتصفح بدل خلايا الطرفية. ولا تبدأ PTY حتى يتم اختيار OpenTUI.
+
+### Overview
+
+يعرض Overview المعلومات التشغيلية الأعلى أولوية أولًا:
+
+- صحة controller وإصدار LSM الحالي.
+- عدد الأجهزة المتصلة وغير المتصلة.
+- tracked jobs النشطة وجلسات الطرفية الدائمة.
+- CPU والذاكرة وقرص workspace وload ومعدل نقل الشبكة وuptime.
+- التنبيهات الناتجة عن حالة workers وحدود الموارد وjobs الفاشلة واستدعاءات MCP الفاشلة.
+- نشاط MCP الأخير الصادر عن النموذج.
+
+### Machines
+
+يعرض Machines الـ controller المحلي والworkers البعيدة المتصلة مع الحالة والمنصة والإصدار ودليل العمل والقدرات ومعلومات last-seen.
+
+### Workloads
+
+يجمع Workloads بين tracked jobs النشطة وجلسات shell الدائمة المستقلة. تبقى Web UI للقراءة فقط لهذه السجلات؛ استخدم OpenTUI لإدارة الجلسات التفاعلية.
+
+### Activity
+
+يجمع Activity بين التنبيهات الحالية ونشاط تدقيق MCP الأخير. لا تُضمَّن الأوامر وعمليات الملفات التي يدخلها الإنسان في سجل تدقيق MCP.
+
+## OpenTUI في المتصفح
+
+يؤدي اختيار **OpenTUI** إلى تشغيل تطبيق OpenTUI نفسه المستخدم في مشغل الطرفية الأصلي عند الحاجة. تحتفظ console المتصفح بما يلي:
+
+- نقل PTY ثنائي موثّق عبر WebSocket.
+- تغيير حجم الطرفية تلقائيًا وbackoff لإعادة الاتصال.
+- التفاعل بالماوس مع عناصر تحكم OpenTUI.
+- وضع ملء الشاشة واختصارات لوحة مفاتيح آمنة للمتصفح.
+- مفاتيح اختصار للهاتف وتحكم صريح بلوحة المفاتيح البرمجية.
+- دعم SIXEL وinline image عبر xterm.js.
+
+لا ينشئ المتصفح PTY لـ OpenTUI ما دام المستخدم في وضع Web UI الأصلي.
+
+## OpenTUI الأصلي
+
+تضمّن ملفات release التنفيذية المستقلة runtime الخاص بـ OpenTUI للمنصة. احتفظ بالملف التنفيذي الرئيسي فقط، وشغّل الخدمة، ثم نفّذ:
+
+```bash
+local-shell-mcp tui
+```
+
+لا تطلب TUI الأصلية من المشغّل البشري تسجيل الدخول. يمرر المشغّل credential محليًا مولّدًا إلى loopback API بصورة شفافة. تُخزَّن هذه الـ credential في state directory المضبوط بصلاحيات المالك فقط؛ ولا يحصل reverse proxy المتصل عبر loopback على هذا الـ bypass.
+
+يمكن أيضًا لـ source checkout تشغيل TUI بعد تثبيت تبعيات Bun:
+
+```bash
+cd ui
+bun install --frozen-lockfile
+bun run build
+cd ..
+local-shell-mcp tui
+```
+
+استخدم `--api-base` فقط عندما تستخدم الخدمة المحلية منفذًا غير افتراضي:
+
+```bash
+local-shell-mcp tui --api-base http://127.0.0.1:9876/api/ui
+```
+
+## شاشات OpenTUI
+
+### Dashboard
+
+Dashboard هي النظرة التشغيلية العامة لـ OpenTUI. تعرض الطرفيات العريضة مناطق منفصلة لـ node وworkload وalert وactivity ومعلومات النظام والاتجاهات؛ وتطوي الطرفيات الأضيق هذه المعلومات في ملخصات مدمجة دون تمرير أفقي.
+
+### Files
+
+Files مدير ملفات أصلي من LSM بثلاث لوحات للأجهزة المحلية والبعيدة. يوفّر الإنشاء والتحرير وإعادة التسمية والنسخ والنقل واللصق والحذف وتبديل الملفات المخفية والتحديث ومعاينة النص ومعاينة الملفات الثنائية وصورًا مصغرة محدودة الحجم.
+
+### Terminals
+
+يدير Terminals جلسات shell الدائمة على الأجهزة المحلية والبعيدة. يدعم إدخال الأوامر الكاملة والإدخال التفاعلي raw وتبديل الجلسات وإنشاءها وإنهاءها والمخرجات الأخيرة وشريط تدقيق MCP قابلًا للطي.
+
+### Audit
+
+يقرأ Audit سجل تدقيق JSONL المحدود ويدعم مرشحات node وoperation وevent وsession وsearch وtime-range وsort مع فحص تفاصيل السجل.
+
+### Remotes
+
+يعرض Remotes workers البعيدة المتصلة وغير المتصلة وقدراتها وأدلة العمل وبيانات النظام الوصفية. ويمكنه إنشاء join invite لمرة واحدة أو إعادة تسمية node أو إلغاء هويته الدائمة.
+
+## التنقل في OpenTUI
+
+يمكن النقر بالماوس على شريط الفئات العلوي وإجراءات footer السياقية في الطرفيات الأصلية وconsole المتصفح.
+
+| المفاتيح | الإجراء |
+|---|---|
+| `Alt+1` … `Alt+5` | يفتح Dashboard أو Files أو Terminals أو Remotes أو Audit. |
+| `F2` … `F6` | اختصارات بديلة للفئات. |
+| `F1` | فتح دليل لوحة المفاتيح. |
+| `F9` | تحديث قائمة الأجهزة. |
+| `Alt+Q` | إنهاء عملية OpenTUI الأصلية دون تشغيل اختصار Ctrl محجوز للمتصفح. |
+
+يستخدم Terminals المفتاح `Alt+N` لجلسة جديدة، و`Alt+W` لإنهاء الجلسة المحددة، و`Alt+A` لتبديل شريط التدقيق، و`Alt+R` للتحديث، و`Alt+Left/Right` للتبديل بين الجلسات. تعترض console المتصفح هذه الاختصارات قبل تنقل المتصفح أو معالجة القوائم.
+
+## الإعدادات
+
+| مفتاح YAML | متغير البيئة | الافتراضي | الغرض |
+|---|---|---|---|
+| `ui_enabled` | `LOCAL_SHELL_MCP_UI_ENABLED` | `true` | تركيب واجهات المستخدم أو تعطيلها. |
+| `ui_path` | `LOCAL_SHELL_MCP_UI_PATH` | `/ui` | مسار تركيب واجهة المتصفح على خدمة MCP. |
+| `ui_tui_command` | `LOCAL_SHELL_MCP_UI_TUI_COMMAND` | auto | تجاوز آلية تحديد ملف OpenTUI التنفيذي الأصلي. |
+| `ui_wallpaper` | `LOCAL_SHELL_MCP_UI_WALLPAPER` | `bing` | إعداد الخلفية المحتفظ به لنشر console OpenTUI في المتصفح. |
+| `ui_terminal_idle_timeout_s` | `LOCAL_SHELL_MCP_UI_TERMINAL_IDLE_TIMEOUT_S` | `3600` | إغلاق PTY لـ OpenTUI في المتصفح بعد هذه الثواني من الخمول؛ `0` يعطّل المهلة. |
+| `ui_terminal_max_sessions` | `LOCAL_SHELL_MCP_UI_TERMINAL_MAX_SESSIONS` | `8` | الحد الأقصى لجلسات PTY المتزامنة لـ OpenTUI في المتصفح. |
+
+## ملاحظات الحزم
+
+- تتضمن صور Docker موارد Web UI وruntime الأصلي لـ OpenTUI.
+- تضمّن الملفات التنفيذية المستقلة موارد Web UI وruntime مضغوطًا لـ OpenTUI خاصًا بالمنصة.
+- تتضمن Python wheels موارد المتصفح؛ ويتطلب OpenTUI الأصلي ملف release تنفيذيًا أو source checkout مع تثبيت تبعيات Bun.
+- تُقدَّم الواجهتان من العملية والمنفذ نفسيهما المستخدمين في MCP؛ ولا يلزم تشغيل خدمة ويب إضافية.

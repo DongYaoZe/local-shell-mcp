@@ -1,38 +1,63 @@
-# stdio मोड
+<!-- i18n-source-sha256: a3d2dc835f99feed33a73ae3dd880dabab04a37d7461b99f1fa49c33ba0506e1 -->
+# Stdio runtime
 
-यह पृष्ठ “stdio मोड” परिदृश्य समझाता है और साइट की समान Runtime/Client संरचना का पालन करता है।
+Stdio mode उन local MCP client के लिए है जो `local-shell-mcp` को child process के रूप में शुरू करते हैं और standard input/output पर communicate करते हैं।
 
-## सारांश
+यह public HTTP deployment नहीं है। ChatGPT web/app इसे सीधे उपयोग नहीं कर सकता क्योंकि ChatGPT आपकी machine पर process spawn नहीं कर सकता।
 
-Runtime यह तय करता है कि सर्वर प्रक्रिया कैसे चलेगी और कौन-सा workspace नियंत्रित होगा। Client यह तय करता है कि ChatGPT या कोई अन्य MCP क्लाइंट कैसे जुड़ेगा। Docker, VS Code एक्सटेंशन, स्वतंत्र बाइनरी, Python/pipx/source स्थापना और stdio Runtime विकल्प हैं; ChatGPT कनेक्टर, सामान्य HTTP MCP क्लाइंट और stdio MCP क्लाइंट Client कनेक्शन हैं।
+## stdio कब उपयोग करें
 
-## कब उपयोग करें
+Stdio mode उपयोग करें जब:
 
-- जब चुना गया Runtime या Client पथ इस शीर्षक से मेल खाए, तब इस पृष्ठ का उपयोग करें।
-- workspace root, public base URL, MCP endpoint, authentication mode और host पर उपलब्ध टूल को संगत रखें।
-- ChatGPT web/app के लिए `/mcp` पर समाप्त होने वाला HTTPS MCP endpoint उपलब्ध कराएँ।
-- स्थानीय MCP क्लाइंट के लिए क्लाइंट समर्थन के अनुसार HTTP localhost या `local-shell-mcp --mode stdio` का उपयोग करें।
+- आपका MCP client command-based server definitions support करता हो।
+- Client और controlled workspace एक ही machine पर हों।
+- OAuth, public HTTPS, reverse proxies या tunnels की आवश्यकता न हो।
+- आप चाहते हों कि client server lifecycle manage करे।
 
-## चरण
+Stdio mode उपयोग न करें जब:
 
-1. पहले Runtime स्थापना पृष्ठ चुनें।
-2. Runtime शुरू करें और HTTP मोड में `/healthz` जाँचें।
-3. फिर Client कनेक्शन पृष्ठ चुनें।
-4. Client में MCP endpoint या stdio command पंजीकृत करें।
-5. वास्तविक workspace और settings की जाँच के लिए `environment_get` कॉल करें।
+- Client ChatGPT web/app हो।
+- कई remote clients को वही server चाहिए।
+- HTTP पर tokenized file downloads चाहिए।
+- HTTP पर served remote-worker join routes चाहिए।
 
-```text
-Runtime: Docker / VS Code extension / binary / Python / stdio
-Client:  ChatGPT connector / generic HTTP MCP / generic stdio MCP
-Endpoint: https://your-host.example.com/mcp
+## Command
+
+```bash
+LOCAL_SHELL_MCP_WORKSPACE_ROOT=/path/to/workspace local-shell-mcp --mode stdio
 ```
 
-## सत्यापन
+एक generic MCP client configuration में सामान्यतः यह होता है:
 
-- `environment_get` Runtime settings और workspace की पुष्टि करता है।
-- `file_tree` दिखाई देने वाली फ़ाइलों की पुष्टि करता है।
-- `run_shell` command environment की पुष्टि करता है।
+```json
+{
+  "mcpServers": {
+    "local-shell-mcp": {
+      "command": "local-shell-mcp",
+      "args": ["--mode", "stdio"],
+      "env": {
+        "LOCAL_SHELL_MCP_WORKSPACE_ROOT": "/path/to/workspace"
+      }
+    }
+  }
+}
+```
 
-## टिप्पणियाँ
+Schema को अपने client के अनुसार adapt करें। कुछ clients इस section को `servers`, `tools`, `mcpServers` या `contextServers` कहते हैं।
 
-छोटे और सत्यापित किए जा सकने वाले चरणों को प्राथमिकता दें: निरीक्षण, संपादन, diff, test, scan और commit। बड़े कार्यों को भी audit योग्य tool calls में बाँटें।
+## HTTP mode से behavior differences
+
+| Area | Stdio mode | HTTP MCP mode |
+|---|---|---|
+| Transport | stdin/stdout | HTTP streamable MCP endpoint |
+| Endpoint | None | `/mcp` |
+| OAuth | आवश्यक नहीं | Public use के लिए recommended |
+| Health endpoint | None | `/healthz`, `/readyz` |
+| Public ChatGPT use | No | Yes, HTTPS के पीछे |
+| Server lifecycle | Client process launch करता है | आप process/runtime manage करते हैं |
+
+अन्यथा tool surface वही server-side implementation उपयोग करती है, configuration और client support के अधीन।
+
+## Safety notes
+
+Stdio mode अक्सर host पर सीधे उसी user के रूप में चलता है जो MCP client चला रहा है। Narrow workspace root उपयोग करें और broad filesystem access से बचें। Full-container mode disabled रखें, जब तक stdio स्वयं disposable container या VM के भीतर न चल रहा हो।

@@ -1,3 +1,4 @@
+<!-- i18n-source-sha256: 42daa6d3dd931530a1d2e86d6a36fc6424b7494ff078626157c158b38b1f4b1e -->
 # 独立二进制运行时
 
 Release 二进制可以在没有 Docker、也没有 Python 环境的情况下运行 `local-shell-mcp`。当 Docker 不可用，或你已经有专用 VM、容器宿主机、实验室服务器、受限用户账号作为边界时，可以使用这个运行时。

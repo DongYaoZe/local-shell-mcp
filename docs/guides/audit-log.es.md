@@ -1,38 +1,55 @@
+<!-- i18n-source-sha256: 4aec137923c38de0ed4a1b760b5dbd6ce99090d508ce3fe838d35ad44b4ba4f1 -->
 # Registro de auditoría
 
-Esta página describe el escenario “Registro de auditoría” y mantiene la estructura Runtime/Client común del sitio.
+`local-shell-mcp` escribe entradas de auditoría estructuradas para ayudar a reconstruir lo que hizo un client conectado.
 
-## Resumen
-
-Runtime define cómo se ejecuta el proceso del servidor y qué espacio de trabajo controla. Client define cómo se conecta ChatGPT u otro cliente MCP. Docker, la extensión de VS Code, los binarios independientes, las instalaciones desde Python/pipx/código fuente y stdio son opciones de Runtime; el conector de ChatGPT, el cliente MCP HTTP genérico y el cliente MCP stdio son conexiones de Client.
-
-## Cuándo usarlo
-
-- Usa esta página cuando la ruta de Runtime o Client elegida coincida con el título.
-- Mantén coherentes la raíz del espacio de trabajo, la base URL pública, el MCP endpoint, el modo de autenticación y las herramientas disponibles del host.
-- Para ChatGPT web/app, expón un MCP endpoint HTTPS que termine en `/mcp`.
-- Para clientes MCP locales, usa HTTP localhost o `local-shell-mcp --mode stdio` según lo que admita el cliente.
-
-## Pasos
-
-1. Elige primero la página de instalación del Runtime.
-2. Inicia el Runtime y verifica `/healthz` cuando uses el modo HTTP.
-3. Elige después la página de conexión del Client.
-4. Registra el MCP endpoint o el comando stdio en el Client.
-5. Llama a `environment_get` para comprobar el espacio de trabajo y los ajustes efectivos.
+Ruta predeterminada:
 
 ```text
-Runtime: Docker / VS Code extension / binary / Python / stdio
-Client:  ChatGPT connector / generic HTTP MCP / generic stdio MCP
-Endpoint: https://your-host.example.com/mcp
+/workspace/.local-shell-mcp/audit.jsonl
 ```
 
-## Verificación
+## Qué se registra
 
-- `environment_get` confirma los ajustes del Runtime y el espacio de trabajo.
-- `file_tree` confirma los archivos visibles.
-- `run_shell` confirma el entorno de comandos.
+Las entradas de auditoría cubren eventos como:
 
-## Notas
+- Inicio/fin de tool calls.
+- Metadatos de ejecución de comandos.
+- Timeouts y errores gestionados.
+- Registro de remote workers y actividad de jobs.
+- Creación y revocación de file links.
+- Eventos relacionados con autenticación cuando corresponda.
 
-Prefiere pasos pequeños y verificables: inspeccionar, editar, revisar el diff, probar, escanear y confirmar. Las tareas grandes también deben dividirse en llamadas de herramientas auditables.
+Los argumentos sensibles se redactan cuando el servidor puede identificarlos.
+
+## Leer el registro
+
+Use la herramienta MCP:
+
+```text
+audit_tail
+```
+
+O inspecciónelo directamente:
+
+```bash
+tail -n 100 /workspace/.local-shell-mcp/audit.jsonl
+```
+
+## Uso operativo
+
+Los registros de auditoría son especialmente útiles para:
+
+- Revisar comandos que modificaron archivos.
+- Comprobar si se utilizó un remote worker.
+- Depurar fallos inesperados.
+- Detectar exposición accidental de file links.
+- Apoyar la respuesta a incidentes tras un error en un deployment público.
+
+## Retención
+
+El registro está limitado por `LOCAL_SHELL_MCP_MAX_AUDIT_LOG_BYTES`. Rótelo o expórtelo externamente si necesita conservarlo durante más tiempo.
+
+## Limitaciones
+
+Los registros de auditoría no son un sandbox. Ayudan a la trazabilidad, pero no impiden que un modelo conectado actúe dentro de la autoridad configurada.

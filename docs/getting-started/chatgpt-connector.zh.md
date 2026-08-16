@@ -1,8 +1,9 @@
+<!-- i18n-source-sha256: 2ad041876ff35987d7fdd66cbcdc7ed3956f427e8d8b185f354555cdc29a1b8a -->
 # ChatGPT 连接器
 
 本页说明如何把 ChatGPT 作为客户端接入。它不负责选择运行时。使用本页前，先通过 Docker、VS Code 扩展、独立二进制或 Python 安装方式启动 `local-shell-mcp` 服务。
 
-`local-shell-mcp` 面向 ChatGPT Developer Mode 和完整 MCP 客户端设计。MCP 端点直接暴露标准的 LSM 工具面。
+`local-shell-mcp` 面向 ChatGPT Developer Mode 和完整 MCP 客户端设计。MCP 端点会直接暴露正常的 LSM 工具集。
 
 ## 运行时前置条件
 
@@ -76,7 +77,7 @@ Files、Diff、Audit 和 Activity 视图可以通过 MCP Apps bridge 把选中�
 
 为了让终端和事件流保持低延迟，渲染后的 MCP App 会从 sandbox 直接连接到配置的服务源站。因此，`LOCAL_SHELL_MCP_PUBLIC_BASE_URL` 必须是 ChatGPT 浏览器可以访问的 HTTPS 源站地址。MCP 端点仍然是 `https://your-public-host.example.com/mcp`。
 
-打开工作区时会签发随机、短生命周期的 Live Workspace bearer token。该 token 只放在供渲染 App 使用的 MCP result metadata 中，不进入模型可见的 structured content，并且只会被 human/live UI API 接受。App 使用同一个 `live_id` 自动重附着时会复用当前凭据，避免重连中的视图互相使 token 失效；同时会携带当前逻辑 `session_id`，因此即使内存中的 Live Workspace 状态丢失，也能恢复到持久 Session。显式再次调用 `workspace_open` 时仍会轮换 token。嵌入式 App 不使用浏览器 cookie 或环境中的隐式凭据。
+打开工作区时会签发随机、短生命周期的 Live Workspace bearer token。该 token 只放在供渲染 App 使用的 MCP result metadata 中，不进入模型可见的 structured content，并且只会被 human/live UI API 接受。App 使用同一个 `live_id` 自动重附着时会复用当前凭据，避免重连中的视图互相使 token 失效；重连时还会携带当前 logical `session_id`，即使内存中的 Live Workspace 状态已经丢失，也能恢复对应的持久 Session。显式再次调用 `workspace_open` 时会轮换凭据。嵌入式 App 不使用浏览器 cookie 或环境中的隐式凭据。
 
 不支持 MCP Apps 的客户端可以忽略这些 UI metadata。所有普通 MCP 数据工具仍然可用，行为保持不变。
 

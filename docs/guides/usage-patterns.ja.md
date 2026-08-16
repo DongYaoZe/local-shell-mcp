@@ -1,38 +1,110 @@
-# 利用パターン
+<!-- i18n-source-sha256: 0b086e03bb7fd910e016db31a703908be74f7858846c091c8e784a62e00ec6ca -->
+# 利用パターンと prompt ガイド
 
-このページでは「利用パターン」の場面を説明し、サイト全体で共通の Runtime/Client 構造に従います。
+`local-shell-mcp` は強力な tools を公開します。良い結果を得るには、まず inspect し、小さな step で操作し、verification を実行し、変更内容を報告するようモデルに指示します。
 
-## 概要
+## 一般的な操作ループ
 
-Runtime はサーバープロセスの起動方法と制御するワークスペースを決めます。Client は ChatGPT または別の MCP クライアントの接続方法を決めます。Docker、VS Code 拡張、スタンドアロンバイナリ、Python/pipx/ソースインストール、stdio は Runtime の選択肢です。ChatGPT コネクタ、汎用 HTTP MCP クライアント、stdio MCP クライアントは Client 接続です。
+多くの coding task では次のループを使います：
 
-## 利用する場面
+1. Inspect: `environment_get`, `file_tree`, `file_grep`, `file_read`、および `git status` などを `run_shell` で実行します。
+2. Plan: 関係する最小限の files と tests を特定させます。
+3. Edit: unified `file_edit`, `file_patch` または shell commands を使います。
+4. Verify: `run_shell` または persistent shells で targeted tests/builds を実行します。
+5. Review: `run_shell` で `git diff` を実行し、必要なら `secret_scan` と `audit_tail` を使います。
+6. Commit/export: `run_shell` で明示的な Git CLI commands、または `link_create` を使います。
 
-- 選択した Runtime または Client の経路がこのページのタイトルに一致する場合に使用します。
-- ワークスペースルート、公開 base URL、MCP endpoint、認証モード、ホストで利用できるツールをそろえます。
-- ChatGPT の Web/App では `/mcp` で終わる HTTPS MCP endpoint を公開します。
-- ローカル MCP クライアントでは、対応状況に応じて HTTP localhost または `local-shell-mcp --mode stdio` を使用します。
+## Tool の選び方
 
-## 手順
+| Task | 推奨 | 避ける |
+|---|---|---|
+| 短い one-shot command | `run_shell` | command ごとに persistent shell を開始 |
+| 長時間 dev server、REPL、watch task | `shell_start` + `shell_read` + `shell_send` | timeout まで `run_shell` を block |
+| structured analysis / file generation | `run_python` | 複雑な JSON/text に壊れやすい shell pipeline |
+| 小さな exact edit | `file_edit` | 不要な whole-file rewrite |
+| 1 file 内の複数置換 | `file_edit` with an `edits` array | 再読せず stale edit を繰り返す |
+| multi-file patch | `file_patch` | ad hoc shell edit |
+| file 検索 | `file_tree`, `file_glob` | 大規模 repository の完全 recursive listing |
+| code 検索 | `file_grep` | 多数の file を盲目的に読む |
+| browser evidence | `browser_snapshot`, `browser_run_script` | page name/route から推測 |
+| downloadable artifacts | `link_create` | 大きな binary content を chat に貼る |
+| remote machine work | normal tools with `machine`, plus `remote_transfer` | outbound worker で足りるのに inbound SSH を開く |
 
-1. まず Runtime のインストールページを選びます。
-2. Runtime を起動し、HTTP モードでは `/healthz` を確認します。
-3. 次に Client 接続ページを選びます。
-4. Client に MCP endpoint または stdio コマンドを登録します。
-5. `environment_get` を呼び出して実際のワークスペースと設定を確認します。
+## Prompt テンプレート
+
+### Read-only repository orientation
 
 ```text
-Runtime: Docker / VS Code extension / binary / Python / stdio
-Client:  ChatGPT connector / generic HTTP MCP / generic stdio MCP
-Endpoint: https://your-host.example.com/mcp
+local-shell-mcp を使用してください。repository layout と git status を調べ、file は変更しないでください。変更前に主要 component、推測できる test command、明らかな risk を要約してください。
 ```
 
-## 検証
+### Focused bug fix
 
-- `environment_get` は Runtime 設定とワークスペースを確認します。
-- `file_tree` は見えているファイルを確認します。
-- `run_shell` はコマンド実行環境を確認します。
+```text
+local-shell-mcp で bug を修正してください。まず最小限の relevant command で再現または場所を特定し、edit 前に files を読んでください。最小 patch を作成し、targeted verification を実行してから git diff と実行した tests を正確に示してください。承認するまで commit しないでください。
+```
 
-## 注記
+### Commit と push workflow
 
-小さく検証可能な手順を優先します。確認、編集、diff、テスト、スキャン、コミットの順に進めます。大きな作業も監査可能なツール呼び出しに分解します。
+```text
+local-shell-mcp を使用してください。git status と diff を確認し、関連 tests と secret_scan を実行し、簡潔な message の focused commit を 1 つ作成して current branch を push してください。cache、build artifact、無関係な formatting は含めないでください。
+```
+
+### 長時間 process
+
+```text
+dev server を persistent shell session で起動し、ready になるまで output を読み、その後 browser tools で page を確認してください。session id を保持し、確認後に kill してください。
+```
+
+### Remote worker task
+
+```text
+接続済み remote worker <machine> を使用してください。まず machine=<machine> で environment_get を呼び、同じ machine で file_list を実行してください。configured remote workdir 内だけで作業し、短い command は run_shell、長時間処理は shell_start または job_start を使ってください。
+```
+
+## Repository での作業
+
+open-source change の推奨 sequence：
+
+1. `run_shell` で `git status --short --branch` を実行します。
+2. upstream state が重要なら明示的な Git CLI で fetch/branch inspect を行います。
+3. edit 前に `file_grep` と `file_read` を使います。
+4. 最小 patch を作ります。
+5. まず targeted tests、可能なら broader tests を実行します。
+6. commit/push 前に `secret_scan` を実行します。
+7. 明示的に stage/commit し、簡潔な message を使います。
+
+maintainer が review しやすいよう、logical change ごとに 1 commit を依頼してください。
+
+## 生成 artifact の扱い
+
+PDF、report、screenshot、archive、log の場合：
+
+1. workspace 内に file を生成します。
+2. file の存在と想定 size を確認します。
+3. 短い TTL と optional `max_downloads` で `link_create` を使います。
+4. 不要になった link を revoke します。
+
+private key、credential directory、無関係な personal data への public link を作成しないでください。
+
+## Remote machine での作業
+
+Remote worker mode は outbound HTTPS は可能だが inbound SSH を受けられない machine に適しています。
+
+推奨：
+
+- `remote_manage(action="invite", ...)` または `remote_manage(action="rename", ...)` で machine を作成/rename します。
+- 操作前に `environment_get(machine=...)` を呼びます。
+- `remote_transfer` で controller/worker または worker/worker transfer job を開始し、通常の `job_*` tools で管理します。
+- task 後は `remote_manage(action="revoke", ...)` で worker を revoke します。
+
+## Anti-patterns
+
+environment が disposable で結果を理解している場合を除き、次の指示を避けてください：
+
+- host-launched server で「必要なものを global に何でも install」。
+- 時間制限や verification criteria なしで「動くまで実行」。
+- generated artifacts を含む repository で「すべて commit」。
+- 便利だから「home directory 全体を expose」。
+- 「workspace 全体の file link を作成」。
+- `LOCAL_SHELL_MCP_AUTH_MODE=none` で public deployment を実行。

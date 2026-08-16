@@ -1,38 +1,40 @@
+<!-- i18n-source-sha256: 3b7d6ab07c5d6bad2bfb22f366893819ac8de8754c7c28bcb35f24ea5695979c -->
 # الوصول إلى Git
 
-تشرح هذه الصفحة سيناريو “الوصول إلى Git” وتحافظ على بنية Runtime/Client المشتركة في الموقع.
+يستخدم `local-shell-mcp` واجهة Git CLI القياسية عبر `run_shell` أو `shell_start` أو `job_start`. لا يتم كشف Git MCP wrappers مخصصة عمداً: فالـ CLI كامل ومألوف لـ coding agents ويجنب تكرار كل أمر فرعي من Git في قائمة الأدوات.
 
-## نظرة عامة
+## workflow شائع
 
-يحدد Runtime كيفية تشغيل عملية الخادم وأي مساحة عمل يتحكم بها. يحدد Client كيفية اتصال ChatGPT أو أي عميل MCP آخر. Docker وإضافة VS Code والملفات التنفيذية المستقلة وتثبيتات Python/pipx/المصدر و stdio هي خيارات Runtime؛ أما موصل ChatGPT وعميل MCP HTTP العام وعميل MCP عبر stdio فهي اتصالات Client.
+استخدم أوامر محدودة وغير تفاعلية متى أمكن:
 
-## متى تستخدمه
-
-- استخدم هذه الصفحة عندما يطابق مسار Runtime أو Client المختار عنوان الصفحة.
-- حافظ على اتساق جذر مساحة العمل و base URL العام و MCP endpoint ونمط المصادقة والأدوات المتاحة على المضيف.
-- بالنسبة إلى ChatGPT web/app، انشر MCP endpoint عبر HTTPS ينتهي بـ `/mcp`.
-- بالنسبة إلى عملاء MCP المحليين، استخدم HTTP localhost أو `local-shell-mcp --mode stdio` حسب دعم العميل.
-
-## الخطوات
-
-1. اختر صفحة تثبيت Runtime أولاً.
-2. شغّل Runtime وتحقق من `/healthz` عند استخدام وضع HTTP.
-3. اختر بعد ذلك صفحة اتصال Client.
-4. سجّل MCP endpoint أو أمر stdio في Client.
-5. استدعِ `environment_get` للتحقق من مساحة العمل والإعدادات الفعلية.
-
-```text
-Runtime: Docker / VS Code extension / binary / Python / stdio
-Client:  ChatGPT connector / generic HTTP MCP / generic stdio MCP
-Endpoint: https://your-host.example.com/mcp
+```bash
+git status --short --branch
+git diff --stat
+git diff
+git add -- path/to/file
+git commit -m "fix: concise description"
+git push origin HEAD
 ```
 
-## التحقق
+تسلسل agent نموذجي:
 
-- `environment_get` يؤكد إعدادات Runtime ومساحة العمل.
-- `file_tree` يؤكد الملفات المرئية.
-- `run_shell` يؤكد بيئة الأوامر.
+1. الفحص باستخدام `run_shell(command="git status --short --branch")`.
+2. قراءة وتعديل الملفات ذات الصلة فقط.
+3. تشغيل الاختبارات المستهدفة.
+4. المراجعة باستخدام `run_shell(command="git diff --check && git diff")`.
+5. تشغيل `secret_scan` قبل commit أو push.
+6. تنفيذ stage وcommit وpush بأوامر Git CLI صريحة.
 
-## ملاحظات
+استخدم `machine` في shell tool نفسه عندما يكون repository على remote worker.
 
-فضّل الخطوات الصغيرة القابلة للتحقق: الفحص، التعديل، مراجعة diff، الاختبار، الفحص الأمني، ثم commit. يجب أيضاً تقسيم المهام الكبيرة إلى استدعاءات أدوات قابلة للتدقيق.
+## بيانات الاعتماد
+
+يمكن لـ Docker deployments حفظ مواقع Git credentials الشائعة تحت `/persist/credentials`. تعامل مع هذا volume على أنه حساس. فضّل deploy keys محدودة بالـ repository، وGitHub App tokens قصيرة العمر، ومستخدمي automation معزولين، ومراجعة يدوية قبل push.
+
+## نظافة commits
+
+اجعل commits مركزة، واستبعد caches المولدة وbuild artifacts، وسجّل الاختبارات التي تم تشغيلها، وتجنب stage لتغييرات غير مرتبطة. بالنسبة لأوامر مدمرة مثل reset أو clean أو force-push، افحص الهدف الدقيق أولاً.
+
+## استكشاف الأخطاء
+
+عند فشل `git push`، افحص remote URL واستمرارية credentials وbranch protection وصلاحيات token. يكون `gh auth status` مفيداً عند تثبيت GitHub CLI.

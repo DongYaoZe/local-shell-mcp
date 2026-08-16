@@ -1,38 +1,63 @@
-# Mode stdio
+<!-- i18n-source-sha256: a3d2dc835f99feed33a73ae3dd880dabab04a37d7461b99f1fa49c33ba0506e1 -->
+# Stdio runtime
 
-Halaman ini menjelaskan skenario “Mode stdio” dan mengikuti struktur Runtime/Client yang sama di situs.
+Mode stdio ditujukan untuk MCP client lokal yang menjalankan `local-shell-mcp` sebagai child process dan berkomunikasi melalui standard input/output.
 
-## Ringkasan
+Ini bukan deployment HTTP publik. ChatGPT web/app tidak dapat menggunakannya secara langsung karena ChatGPT tidak dapat membuat process di mesin Anda.
 
-Runtime menentukan bagaimana proses server berjalan dan workspace mana yang dikendalikan. Client menentukan bagaimana ChatGPT atau client MCP lain terhubung. Docker, ekstensi VS Code, biner mandiri, instalasi Python/pipx/sumber, dan stdio adalah pilihan Runtime; konektor ChatGPT, client MCP HTTP generik, dan client MCP stdio adalah koneksi Client.
+## Kapan memakai stdio
 
-## Kapan digunakan
+Gunakan stdio mode ketika:
 
-- Gunakan halaman ini ketika jalur Runtime atau Client yang dipilih cocok dengan judulnya.
-- Jaga agar root workspace, base URL publik, MCP endpoint, mode autentikasi, dan alat host yang tersedia tetap konsisten.
-- Untuk ChatGPT web/app, ekspos MCP endpoint HTTPS yang berakhir dengan `/mcp`.
-- Untuk client MCP lokal, gunakan HTTP localhost atau `local-shell-mcp --mode stdio` sesuai dukungan client.
+- MCP client mendukung definisi server berbasis command.
+- Client dan workspace yang dikontrol berada di mesin yang sama.
+- Anda tidak memerlukan OAuth, HTTPS publik, reverse proxy, atau tunnel.
+- Anda ingin client mengelola server lifecycle.
 
-## Langkah
+Jangan gunakan stdio mode ketika:
 
-1. Pilih halaman instalasi Runtime terlebih dahulu.
-2. Mulai Runtime dan periksa `/healthz` saat menggunakan mode HTTP.
-3. Pilih halaman koneksi Client berikutnya.
-4. Daftarkan MCP endpoint atau perintah stdio di Client.
-5. Panggil `environment_get` untuk memeriksa workspace dan pengaturan efektif.
+- Client adalah ChatGPT web/app.
+- Beberapa remote client membutuhkan server yang sama.
+- Anda memerlukan tokenized file download melalui HTTP.
+- Anda memerlukan remote-worker join route yang dilayani lewat HTTP.
 
-```text
-Runtime: Docker / VS Code extension / binary / Python / stdio
-Client:  ChatGPT connector / generic HTTP MCP / generic stdio MCP
-Endpoint: https://your-host.example.com/mcp
+## Perintah
+
+```bash
+LOCAL_SHELL_MCP_WORKSPACE_ROOT=/path/to/workspace local-shell-mcp --mode stdio
 ```
 
-## Verifikasi
+Konfigurasi MCP client umum biasanya berisi:
 
-- `environment_get` mengonfirmasi pengaturan Runtime dan workspace.
-- `file_tree` mengonfirmasi file yang terlihat.
-- `run_shell` mengonfirmasi lingkungan perintah.
+```json
+{
+  "mcpServers": {
+    "local-shell-mcp": {
+      "command": "local-shell-mcp",
+      "args": ["--mode", "stdio"],
+      "env": {
+        "LOCAL_SHELL_MCP_WORKSPACE_ROOT": "/path/to/workspace"
+      }
+    }
+  }
+}
+```
 
-## Catatan
+Sesuaikan schema dengan client Anda. Sebagian client menyebut bagian ini `servers`, `tools`, `mcpServers`, atau `contextServers`.
 
-Utamakan langkah kecil yang dapat diverifikasi: inspeksi, edit, diff, test, scan, dan commit. Tugas besar juga harus dipecah menjadi panggilan alat yang dapat diaudit.
+## Perbedaan perilaku dari HTTP mode
+
+| Area | Stdio mode | HTTP MCP mode |
+|---|---|---|
+| Transport | stdin/stdout | HTTP streamable MCP endpoint |
+| Endpoint | Tidak ada | `/mcp` |
+| OAuth | Tidak diperlukan | Direkomendasikan untuk penggunaan publik |
+| Health endpoint | Tidak ada | `/healthz`, `/readyz` |
+| Penggunaan ChatGPT publik | Tidak | Ya, di balik HTTPS |
+| Server lifecycle | client menjalankan process | Anda mengelola process/runtime |
+
+Selain itu, tool surface menggunakan implementasi server-side yang sama, tergantung configuration dan dukungan client.
+
+## Catatan keamanan
+
+Stdio mode sering berjalan langsung di host sebagai user yang sama dengan MCP client. Gunakan workspace root yang sempit dan hindari akses filesystem yang luas. Biarkan full-container mode dinonaktifkan kecuali stdio sendiri berjalan di dalam container atau VM yang dapat dibuang.

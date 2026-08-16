@@ -1,38 +1,110 @@
-# أنماط الاستخدام
+<!-- i18n-source-sha256: 0b086e03bb7fd910e016db31a703908be74f7858846c091c8e784a62e00ec6ca -->
+# أنماط الاستخدام ودليل كتابة prompts
 
-تشرح هذه الصفحة سيناريو “أنماط الاستخدام” وتحافظ على بنية Runtime/Client المشتركة في الموقع.
+يعرض `local-shell-mcp` أدوات قوية. تعتمد النتائج الجيدة على طلب الفحص أولًا، والعمل بخطوات صغيرة، وإجراء التحقق، وشرح ما تغيّر.
 
-## نظرة عامة
+## حلقة التشغيل العامة
 
-يحدد Runtime كيفية تشغيل عملية الخادم وأي مساحة عمل يتحكم بها. يحدد Client كيفية اتصال ChatGPT أو أي عميل MCP آخر. Docker وإضافة VS Code والملفات التنفيذية المستقلة وتثبيتات Python/pipx/المصدر و stdio هي خيارات Runtime؛ أما موصل ChatGPT وعميل MCP HTTP العام وعميل MCP عبر stdio فهي اتصالات Client.
+استخدم هذه الحلقة في معظم مهام البرمجة:
 
-## متى تستخدمه
+1. الفحص: `environment_get` و`file_tree` و`file_grep` و`file_read` و`run_shell` لأوامر مثل `git status`.
+2. التخطيط: اطلب من النموذج تحديد أقل مجموعة من الملفات والاختبارات المعنية.
+3. التحرير: استخدم `file_edit` أو `file_patch` أو أوامر shell.
+4. التحقق: شغّل الاختبارات أو builds المستهدفة باستخدام `run_shell` أو shells دائمة.
+5. المراجعة: شغّل `git diff` عبر `run_shell`، ثم استخدم `secret_scan` و`audit_tail` عند الحاجة.
+6. Commit/export: استخدم أوامر Git CLI صريحة عبر `run_shell` أو `link_create`.
 
-- استخدم هذه الصفحة عندما يطابق مسار Runtime أو Client المختار عنوان الصفحة.
-- حافظ على اتساق جذر مساحة العمل و base URL العام و MCP endpoint ونمط المصادقة والأدوات المتاحة على المضيف.
-- بالنسبة إلى ChatGPT web/app، انشر MCP endpoint عبر HTTPS ينتهي بـ `/mcp`.
-- بالنسبة إلى عملاء MCP المحليين، استخدم HTTP localhost أو `local-shell-mcp --mode stdio` حسب دعم العميل.
+## اختيار الأداة
 
-## الخطوات
+| المهمة | يفضّل | تجنّب |
+|---|---|---|
+| أمر one-shot قصير | `run_shell` | بدء shell دائم لكل أمر |
+| Dev server أو REPL أو watch task طويل | `shell_start` + `shell_read` + `shell_send` | حجب `run_shell` حتى timeout |
+| تحليل منظم أو إنشاء ملفات | `run_python` | Shell pipelines هشة لمعالجة JSON/text معقد |
+| تعديل exact صغير | `file_edit` | إعادة كتابة ملف كامل دون حاجة |
+| استبدال واحد أو عدة استبدالات في ملف | `file_edit` with an `edits` array | تكرار edits قديمة دون إعادة القراءة |
+| Patch لعدة ملفات | `file_patch` | تعديلات shell مرتجلة |
+| العثور على الملفات | `file_tree`, `file_glob` | قوائم recursive كاملة لمستودعات كبيرة |
+| العثور على code | `file_grep` | قراءة ملفات كثيرة بلا هدف |
+| أدلة من المتصفح | `browser_snapshot`, `browser_run_script` | التخمين من أسماء الصفحات أو routes |
+| Artefacts قابلة للتنزيل | `link_create` | لصق محتوى binary كبير في chat |
+| العمل على جهاز بعيد | normal tools with `machine`, plus `remote_transfer` | فتح inbound SSH عندما يكفي outbound worker |
 
-1. اختر صفحة تثبيت Runtime أولاً.
-2. شغّل Runtime وتحقق من `/healthz` عند استخدام وضع HTTP.
-3. اختر بعد ذلك صفحة اتصال Client.
-4. سجّل MCP endpoint أو أمر stdio في Client.
-5. استدعِ `environment_get` للتحقق من مساحة العمل والإعدادات الفعلية.
+## قوالب prompt
+
+### استكشاف repository للقراءة فقط
 
 ```text
-Runtime: Docker / VS Code extension / binary / Python / stdio
-Client:  ChatGPT connector / generic HTTP MCP / generic stdio MCP
-Endpoint: https://your-host.example.com/mcp
+استخدم local-shell-mcp. افحص layout الـ repository وgit status. لا تعدّل الملفات. لخّص المكونات الرئيسية وأوامر الاختبار التي يمكن استنتاجها وأي مخاطر واضحة قبل إجراء تغييرات.
 ```
 
-## التحقق
+### إصلاح bug محدد
 
-- `environment_get` يؤكد إعدادات Runtime ومساحة العمل.
-- `file_tree` يؤكد الملفات المرئية.
-- `run_shell` يؤكد بيئة الأوامر.
+```text
+استخدم local-shell-mcp لإصلاح bug. أعد إنتاجه أو حدّد موقعه أولًا بأصغر أمر ذي صلة. اقرأ الملفات قبل التحرير. أنشئ patch صغيرًا، وشغّل التحقق المستهدف، ثم اعرض git diff والاختبارات التي شُغلت بالتحديد. لا تنشئ commit حتى أوافق.
+```
 
-## ملاحظات
+### Workflow للـ commit وpush
 
-فضّل الخطوات الصغيرة القابلة للتحقق: الفحص، التعديل، مراجعة diff، الاختبار، الفحص الأمني، ثم commit. يجب أيضاً تقسيم المهام الكبيرة إلى استدعاءات أدوات قابلة للتدقيق.
+```text
+استخدم local-shell-mcp. افحص git status وdiff، وشغّل الاختبارات المناسبة وsecret_scan، وأنشئ commit واحدًا مركزًا برسالة موجزة، ثم push للفرع الحالي. لا تضمّن caches أو build artifacts أو formatting غير مرتبط.
+```
+
+### عملية طويلة
+
+```text
+شغّل dev server في persistent shell session، واقرأ output حتى يصبح ready، ثم استخدم browser tools للتحقق من الصفحة. احتفظ بـ session id وأنهِ الجلسة بعد التحقق.
+```
+
+### مهمة Remote worker
+
+```text
+استخدم remote worker المتصل المسمى <machine>. استدعِ environment_get أولًا مع machine=<machine>، ثم file_list مع machine نفسها. اعمل فقط داخل remote workdir المضبوط. استخدم run_shell للأوامر القصيرة وshell_start أو job_start للعمل الطويل.
+```
+
+## العمل مع repositories
+
+التسلسل الموصى به لتغييرات open-source:
+
+1. شغّل `git status --short --branch` عبر `run_shell`.
+2. استخدم أوامر Git CLI صريحة لـ fetch وفحص branches عندما تكون حالة upstream مهمة.
+3. استخدم `file_grep` و`file_read` قبل التحرير.
+4. أنشئ patch صغيرًا.
+5. شغّل الاختبارات المستهدفة أولًا، ثم الاختبارات الأوسع عندما يكون ذلك عمليًا.
+6. شغّل `secret_scan` قبل commit أو push.
+7. نفّذ stage وcommit صريحين برسالة موجزة.
+
+اطلب commit واحدًا لكل تغيير منطقي عندما يحتاج maintainers إلى تاريخ سهل المراجعة.
+
+## العمل مع artefacts المُنشأة
+
+بالنسبة إلى PDF وreports وscreenshots وarchives وlogs:
+
+1. أنشئ الملف داخل workspace.
+2. تحقق من وجود الملف وحجمه المتوقع.
+3. استخدم `link_create` مع TTL قصير و`max_downloads` اختياري.
+4. ألغِ link عندما لا يعود مطلوبًا.
+
+لا تنشئ روابط عامة لمفاتيح خاصة أو directories للcredentials أو بيانات شخصية غير مرتبطة.
+
+## العمل مع الأجهزة البعيدة
+
+يكون Remote worker mode مفيدًا عندما يستطيع الجهاز إجراء طلبات HTTPS صادرة لكنه لا يستطيع قبول SSH وارد.
+
+ممارسات جيدة:
+
+- أنشئ الأجهزة أو أعد تسميتها باستخدام `remote_manage(action="invite", ...)` أو `remote_manage(action="rename", ...)`.
+- استدعِ `environment_get(machine=...)` قبل العمل.
+- استخدم `remote_transfer` لبدء transfer jobs بين controller/worker أو worker/worker ثم أدِرها بأدوات `job_*` العادية.
+- ألغِ workers بعد المهمة باستخدام `remote_manage(action="revoke", ...)`.
+
+## أنماط يجب تجنبها
+
+تجنب هذه التعليمات إلا إذا كانت البيئة disposable وكانت النتائج مفهومة:
+
+- “ثبّت عالميًا أي شيء مطلوب” على server يعمل مباشرة على host.
+- “شغّل حتى يعمل” دون حدود زمنية أو معايير تحقق.
+- “اعمل commit لكل شيء” في repository يحتوي artefacts مولدة.
+- “اعرض home directory بالكامل” للراحة.
+- “أنشئ file link للـ workspace بالكامل”.
+- تشغيل public deployment مع `LOCAL_SHELL_MCP_AUTH_MODE=none`.

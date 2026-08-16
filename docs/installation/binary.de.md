@@ -1,38 +1,133 @@
-# Eigenständige Binärdatei
+<!-- i18n-source-sha256: 42daa6d3dd931530a1d2e86d6a36fc6424b7494ff078626157c158b38b1f4b1e -->
+# Eigenständiger Binary-Runtime
 
-Diese Seite beschreibt das Szenario „Eigenständige Binärdatei“ und verwendet die gemeinsame Runtime/Client-Struktur der Dokumentation.
+Release-Binaries führen `local-shell-mcp` ohne Docker und ohne Python-Umgebung aus. Verwenden Sie diesen Runtime, wenn Docker nicht verfügbar ist oder eine dedizierte VM, ein Container-Host, Laborserver oder eingeschränktes Benutzerkonto bereits die Sicherheitsgrenze bildet.
 
-## Überblick
+Dies ist eine Runtime-Entscheidung. Der ChatGPT-Zugriff wird separat über einen HTTPS-`/mcp`-Endpoint konfiguriert.
 
-Runtime legt fest, wie der Serverprozess läuft und welchen Workspace er kontrolliert. Client legt fest, wie ChatGPT oder ein anderer MCP-Client eine Verbindung herstellt. Docker, die VS Code-Erweiterung, eigenständige Binärdateien, Python/pipx/Quellcode-Installationen und stdio sind Runtime-Optionen; der ChatGPT-Connector, generische HTTP-MCP-Clients und stdio-MCP-Clients sind Client-Verbindungen.
+## Release-Artefakte
 
-## Wann verwenden
+GitHub Releases erstellen selbständige ausführbare Dateien für gängige Plattformen:
 
-- Verwende diese Seite, wenn der gewählte Runtime- oder Client-Pfad zum Titel passt.
-- Halte Workspace-Wurzel, öffentliche base URL, MCP endpoint, Authentifizierungsmodus und verfügbare Host-Tools konsistent.
-- Für ChatGPT Web/App muss ein HTTPS-MCP-endpoint bereitgestellt werden, der auf `/mcp` endet.
-- Für lokale MCP-Clients verwende je nach Client-Unterstützung HTTP localhost oder `local-shell-mcp --mode stdio`.
+| Platform artifact | Archive |
+|---|---|
+| `local-shell-mcp-linux-x86_64` | `.tar.gz` |
+| `local-shell-mcp-linux-aarch64` | `.tar.gz` |
+| `local-shell-mcp-macos-x86_64` | `.tar.gz` |
+| `local-shell-mcp-macos-aarch64` | `.tar.gz` |
+| `local-shell-mcp-windows-x86_64` | `.zip` |
 
-## Schritte
+Jedes Archiv enthält die ausführbare Datei, README, Lizenz und eine kurze Quickstart-Datei.
 
-1. Wähle zuerst die Runtime-Installationsseite.
-2. Starte die Runtime und prüfe im HTTP-Modus `/healthz`.
-3. Wähle danach die Client-Verbindungsseite.
-4. Registriere den MCP endpoint oder den stdio-Befehl im Client.
-5. Rufe `environment_get` auf, um den effektiven Workspace und die Einstellungen zu prüfen.
+## Installation
 
-```text
-Runtime: Docker / VS Code extension / binary / Python / stdio
-Client:  ChatGPT connector / generic HTTP MCP / generic stdio MCP
-Endpoint: https://your-host.example.com/mcp
+1. Laden Sie das Archiv für Ihre Plattform aus GitHub Releases herunter.
+2. Entpacken Sie es.
+3. Legen Sie die ausführbare Datei in `PATH` oder notieren Sie den absoluten Pfad.
+4. Führen Sie `local-shell-mcp --help` aus, um den Start des Binary zu prüfen.
+
+Linux und macOS benötigen üblicherweise das Executable-Bit:
+
+```bash
+chmod +x local-shell-mcp
+./local-shell-mcp --help
 ```
 
-## Überprüfung
+Unter Windows führen Sie `local-shell-mcp.exe` in PowerShell aus oder nehmen das enthaltende Verzeichnis in `PATH` auf.
 
-- `environment_get` bestätigt Runtime-Einstellungen und Workspace.
-- `file_tree` bestätigt sichtbare Dateien.
-- `run_shell` bestätigt die Befehlsumgebung.
+## Minimale lokale Ausführung
 
-## Hinweise
+```bash
+mkdir -p ~/local-shell-mcp-workspace
+export LOCAL_SHELL_MCP_WORKSPACE_ROOT=~/local-shell-mcp-workspace
+local-shell-mcp --mode mcp
+```
 
-Arbeite bevorzugt in kleinen, überprüfbaren Schritten: prüfen, bearbeiten, diff ansehen, testen, scannen und committen. Große Aufgaben sollten ebenfalls in auditierbare Tool-Aufrufe zerlegt werden.
+In einem anderen Terminal:
+
+```bash
+curl -i http://127.0.0.1:8765/healthz
+```
+
+## Öffentliche HTTP-MCP-Ausführung
+
+Für ChatGPT oder einen öffentlichen HTTP-MCP-Client konfigurieren Sie folgende Kategorien:
+
+| Setting | Purpose |
+|---|---|
+| `LOCAL_SHELL_MCP_WORKSPACE_ROOT` | Von Tools kontrolliertes Verzeichnis |
+| `LOCAL_SHELL_MCP_HOST` and `LOCAL_SHELL_MCP_PORT` | Lokale Bind-Adresse und Port |
+| `LOCAL_SHELL_MCP_PUBLIC_BASE_URL` | Öffentlicher HTTPS-Origin ohne `/mcp` |
+| `LOCAL_SHELL_MCP_AUTH_MODE` | Für öffentliche Bereitstellungen `oauth` verwenden |
+| OAuth PIN and JWT secret settings | Für öffentliche OAuth-Autorisierung erforderlich |
+
+Veröffentlichen Sie den lokalen HTTP-Port über Reverse Proxy oder Tunnel. Der öffentliche Endpoint ist:
+
+```text
+https://your-public-host.example.com/mcp
+```
+
+## YAML-Konfiguration
+
+Nicht geheime Runtime-Standards können in einer YAML-Konfiguration liegen:
+
+```yaml
+host: 127.0.0.1
+port: 8765
+mode: mcp
+workspace_root: /srv/local-shell-mcp/workspace
+auth_mode: oauth
+public_base_url: https://your-public-host.example.com
+```
+
+Ausführen:
+
+```bash
+local-shell-mcp --config /path/to/config.yaml
+```
+
+Umgebungsvariablen mit Präfix `LOCAL_SHELL_MCP_` überschreiben YAML-Werte.
+
+## Verantwortung für den Host-Toolchain
+
+Das Binary enthält die Python-Anwendung, nicht jedes Entwicklerwerkzeug. MCP-Tools rufen Programme auf, die auf dem Host verfügbar sind.
+
+Installieren Sie, was Ihre Aufgaben benötigen:
+
+| Capability | Host packages to consider |
+|---|---|
+| Search and shell ergonomics | `ripgrep`, `tree`, `jq`, `curl`, `wget`; Linux-Releases enthalten bereits einen static tmux helper |
+| Git workflows | `git`, `gh`, OpenSSH client, credential helpers |
+| Python projects | Python, pip, venv, project-specific compilers and headers |
+| Node projects | Node.js, npm, pnpm, yarn |
+| Rust/Go/Java/C++ | Cargo/rustc, Go, JDK, Maven/Gradle, compilers, CMake, Ninja |
+| Browser automation | Playwright browser binaries and OS dependencies |
+| Document conversion | LibreOffice, Pandoc, Poppler utilities |
+
+Wenn Sie diesen Host-Toolchain nicht pflegen möchten, verwenden Sie Docker Compose.
+
+## Lang laufender Dienst
+
+Für eine dauerhafte öffentliche Bereitstellung führen Sie das Binary unter dem Process Supervisor Ihres Betriebssystems aus. Beachten Sie:
+
+- Dediziertes OS-Konto mit geringen Rechten.
+- Dediziertes Workspace-Verzeichnis.
+- Sensible Werte außerhalb world-readable Dateien speichern.
+- Bei Fehler automatisch neu starten.
+- Nach jedem Neustart `/healthz` prüfen.
+- Logs für Fehlerbehebung aufbewahren.
+
+## Updates
+
+1. Neues Release-Archiv für Ihre Plattform herunterladen.
+2. Optional Prüfsummen verifizieren.
+3. Ausführbare Datei ersetzen.
+4. Process Manager neu starten.
+5. `/healthz` prüfen.
+6. Vor weiterer Arbeit den Client `environment_get` ausführen lassen.
+
+## Sicherheitshinweise
+
+Das Binary läuft mit den Rechten seines Betriebssystembenutzers. Verwenden Sie für öffentliche Bereitstellungen einen dedizierten Benutzer mit niedrigen Rechten, einen dedizierten Workspace und wenn möglich eine VM-/Container-Grenze.
+
+Setzen Sie `LOCAL_SHELL_MCP_ALLOW_FULL_CONTAINER=true` nicht für ein Binary, das direkt auf Ihrem persönlichen Host läuft. Diese Einstellung ist für wegwerfbare Container oder VMs gedacht.

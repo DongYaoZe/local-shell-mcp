@@ -1,38 +1,47 @@
+<!-- i18n-source-sha256: d758caead1c922385409aceebf498662f25f4cbf252a48d65b29d91f07e5a173 -->
 # Dateilinks
 
-Diese Seite beschreibt das Szenario „Dateilinks“ und verwendet die gemeinsame Runtime/Client-Struktur der Dokumentation.
+`local-shell-mcp` kann Dateien aus dem kontrollierten Workspace über hochentropische Bearer-URLs bereitstellen. Das ist nützlich, wenn die KI Berichte, Archive, PDFs, Screenshots oder andere Artefakte erzeugt, die im Chat heruntergeladen oder angezeigt werden sollen.
 
-## Überblick
+## Wann Dateilinks sinnvoll sind
 
-Runtime legt fest, wie der Serverprozess läuft und welchen Workspace er kontrolliert. Client legt fest, wie ChatGPT oder ein anderer MCP-Client eine Verbindung herstellt. Docker, die VS Code-Erweiterung, eigenständige Binärdateien, Python/pipx/Quellcode-Installationen und stdio sind Runtime-Optionen; der ChatGPT-Connector, generische HTTP-MCP-Clients und stdio-MCP-Clients sind Client-Verbindungen.
+Verwenden Sie Dateilinks für:
 
-## Wann verwenden
+- Generierte PDFs oder Berichte.
+- Screenshots und Browser-Artefakte.
+- Build-Ausgaben.
+- Logs, die zu groß zum Einfügen sind.
+- Archive zur manuellen Prüfung.
 
-- Verwende diese Seite, wenn der gewählte Runtime- oder Client-Pfad zum Titel passt.
-- Halte Workspace-Wurzel, öffentliche base URL, MCP endpoint, Authentifizierungsmodus und verfügbare Host-Tools konsistent.
-- Für ChatGPT Web/App muss ein HTTPS-MCP-endpoint bereitgestellt werden, der auf `/mcp` endet.
-- Für lokale MCP-Clients verwende je nach Client-Unterstützung HTTP localhost oder `local-shell-mcp --mode stdio`.
+Verwenden Sie Dateilinks nicht für Secrets, Private Keys, Credential-Speicher oder unrelated personenbezogene Daten.
 
-## Schritte
+## Typischer Ablauf
 
-1. Wähle zuerst die Runtime-Installationsseite.
-2. Starte die Runtime und prüfe im HTTP-Modus `/healthz`.
-3. Wähle danach die Client-Verbindungsseite.
-4. Registriere den MCP endpoint oder den stdio-Befehl im Client.
-5. Rufe `environment_get` auf, um den effektiven Workspace und die Einstellungen zu prüfen.
+1. Erzeugen oder finden Sie eine Datei unter `/workspace`.
+2. Rufen Sie `link_create` mit TTL und optionalem Download-Limit auf. Setzen Sie `inline=true`, wenn die Datei direkt im Browser oder als Markdown-Bild gerendert werden soll; Standard ist `false`, wodurch ein Attachment-Download erzwungen wird.
+3. Teilen Sie die zurückgegebene URL.
+4. Widerrufen Sie den Link, sobald er nicht mehr benötigt wird.
 
-```text
-Runtime: Docker / VS Code extension / binary / Python / stdio
-Client:  ChatGPT connector / generic HTTP MCP / generic stdio MCP
-Endpoint: https://your-host.example.com/mcp
-```
+## Relevante Tools
 
-## Überprüfung
+| Tool | Zweck |
+|---|---|
+| `link_create` | Tokenisierte URL für eine Workspace-Datei erstellen. |
+| `link_list` | Aktive Links anzeigen. |
+| `link_revoke` | Einen Link vor Ablauf deaktivieren. |
 
-- `environment_get` bestätigt Runtime-Einstellungen und Workspace.
-- `file_tree` bestätigt sichtbare Dateien.
-- `run_shell` bestätigt die Befehlsumgebung.
+## Steuerung
 
-## Hinweise
+Zu den Konfigurationsoptionen gehören:
 
-Arbeite bevorzugt in kleinen, überprüfbaren Schritten: prüfen, bearbeiten, diff ansehen, testen, scannen und committen. Große Aufgaben sollten ebenfalls in auditierbare Tool-Aufrufe zerlegt werden.
+- `LOCAL_SHELL_MCP_FILE_DOWNLOAD_ENABLED`
+- `LOCAL_SHELL_MCP_FILE_DOWNLOAD_DEFAULT_TTL_S`
+- `LOCAL_SHELL_MCP_FILE_DOWNLOAD_MAX_TTL_S`
+- `LOCAL_SHELL_MCP_FILE_DOWNLOAD_DEFAULT_MAX_DOWNLOADS`
+- `LOCAL_SHELL_MCP_FILE_DOWNLOAD_MAX_FILE_BYTES`
+
+Verwenden Sie für sensible Artefakte kürzere TTLs und setzen Sie ein maximales Download-Limit, wenn ein Link für einen einzigen Empfänger bestimmt ist.
+
+## Sicherheitshinweise
+
+Dateilinks sind Bearer-URLs. Jeder mit der URL kann die Datei herunterladen, bis sie abläuft, das Download-Limit erreicht oder der Link widerrufen wird. Behandeln Sie sie wie temporäre Secrets. Inline-Antworten enthalten eine CSP-Sandbox und `X-Content-Type-Options: nosniff`, sodass aktive Formate nicht auf den LSM-Origin zugreifen oder als unsandboxed same-origin content ausgeführt werden können.

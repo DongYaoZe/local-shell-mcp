@@ -1,38 +1,23 @@
+<!-- i18n-source-sha256: 91695da5acbb82a8550b150249a9b97f17470140a72b27233e2470a93305e7fb -->
 # Automatización del navegador
 
-Esta página describe el escenario “Automatización del navegador” y mantiene la estructura Runtime/Client común del sitio.
+Las herramientas de navegador usan Playwright para inspeccionar páginas, capturar evidencias y ejecutar flujos de navegador reproducibles. La tool surface pública se mantiene deliberadamente pequeña.
 
-## Resumen
+## Herramientas
 
-Runtime define cómo se ejecuta el proceso del servidor y qué espacio de trabajo controla. Client define cómo se conecta ChatGPT u otro cliente MCP. Docker, la extensión de VS Code, los binarios independientes, las instalaciones desde Python/pipx/código fuente y stdio son opciones de Runtime; el conector de ChatGPT, el cliente MCP HTTP genérico y el cliente MCP stdio son conexiones de Client.
+| Tool | Propósito |
+|---|---|
+| `browser_session` | Iniciar, listar, cerrar o limpiar sesiones persistentes de navegador; opcionalmente reutilizar un profile o storage state. |
+| `browser_snapshot` | Leer texto acotado de la página, errores de page/network y elementos interactivos con refs cortas como `e1`; opcionalmente capturar una screenshot. |
+| `browser_act` | Ejecutar navigation, click, fill, select, key, wait y acciones multipágina estructuradas mediante refs de snapshot o CSS selectors. |
+| `browser_run_script` | Ejecutar un script Python Playwright completo cuando el conjunto de acciones de alto nivel no sea suficiente. |
 
-## Cuándo usarlo
+Todas las herramientas de navegador aceptan `machine` opcional. Las dependencias del navegador deben estar instaladas previamente en el controller o worker seleccionado; se instalan mediante comandos shell normales como `python -m playwright install chromium`.
 
-- Usa esta página cuando la ruta de Runtime o Client elegida coincida con el título.
-- Mantén coherentes la raíz del espacio de trabajo, la base URL pública, el MCP endpoint, el modo de autenticación y las herramientas disponibles del host.
-- Para ChatGPT web/app, expón un MCP endpoint HTTPS que termine en `/mcp`.
-- Para clientes MCP locales, usa HTTP localhost o `local-shell-mcp --mode stdio` según lo que admita el cliente.
+## Flujos habituales
 
-## Pasos
+Para trabajo interactivo, llame a `browser_session(action="start", url=...)` y después a `browser_snapshot`. El snapshot devuelve referencias cortas como `e1` y `e2`; páselas directamente a `browser_act`, por ejemplo `{"action": "click", "target": "e1"}` o `{"action": "fill", "target": "e2", "value": "..."}`. Vuelva a tomar un snapshot tras navegar, porque las refs de elementos son referencias al estado de la página, no selectores permanentes.
 
-1. Elige primero la página de instalación del Runtime.
-2. Inicia el Runtime y verifica `/healthz` cuando uses el modo HTTP.
-3. Elige después la página de conexión del Client.
-4. Registra el MCP endpoint o el comando stdio en el Client.
-5. Llama a `environment_get` para comprobar el espacio de trabajo y los ajustes efectivos.
+Para inspección normal y screenshots, prefiera `browser_session` más `browser_snapshot`; el snapshot puede devolver texto visible acotado y guardar una screenshot. Use `browser_run_script` para evaluación JavaScript, lógica personalizada de captura/PDF o interacciones que `browser_act` no represente.
 
-```text
-Runtime: Docker / VS Code extension / binary / Python / stdio
-Client:  ChatGPT connector / generic HTTP MCP / generic stdio MCP
-Endpoint: https://your-host.example.com/mcp
-```
-
-## Verificación
-
-- `environment_get` confirma los ajustes del Runtime y el espacio de trabajo.
-- `file_tree` confirma los archivos visibles.
-- `run_shell` confirma el entorno de comandos.
-
-## Notas
-
-Prefiere pasos pequeños y verificables: inspeccionar, editar, revisar el diff, probar, escanear y confirmar. Las tareas grandes también deben dividirse en llamadas de herramientas auditables.
+Mantenga los scripts acotados, establezca timeouts explícitos, guarde los artifacts dentro del workspace y evite introducir credentials salvo que el entorno esté dedicado a la tarea.

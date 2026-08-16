@@ -1,12 +1,8 @@
+<!-- i18n-source-sha256: 1f30fc9935125c84fb0838d17ec894d78aaa6253fe3903356414aac716ba2adc -->
 # Bảo mật
 
-Với deployment công khai, bật OAuth và không mount Docker socket, root của host hoặc credential dài hạn.
+Hãy dùng OAuth cho các triển khai công khai. Đặt giá trị mạnh cho `LOCAL_SHELL_MCP_OAUTH_ADMIN_PIN` và `LOCAL_SHELL_MCP_OAUTH_JWT_SECRET`, đồng thời giữ chúng bí mật.
 
-Mandatory rules:
+Theo mặc định, các thao tác đường dẫn bị giới hạn trong workspace và các đoạn đường dẫn nhạy cảm bị chặn. Chế độ Full-container vô hiệu hóa các giới hạn workspace và đường dẫn tích hợp, vì vậy chỉ nên dùng trong container hoặc VM có thể bỏ đi.
 
-1. Keep OAuth enabled for public deployments.
-2. Do not mount `/var/run/docker.sock`.
-3. Do not mount the host root filesystem.
-4. Do not expose unauthenticated MCP tools on the public internet.
-5. Treat file links and credential volumes as sensitive.
-6. Use disposable containers or VMs when granting broad authority.
+Các liên kết tải tệp được tạo là bearer URL công khai. Chúng dựa vào token có entropy cao, TTL, giới hạn số lượt tải xuống tùy chọn, giới hạn kích thước tùy chọn và khả năng thu hồi.

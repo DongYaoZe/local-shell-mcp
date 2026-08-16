@@ -1,38 +1,62 @@
-# Genel MCP Client
+<!-- i18n-source-sha256: 6e76d0746c53eeef3e770417742a44e122c6484afd0d91ddf6a4995387085c74 -->
+# Genel MCP client’lar
 
-Bu sayfa “Genel MCP Client” senaryosunu açıklar ve sitenin ortak Runtime/Client yapısını korur.
+`local-shell-mcp`, ChatGPT ve diğer MCP client’lar tarafından kullanılabilir. Client, HTTP üzerinden bağlanmayı veya sunucuyu stdio üzerinden başlatmayı seçer.
 
-## Genel bakış
+## HTTP MCP client
 
-Runtime, sunucu sürecinin nasıl çalıştığını ve hangi workspace’i kontrol ettiğini belirler. Client, ChatGPT veya başka bir MCP istemcisinin nasıl bağlandığını belirler. Docker, VS Code eklentisi, bağımsız ikililer, Python/pipx/kaynak kurulumları ve stdio Runtime seçenekleridir; ChatGPT bağlayıcısı, genel HTTP MCP istemcisi ve stdio MCP istemcisi Client bağlantılarıdır.
+Sunucu zaten çalışıyorsa HTTP mode kullanın:
 
-## Ne zaman kullanılır
-
-- Seçilen Runtime veya Client yolu bu başlıkla eşleştiğinde bu sayfayı kullanın.
-- Workspace kökü, public base URL, MCP endpoint, kimlik doğrulama modu ve kullanılabilir host araçlarını tutarlı tutun.
-- ChatGPT web/app için `/mcp` ile biten bir HTTPS MCP endpoint yayımlayın.
-- Yerel MCP istemcileri için istemci desteğine göre HTTP localhost veya `local-shell-mcp --mode stdio` kullanın.
-
-## Adımlar
-
-1. Önce Runtime kurulum sayfasını seçin.
-2. Runtime’ı başlatın ve HTTP modu kullanılıyorsa `/healthz` değerini doğrulayın.
-3. Sonra Client bağlantı sayfasını seçin.
-4. Client içinde MCP endpoint veya stdio komutunu kaydedin.
-5. Etkin workspace ve ayarları doğrulamak için `environment_get` çağırın.
-
-```text
-Runtime: Docker / VS Code extension / binary / Python / stdio
-Client:  ChatGPT connector / generic HTTP MCP / generic stdio MCP
-Endpoint: https://your-host.example.com/mcp
+```bash
+LOCAL_SHELL_MCP_WORKSPACE_ROOT=/path/to/workspace local-shell-mcp --mode mcp
 ```
 
-## Doğrulama
+Yerel endpoint:
 
-- `environment_get` Runtime ayarlarını ve workspace’i doğrular.
-- `file_tree` görünen dosyaları doğrular.
-- `run_shell` komut ortamını doğrular.
+```text
+http://127.0.0.1:8765/mcp
+```
 
-## Notlar
+Ağ endpoint’i:
 
-Küçük ve doğrulanabilir adımları tercih edin: incele, düzenle, diff kontrol et, test et, tara ve commit yap. Büyük görevler de denetlenebilir araç çağrılarına bölünmelidir.
+```text
+https://your-public-host.example.com/mcp
+```
+
+Güvenilir localhost dışından erişilebilen tüm endpoint’lerde OAuth kullanın.
+
+## Stdio MCP client
+
+Client sunucu sürecini kendisi başlatıyorsa stdio mode kullanın:
+
+```bash
+LOCAL_SHELL_MCP_WORKSPACE_ROOT=/path/to/workspace local-shell-mcp --mode stdio
+```
+
+Tipik client yapılandırması:
+
+```json
+{
+  "mcpServers": {
+    "local-shell-mcp": {
+      "command": "local-shell-mcp",
+      "args": ["--mode", "stdio"],
+      "env": {
+        "LOCAL_SHELL_MCP_WORKSPACE_ROOT": "/path/to/workspace"
+      }
+    }
+  }
+}
+```
+
+Client schema’ları değişir. Bazıları bu bölümü `mcpServers` olarak adlandırır, bazıları başka bir ad kullanır.
+
+## İlk güvenli kontrol
+
+Yeni bağlanan bir client için şununla başlayın:
+
+```text
+Call environment_get, then file_tree on the workspace root. Do not modify files yet.
+```
+
+Ardından açık düzenleme, test ve Git kuralları olan sınırlandırılmış bir görev çalıştırın.

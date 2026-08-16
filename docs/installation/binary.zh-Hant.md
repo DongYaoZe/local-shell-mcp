@@ -1,3 +1,4 @@
+<!-- i18n-source-sha256: 42daa6d3dd931530a1d2e86d6a36fc6424b7494ff078626157c158b38b1f4b1e -->
 # 獨立二進制運行時
 
 Release 二進制可以在沒有 Docker、也沒有 Python 環境的情況下運行 `local-shell-mcp`。當 Docker 不可用，或你已經有專用 VM、容器宿主機、實驗室服務器、受限用戶賬號作爲邊界時，可以使用這個運行時。

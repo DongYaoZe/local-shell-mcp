@@ -1,38 +1,110 @@
-# Padrões de uso
+<!-- i18n-source-sha256: 0b086e03bb7fd910e016db31a703908be74f7858846c091c8e784a62e00ec6ca -->
+# Padrões de uso e guia de prompting
 
-Esta página descreve o cenário “Padrões de uso” e mantém a estrutura Runtime/Client comum do site.
+`local-shell-mcp` expõe ferramentas poderosas. Bons resultados dependem de pedir ao modelo que primeiro inspecione, aja em passos pequenos, verifique e relate o que mudou.
 
-## Visão geral
+## Loop operacional geral
 
-Runtime define como o processo do servidor é executado e qual workspace ele controla. Client define como ChatGPT ou outro cliente MCP se conecta. Docker, extensão do VS Code, binários independentes, instalações por Python/pipx/código-fonte e stdio são opções de Runtime; conector ChatGPT, cliente MCP HTTP genérico e cliente MCP stdio são conexões Client.
+Use este loop na maioria das tarefas de código:
 
-## Quando usar
+1. Inspecionar: `environment_get`, `file_tree`, `file_grep`, `file_read` e `run_shell` para comandos como `git status`.
+2. Planejar: pedir ao modelo que identifique os arquivos e tests mínimos envolvidos.
+3. Editar: usar `file_edit`, `file_patch` ou comandos shell.
+4. Verificar: executar tests/builds direcionados com `run_shell` ou shells persistentes.
+5. Revisar: executar `git diff` via `run_shell`, depois `secret_scan` e `audit_tail` quando necessário.
+6. Commit/exportar: usar comandos Git CLI explícitos via `run_shell` ou `link_create`.
 
-- Use esta página quando o caminho de Runtime ou Client escolhido corresponder ao título.
-- Mantenha consistentes a raiz do workspace, a base URL pública, o MCP endpoint, o modo de autenticação e as ferramentas disponíveis no host.
-- Para ChatGPT web/app, exponha um MCP endpoint HTTPS terminado em `/mcp`.
-- Para clientes MCP locais, use HTTP localhost ou `local-shell-mcp --mode stdio` conforme o suporte do cliente.
+## Escolha de ferramentas
 
-## Passos
+| Tarefa | Preferir | Evitar |
+|---|---|---|
+| Comando one-shot curto | `run_shell` | Iniciar shell persistente para cada comando |
+| Dev server, REPL ou watch task longo | `shell_start` + `shell_read` + `shell_send` | Bloquear `run_shell` até timeout |
+| Análise estruturada ou geração de arquivo | `run_python` | Pipelines shell frágeis para JSON/texto complexo |
+| Pequena edição exata | `file_edit` | Reescrever arquivos inteiros desnecessariamente |
+| Uma ou várias substituições em um arquivo | `file_edit` with an `edits` array | Repetir edits obsoletos sem reler |
+| Patch multi-arquivo | `file_patch` | Edits shell ad hoc |
+| Encontrar arquivos | `file_tree`, `file_glob` | Listagens recursivas completas de repositories grandes |
+| Encontrar código | `file_grep` | Ler muitos arquivos às cegas |
+| Evidência de navegador | `browser_snapshot`, `browser_run_script` | Adivinhar por nomes de páginas/routes |
+| Artefatos baixáveis | `link_create` | Colar grande conteúdo binário no chat |
+| Trabalho em máquina remota | normal tools with `machine`, plus `remote_transfer` | Abrir SSH de entrada quando outbound worker é suficiente |
 
-1. Escolha primeiro a página de instalação do Runtime.
-2. Inicie o Runtime e verifique `/healthz` quando usar o modo HTTP.
-3. Depois escolha a página de conexão do Client.
-4. Registre o MCP endpoint ou o comando stdio no Client.
-5. Chame `environment_get` para verificar o workspace e as configurações efetivas.
+## Templates de prompt
+
+### Orientação read-only do repository
 
 ```text
-Runtime: Docker / VS Code extension / binary / Python / stdio
-Client:  ChatGPT connector / generic HTTP MCP / generic stdio MCP
-Endpoint: https://your-host.example.com/mcp
+Use local-shell-mcp. Inspecione o layout do repository e git status. Não modifique arquivos. Resuma os componentes principais, comandos de test que conseguir inferir e riscos óbvios antes de fazer mudanças.
 ```
 
-## Verificação
+### Correção focada de bug
 
-- `environment_get` confirma configurações do Runtime e workspace.
-- `file_tree` confirma arquivos visíveis.
-- `run_shell` confirma o ambiente de comandos.
+```text
+Use local-shell-mcp para corrigir o bug. Primeiro reproduza ou localize com o menor comando relevante. Leia os arquivos antes de editar. Faça um patch mínimo, execute a verificação direcionada e depois mostre git diff e os tests exatos executados. Não faça commit até eu aprovar.
+```
 
-## Notas
+### Workflow de commit e push
 
-Prefira etapas pequenas e verificáveis: inspecionar, editar, ver o diff, testar, escanear e fazer commit. Tarefas grandes também devem ser divididas em chamadas de ferramentas auditáveis.
+```text
+Use local-shell-mcp. Verifique git status e diff, execute os tests relevantes e secret_scan, crie um commit focado com mensagem concisa e depois faça push da branch atual. Não inclua caches, build artifacts ou formatting não relacionado.
+```
+
+### Processo longo
+
+```text
+Inicie o dev server em uma persistent shell session, leia o output até ficar ready e depois use browser tools para verificar a página. Mantenha o session id e encerre depois da verificação.
+```
+
+### Tarefa em remote worker
+
+```text
+Use o remote worker conectado chamado <machine>. Primeiro chame environment_get com machine=<machine> e depois file_list com a mesma machine. Trabalhe somente dentro do remote workdir configurado. Use run_shell para comandos curtos e shell_start ou job_start para trabalho longo.
+```
+
+## Trabalhando com repositories
+
+Sequência recomendada para mudanças open-source:
+
+1. Executar `git status --short --branch` via `run_shell`.
+2. Fazer fetch e inspecionar branches com Git CLI explícito quando upstream state importar.
+3. Usar `file_grep` e `file_read` antes de editar.
+4. Fazer patch mínimo.
+5. Executar tests direcionados primeiro e tests mais amplos quando prático.
+6. Executar `secret_scan` antes de commit ou push.
+7. Stage e commit explícitos com mensagem concisa.
+
+Peça um commit por mudança lógica quando maintainers precisarem de histórico revisável.
+
+## Trabalhando com artefatos gerados
+
+Para PDFs, reports, screenshots, archives ou logs:
+
+1. Gerar o arquivo dentro do workspace.
+2. Verificar que o arquivo existe e tem o tamanho esperado.
+3. Usar `link_create` com TTL curto e `max_downloads` opcional.
+4. Revogar o link quando não for mais necessário.
+
+Não crie links públicos para private keys, credential directories ou dados pessoais não relacionados.
+
+## Trabalhando com máquinas remotas
+
+Remote worker mode é útil quando uma máquina pode fazer requests HTTPS de saída mas não aceitar SSH de entrada.
+
+Boas práticas:
+
+- Criar ou renomear máquinas com `remote_manage(action="invite", ...)` ou `remote_manage(action="rename", ...)`.
+- Chamar `environment_get(machine=...)` antes de agir.
+- Usar `remote_transfer` para iniciar transfer jobs controller/worker ou worker/worker e gerenciá-los com tools `job_*` normais.
+- Revogar workers após a tarefa com `remote_manage(action="revoke", ...)`.
+
+## Anti-patterns
+
+Evite estas instruções, a menos que o ambiente seja descartável e as consequências sejam entendidas:
+
+- “Instale globalmente o que for necessário” em server iniciado no host.
+- “Execute até funcionar” sem limites de tempo ou critérios de verificação.
+- “Commit tudo” em repository com artefatos gerados.
+- “Exponha todo o home directory” por conveniência.
+- “Crie um file link para todo o workspace”.
+- Executar deployment público com `LOCAL_SHELL_MCP_AUTH_MODE=none`.

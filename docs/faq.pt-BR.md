@@ -1,3 +1,4 @@
+<!-- i18n-source-sha256: f0abfd8b2a3118c630bf6693921a7e5f95ad61e089bfa6645a583467a0b9832e -->
 # Perguntas frequentes
 
 Esta página reúne problemas recorrentes de Client e proxy reverso que podem parecer falhas do LSM mesmo quando o servidor está saudável.

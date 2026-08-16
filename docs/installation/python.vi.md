@@ -1,38 +1,105 @@
-# Python / pipx / mã nguồn
+<!-- i18n-source-sha256: 19347ba1d8d3f26f227506397f4093281319e6a2a59833ced1da286c1d46f21a -->
+# Runtime Python, pipx và source
 
-Trang này mô tả kịch bản “Python / pipx / mã nguồn” và giữ cấu trúc Runtime/Client chung của trang tài liệu.
+Runtime Python hữu ích cho phát triển, gỡ lỗi và các môi trường nơi quản lý package Python dễ hơn Docker. Chúng chạy cùng server với runtime Docker và binary.
 
-## Tổng quan
+Dùng trang này cho ba trường hợp liên quan:
 
-Runtime xác định tiến trình server chạy như thế nào và điều khiển workspace nào. Client xác định ChatGPT hoặc client MCP khác kết nối như thế nào. Docker, tiện ích VS Code, tệp nhị phân độc lập, cài đặt Python/pipx/mã nguồn và stdio là lựa chọn Runtime; trình kết nối ChatGPT, client MCP HTTP chung và client MCP stdio là kết nối Client.
+- `pipx install local-shell-mcp`: cài executable cấp người dùng.
+- `pip install local-shell-mcp`: cài vào virtual environment hiện có.
+- Editable source checkout: phát triển hoặc gỡ lỗi chính project.
 
-## Khi nào dùng
+## Cài bằng pipx
 
-- Dùng trang này khi đường dẫn Runtime hoặc Client đã chọn khớp với tiêu đề.
-- Giữ nhất quán workspace root, public base URL, MCP endpoint, chế độ xác thực và các công cụ host khả dụng.
-- Với ChatGPT web/app, hãy công bố MCP endpoint HTTPS kết thúc bằng `/mcp`.
-- Với client MCP cục bộ, dùng HTTP localhost hoặc `local-shell-mcp --mode stdio` tùy khả năng hỗ trợ của client.
+`pipx` là cách cài dựa trên Python sạch nhất cho người dùng thông thường vì mỗi command có virtual environment riêng trong khi executable vẫn được đưa lên `PATH`.
 
-## Các bước
-
-1. Trước tiên chọn trang cài đặt Runtime.
-2. Khởi động Runtime và kiểm tra `/healthz` khi dùng chế độ HTTP.
-3. Sau đó chọn trang kết nối Client.
-4. Đăng ký MCP endpoint hoặc lệnh stdio trong Client.
-5. Gọi `environment_get` để kiểm tra workspace và cấu hình thực tế.
-
-```text
-Runtime: Docker / VS Code extension / binary / Python / stdio
-Client:  ChatGPT connector / generic HTTP MCP / generic stdio MCP
-Endpoint: https://your-host.example.com/mcp
+```bash
+pipx install local-shell-mcp
+local-shell-mcp --help
 ```
 
-## Xác minh
+Khởi động server MCP HTTP cục bộ:
 
-- `environment_get` xác nhận cấu hình Runtime và workspace.
-- `file_tree` xác nhận các tệp nhìn thấy được.
-- `run_shell` xác nhận môi trường lệnh.
+```bash
+mkdir -p ~/local-shell-mcp-workspace
+export LOCAL_SHELL_MCP_WORKSPACE_ROOT=~/local-shell-mcp-workspace
+local-shell-mcp --mode mcp
+```
 
-## Ghi chú
+Kiểm tra sức khỏe:
 
-Ưu tiên các bước nhỏ và có thể xác minh: kiểm tra, chỉnh sửa, diff, test, scan và commit. Tác vụ lớn cũng nên được chia thành các lời gọi công cụ có thể audit.
+```bash
+curl -i http://127.0.0.1:8765/healthz
+```
+
+## Cài trong virtual environment
+
+Dùng khi bạn đã tự quản lý các môi trường Python:
+
+```bash
+python -m venv .venv
+. .venv/bin/activate
+pip install --upgrade pip
+pip install local-shell-mcp
+local-shell-mcp --mode mcp
+```
+
+Process dùng các tool đã cài trên host. Package Python không tự cài compiler, Git, browser system dependency hoặc project dependency cho bạn.
+
+## Editable source checkout
+
+Dùng để phát triển project:
+
+```bash
+git clone https://github.com/fwerkor/local-shell-mcp.git
+cd local-shell-mcp
+python -m venv .venv
+. .venv/bin/activate
+pip install --upgrade pip
+pip install -e '.[dev,docs]'
+LOCAL_SHELL_MCP_WORKSPACE_ROOT=/tmp/local-shell-mcp-workspace local-shell-mcp --mode mcp
+```
+
+Chạy kiểm tra:
+
+```bash
+ruff check .
+pytest -q
+mkdocs build --strict
+```
+
+## Thiết lập trình duyệt
+
+Package Python phụ thuộc Playwright, nhưng browser binary vẫn có thể cần cài trên host:
+
+```bash
+python -m playwright install chromium
+```
+
+Một số host Linux cần browser dependency bổ sung. Docker tránh được phần lớn việc này vì image bắt đầu từ Playwright base image.
+
+## Dùng HTTP MCP công khai
+
+Với ChatGPT hoặc public HTTP MCP client khác, cấu hình cùng public-origin và OAuth như các runtime HTTP khác, sau đó expose local port qua reverse proxy hoặc tunnel.
+
+Endpoint MCP công khai:
+
+```text
+https://your-public-host.example.com/mcp
+```
+
+## Chế độ phát triển
+
+| Mode | Command | Sử dụng |
+|---|---|---|
+| MCP HTTP | `local-shell-mcp --mode mcp` | MCP client đầy đủ qua HTTP, gồm ChatGPT sau HTTPS |
+| REST-style HTTP | `local-shell-mcp --mode http` | Endpoint chẩn đoán hoặc tương thích, không phải đường chính của ChatGPT |
+| stdio | `local-shell-mcp --mode stdio` | MCP client cục bộ tự khởi chạy process |
+
+`mode=both` được dành riêng và hiện không nên dùng như mode của một process đơn lẻ.
+
+## An toàn host runtime
+
+Cài đặt Python chạy với quyền host user trừ khi đặt trong VM/container. Giữ workspace hẹp, full-container mode tắt và không trỏ workspace tới home directory.
+
+Dùng Docker Compose cho repository không tin cậy, task dùng nhiều package manager hoặc workflow mà resetability quan trọng hơn tích hợp host.

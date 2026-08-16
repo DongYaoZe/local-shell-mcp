@@ -1,38 +1,110 @@
-# 사용 패턴
+<!-- i18n-source-sha256: 0b086e03bb7fd910e016db31a703908be74f7858846c091c8e784a62e00ec6ca -->
+# 사용 패턴 및 prompt 가이드
 
-이 페이지는 “사용 패턴” 시나리오를 설명하며 문서 사이트의 공통 Runtime/Client 구조를 따릅니다.
+`local-shell-mcp`는 강력한 tools를 제공합니다. 좋은 결과를 얻으려면 먼저 inspect하고, 작은 단계로 행동하고, verification을 실행하고, 무엇이 바뀌었는지 보고하도록 모델에 요청해야 합니다.
 
-## 개요
+## 일반 운영 루프
 
-Runtime은 서버 프로세스가 어떻게 실행되고 어떤 워크스페이스를 제어하는지 정합니다. Client는 ChatGPT 또는 다른 MCP 클라이언트가 어떻게 연결되는지 정합니다. Docker, VS Code 확장, 독립 실행 바이너리, Python/pipx/소스 설치, stdio는 Runtime 선택지입니다. ChatGPT 커넥터, 일반 HTTP MCP 클라이언트, stdio MCP 클라이언트는 Client 연결입니다.
+대부분의 coding task에는 다음 루프를 사용합니다:
 
-## 사용 시점
+1. Inspect: `environment_get`, `file_tree`, `file_grep`, `file_read` 및 `git status` 같은 command에 `run_shell`을 사용합니다.
+2. Plan: 관련된 최소한의 files와 tests를 식별하도록 합니다.
+3. Edit: unified `file_edit`, `file_patch` 또는 shell commands를 사용합니다.
+4. Verify: `run_shell` 또는 persistent shells로 targeted tests/builds를 실행합니다.
+5. Review: `run_shell`로 `git diff`를 실행하고 필요하면 `secret_scan`, `audit_tail`을 사용합니다.
+6. Commit/export: `run_shell`의 명시적 Git CLI commands 또는 `link_create`를 사용합니다.
 
-- 선택한 Runtime 또는 Client 경로가 이 페이지 제목과 일치할 때 사용합니다.
-- 워크스페이스 루트, 공개 base URL, MCP endpoint, 인증 모드, 호스트에서 사용할 수 있는 도구를 일관되게 유지합니다.
-- ChatGPT 웹/App에는 `/mcp`로 끝나는 HTTPS MCP endpoint를 노출합니다.
-- 로컬 MCP 클라이언트는 지원 범위에 따라 HTTP localhost 또는 `local-shell-mcp --mode stdio`를 사용합니다.
+## Tool 선택
 
-## 단계
+| Task | 선호 | 피하기 |
+|---|---|---|
+| 짧은 one-shot command | `run_shell` | command마다 persistent shell 시작 |
+| 장시간 dev server, REPL, watch task | `shell_start` + `shell_read` + `shell_send` | timeout까지 `run_shell` block |
+| structured analysis / file generation | `run_python` | 복잡한 JSON/text에 취약한 shell pipeline |
+| 작은 exact edit | `file_edit` | 불필요한 전체 file rewrite |
+| 한 file의 하나 이상 replacement | `file_edit` with an `edits` array | 다시 읽지 않고 stale edit 반복 |
+| multi-file patch | `file_patch` | ad hoc shell edit |
+| file 찾기 | `file_tree`, `file_glob` | 큰 repository의 전체 recursive listing |
+| code 찾기 | `file_grep` | 많은 file을 무작정 읽기 |
+| browser evidence | `browser_snapshot`, `browser_run_script` | page name이나 route로 추측 |
+| downloadable artifacts | `link_create` | 큰 binary content를 chat에 붙여넣기 |
+| remote machine work | normal tools with `machine`, plus `remote_transfer` | outbound worker로 충분한데 inbound SSH 열기 |
 
-1. 먼저 Runtime 설치 페이지를 선택합니다.
-2. Runtime을 시작하고 HTTP 모드에서는 `/healthz`를 확인합니다.
-3. 그다음 Client 연결 페이지를 선택합니다.
-4. Client에 MCP endpoint 또는 stdio 명령을 등록합니다.
-5. `environment_get`를 호출해 실제 워크스페이스와 설정을 확인합니다.
+## Prompt 템플릿
+
+### Read-only repository orientation
 
 ```text
-Runtime: Docker / VS Code extension / binary / Python / stdio
-Client:  ChatGPT connector / generic HTTP MCP / generic stdio MCP
-Endpoint: https://your-host.example.com/mcp
+local-shell-mcp를 사용하세요. repository layout과 git status를 검사하고 file을 수정하지 마세요. 변경하기 전에 주요 component, 추론 가능한 test command, 명백한 risk를 요약하세요.
 ```
 
-## 검증
+### Focused bug fix
 
-- `environment_get`는 Runtime 설정과 워크스페이스를 확인합니다.
-- `file_tree`는 보이는 파일을 확인합니다.
-- `run_shell`은 명령 실행 환경을 확인합니다.
+```text
+local-shell-mcp로 bug를 수정하세요. 먼저 가장 작은 relevant command로 재현하거나 위치를 찾고, edit 전에 files를 읽으세요. 최소 patch를 만들고 targeted verification을 실행한 뒤 git diff와 실행한 tests를 정확히 보여 주세요. 승인할 때까지 commit하지 마세요.
+```
 
-## 참고
+### Commit 및 push workflow
 
-작고 검증 가능한 단계, 즉 확인, 편집, diff, 테스트, 스캔, 커밋을 우선합니다. 큰 작업도 감사 가능한 도구 호출로 나눕니다.
+```text
+local-shell-mcp를 사용하세요. git status와 diff를 확인하고 관련 tests와 secret_scan을 실행한 뒤 간결한 message로 focused commit 하나를 만들고 current branch를 push하세요. cache, build artifact, 무관한 formatting은 포함하지 마세요.
+```
+
+### 장시간 process
+
+```text
+dev server를 persistent shell session에서 시작하고 ready가 될 때까지 output을 읽은 뒤 browser tools로 page를 확인하세요. session id를 유지하고 확인 후 kill하세요.
+```
+
+### Remote worker task
+
+```text
+연결된 remote worker <machine>을 사용하세요. 먼저 machine=<machine>으로 environment_get를 호출하고 같은 machine으로 file_list를 실행하세요. configured remote workdir 안에서만 작업하고 짧은 command는 run_shell, 장시간 작업은 shell_start 또는 job_start를 사용하세요.
+```
+
+## Repository 작업
+
+open-source change 권장 sequence:
+
+1. `run_shell`로 `git status --short --branch`를 실행합니다.
+2. upstream state가 중요하면 명시적 Git CLI로 fetch와 branch inspect를 합니다.
+3. edit 전에 `file_grep`와 `file_read`을 사용합니다.
+4. 최소 patch를 만듭니다.
+5. 먼저 targeted tests, 가능하면 broader tests를 실행합니다.
+6. commit/push 전에 `secret_scan`을 실행합니다.
+7. 명시적으로 stage/commit하고 간결한 message를 사용합니다.
+
+maintainer가 review하기 쉽도록 logical change마다 commit 하나를 요청하십시오.
+
+## 생성 artifact 작업
+
+PDF, report, screenshot, archive, log의 경우:
+
+1. workspace 아래에 file을 생성합니다.
+2. file이 존재하고 예상 size인지 확인합니다.
+3. 짧은 TTL과 optional `max_downloads`로 `link_create`를 사용합니다.
+4. 더 이상 필요 없으면 link를 revoke합니다.
+
+private key, credential directory 또는 무관한 personal data에 public link를 만들지 마십시오.
+
+## Remote machine 작업
+
+Remote worker mode는 outbound HTTPS 요청은 가능하지만 inbound SSH를 받을 수 없는 machine에 유용합니다.
+
+권장 사항:
+
+- `remote_manage(action="invite", ...)` 또는 `remote_manage(action="rename", ...)`로 machine을 생성/rename합니다.
+- 작업 전에 `environment_get(machine=...)`를 호출합니다.
+- `remote_transfer`로 controller/worker 또는 worker/worker transfer job을 시작하고 일반 `job_*` tools로 관리합니다.
+- task 후 `remote_manage(action="revoke", ...)`로 worker를 revoke합니다.
+
+## Anti-patterns
+
+environment가 disposable이고 결과를 이해한 경우가 아니라면 다음 지시를 피하십시오:
+
+- host-launched server에서 “필요한 것은 무엇이든 global install”.
+- 시간 제한이나 verification criteria 없이 “될 때까지 실행”.
+- generated artifacts가 있는 repository에서 “모두 commit”.
+- 편의를 위해 “home directory 전체 expose”.
+- “workspace 전체에 대한 file link 생성”.
+- `LOCAL_SHELL_MCP_AUTH_MODE=none`으로 public deployment 실행.

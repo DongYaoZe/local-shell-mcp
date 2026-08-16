@@ -1,12 +1,8 @@
+<!-- i18n-source-sha256: 1f30fc9935125c84fb0838d17ec894d78aaa6253fe3903356414aac716ba2adc -->
 # Bezpieczeństwo
 
-W publicznych wdrożeniach włącz OAuth i nie montuj Docker socket, katalogu głównego hosta ani długotrwałych poświadczeń.
+W publicznych wdrożeniach używaj OAuth. Ustaw silne wartości `LOCAL_SHELL_MCP_OAUTH_ADMIN_PIN` i `LOCAL_SHELL_MCP_OAUTH_JWT_SECRET` oraz zachowuj je w tajemnicy.
 
-Mandatory rules:
+Domyślnie operacje na ścieżkach są ograniczone do workspace, a wrażliwe fragmenty ścieżek są blokowane. Tryb Full-container wyłącza wbudowane ograniczenia workspace i ścieżek, dlatego jest przeznaczony wyłącznie do jednorazowych kontenerów lub maszyn wirtualnych.
 
-1. Keep OAuth enabled for public deployments.
-2. Do not mount `/var/run/docker.sock`.
-3. Do not mount the host root filesystem.
-4. Do not expose unauthenticated MCP tools on the public internet.
-5. Treat file links and credential volumes as sensitive.
-6. Use disposable containers or VMs when granting broad authority.
+Wygenerowane łącza do pobierania plików są publicznymi adresami bearer URL. Ich ochrona opiera się na tokenach o wysokiej entropii, TTL, opcjonalnych limitach liczby pobrań, opcjonalnych limitach rozmiaru oraz możliwości unieważnienia.

@@ -1,17 +1,52 @@
-# Zdalne workery
+<!-- i18n-source-sha256: 52e5f445beaf4c30bd298c59399005f01fe5563591b8a0285c97b46243f342fe -->
+# Zdalne workers
 
-Remote workers connect outbound to the control server and expose normal tools with an optional `machine` argument to the MCP client.
+Remote workers pozwalają `local-shell-mcp` kontrolować maszyny, które mogą wykonywać wychodzące żądania HTTP(S), ale nie mogą przyjmować przychodzących połączeń SSH.
 
 ```text
-ChatGPT -> local-shell-mcp -> outbound polling worker -> remote machine
+MCP client -> control server -> outbound polling worker -> remote machine
 ```
 
-Basic flow:
+## Podstawowy workflow
 
-1. Create an invite with `remote_manage`.
-2. Run the generated command on the remote machine.
-3. Check `remote_manage`.
-4. Use remote shell, file, transfer, Git, and browser tools.
-5. Revoke the worker when done.
+1. Utwórz jednorazowe zaproszenie przez `remote_manage(action="invite", ...)`.
+2. Uruchom wygenerowane polecenie na zdalnej maszynie.
+3. Potwierdź rejestrację przez `remote_manage(action="list")`.
+4. Wywołuj zwykłe narzędzia z `machine="<worker-name>"`, np. `environment_get`, `run_shell`, `file_read` lub `browser_run_script`.
+5. Użyj `remote_transfer`, aby rozpocząć śledzony transfer pliku/katalogu controller-to-worker, worker-to-controller lub worker-to-worker. Śledź go przez `job_list` lub `job_tail`; zatrzymaj lub ponów przez `job_stop` albo `job_retry`.
+6. Zmieniaj nazwę lub unieważniaj workers przez `remote_manage(action="rename", ...)` lub `remote_manage(action="revoke", ...)`.
 
-W publicznych wdrożeniach włącz OAuth i nie montuj Docker socket, katalogu głównego hosta ani długotrwałych poświadczeń.
+Tylko administracja workers używa nazw `remote_*`. Operacje execution, shell, job, filesystem, patch i browser współdzielą ten sam schema lokalnie i zdalnie. Podanie machine wymaga dodatkowo OAuth scope `remote:use`.
+
+## Trwałe workers
+
+Wynik zaproszenia zawiera polecenia zależne od platformy:
+
+- `persistent_command` instaluje i uruchamia user service na Linux/macOS.
+- `powershell_persistent_command` instaluje i uruchamia Windows user task z PowerShell.
+
+W Windows `local-shell-mcp worker install-service` rejestruje zadanie `local-shell-mcp-worker` dla bieżącego użytkownika. Uruchamia się od razu, ponownie po reboot po zalogowaniu tego użytkownika, zezwala na działanie na baterii, ignoruje zduplikowane uruchomienia i ponawia nieudane wykonania. Nie wymaga praw administratora i nie działa przed logowaniem użytkownika.
+
+Na wszystkich platformach używaj tych samych lifecycle commands:
+
+```text
+local-shell-mcp worker status
+local-shell-mcp worker start
+local-shell-mcp worker stop
+local-shell-mcp worker restart
+local-shell-mcp worker uninstall-service
+```
+
+Worker log jest zapisywany w worker state directory jako `worker.log`.
+
+## Możliwości
+
+Workers obsługują shell/persistent shell sessions, tracked jobs, operacje filesystem, transfer internals, wykonywanie Python, patches oraz Playwright, jeśli zależności są zainstalowane. Git używa standardowych poleceń przez `run_shell(machine=...)`.
+
+## Bezpieczeństwo i wersjonowanie
+
+Dołączony worker daje MCP client kontrolę nad skonfigurowanym środowiskiem. Używaj krótkich invite TTL, dedykowanych work directories lub kont, przeglądaj audit logs i unieważniaj workers po zadaniu. Wygenerowane zaproszenie instaluje worker code zgodny z wersją control server.
+
+## Rozwiązywanie problemów
+
+Jeśli worker się nie pojawia, sprawdź outbound HTTPS access, osiągalność public base URL, invite expiry, system time i logi control server.

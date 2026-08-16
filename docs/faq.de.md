@@ -1,3 +1,4 @@
+<!-- i18n-source-sha256: f0abfd8b2a3118c630bf6693921a7e5f95ad61e089bfa6645a583467a0b9832e -->
 # Häufig gestellte Fragen
 
 Diese Seite behandelt wiederkehrende Client- und Reverse-Proxy-Probleme, die wie LSM-Fehler wirken können, obwohl der Server selbst fehlerfrei läuft.

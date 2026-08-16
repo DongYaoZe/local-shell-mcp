@@ -1,38 +1,44 @@
+<!-- i18n-source-sha256: 87dd7fb66311534dcd5a7217bba8c809f71fe6189e8c39b3e265da923cc82d22 -->
 # REST API
 
-Halaman ini menjelaskan skenario “REST API” dan mengikuti struktur Runtime/Client yang sama di situs.
+Interface utama adalah MCP di `/mcp`. REST surface juga tersedia untuk health check, file link, dan operasi layanan tertentu.
 
-## Ringkasan
+## Kesehatan
 
-Runtime menentukan bagaimana proses server berjalan dan workspace mana yang dikendalikan. Client menentukan bagaimana ChatGPT atau client MCP lain terhubung. Docker, ekstensi VS Code, biner mandiri, instalasi Python/pipx/sumber, dan stdio adalah pilihan Runtime; konektor ChatGPT, client MCP HTTP generik, dan client MCP stdio adalah koneksi Client.
-
-## Kapan digunakan
-
-- Gunakan halaman ini ketika jalur Runtime atau Client yang dipilih cocok dengan judulnya.
-- Jaga agar root workspace, base URL publik, MCP endpoint, mode autentikasi, dan alat host yang tersedia tetap konsisten.
-- Untuk ChatGPT web/app, ekspos MCP endpoint HTTPS yang berakhir dengan `/mcp`.
-- Untuk client MCP lokal, gunakan HTTP localhost atau `local-shell-mcp --mode stdio` sesuai dukungan client.
-
-## Langkah
-
-1. Pilih halaman instalasi Runtime terlebih dahulu.
-2. Mulai Runtime dan periksa `/healthz` saat menggunakan mode HTTP.
-3. Pilih halaman koneksi Client berikutnya.
-4. Daftarkan MCP endpoint atau perintah stdio di Client.
-5. Panggil `environment_get` untuk memeriksa workspace dan pengaturan efektif.
-
-```text
-Runtime: Docker / VS Code extension / binary / Python / stdio
-Client:  ChatGPT connector / generic HTTP MCP / generic stdio MCP
-Endpoint: https://your-host.example.com/mcp
+```http
+GET /healthz
 ```
 
-## Verifikasi
+Mengembalikan kesehatan server dan status dasar.
 
-- `environment_get` mengonfirmasi pengaturan Runtime dan workspace.
-- `file_tree` mengonfirmasi file yang terlihat.
-- `run_shell` mengonfirmasi lingkungan perintah.
+## MCP
 
-## Catatan
+```http
+POST /mcp
+```
 
-Utamakan langkah kecil yang dapat diverifikasi: inspeksi, edit, diff, test, scan, dan commit. Tugas besar juga harus dipecah menjadi panggilan alat yang dapat diaudit.
+Endpoint MCP Streamable HTTP yang digunakan ChatGPT dan MCP client lainnya.
+
+## Pemanggilan tool melalui REST
+
+Pemanggilan tool REST menggunakan envelope sukses/error yang konsisten. Error validasi mengembalikan payload terstruktur `ok: false`, bukan exception framework mentah.
+
+## Agent Skills
+
+Registry Skills tetap juga tersedia melalui REST:
+
+```text
+GET  /tools/skill_list
+POST /tools/skill_load       {"name": "debugging"}
+POST /tools/skill_read  {"name": "debugging", "path": "checklist.md"}
+```
+
+Perubahan direktori Skill terlihat pada panggilan berikutnya dan tidak mengubah daftar tool MCP.
+
+## Tautan file
+
+Unduhan file bertoken dilayani oleh aplikasi HTTP bawaan. Tautannya berupa bearer URL dengan TTL, batas maksimum unduhan opsional, dan dukungan pencabutan.
+
+## Autentikasi
+
+Deployment publik sebaiknya menggunakan OAuth. Bypass localhost dapat diaktifkan untuk pengembangan, tetapi akses publik tanpa autentikasi tidak aman.

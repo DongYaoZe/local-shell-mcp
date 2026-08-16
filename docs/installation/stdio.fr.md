@@ -1,38 +1,63 @@
-# Mode stdio
+<!-- i18n-source-sha256: a3d2dc835f99feed33a73ae3dd880dabab04a37d7461b99f1fa49c33ba0506e1 -->
+# Runtime Stdio
 
-Cette page décrit le scénario « Mode stdio » et conserve la structure Runtime/Client commune du site.
+Le mode stdio est destiné aux MCP client locaux qui lancent `local-shell-mcp` comme child process et communiquent par entrée/sortie standard.
 
-## Vue d’ensemble
+Il ne s’agit pas d’un deployment HTTP public. ChatGPT web/app ne peut pas l’utiliser directement, car ChatGPT ne peut pas lancer de process sur votre machine.
 
-Runtime définit la manière dont le processus serveur s’exécute et l’espace de travail qu’il contrôle. Client définit la manière dont ChatGPT ou un autre client MCP se connecte. Docker, l’extension VS Code, les binaires autonomes, les installations Python/pipx/source et stdio sont des choix de Runtime ; le connecteur ChatGPT, le client MCP HTTP générique et le client MCP stdio sont des connexions Client.
+## Quand utiliser stdio
 
-## Quand l’utiliser
+Utilisez stdio mode lorsque :
 
-- Utilisez cette page lorsque le chemin Runtime ou Client choisi correspond à son titre.
-- Gardez cohérents la racine de l’espace de travail, la base URL publique, le MCP endpoint, le mode d’authentification et les outils disponibles sur l’hôte.
-- Pour ChatGPT web/app, exposez un MCP endpoint HTTPS se terminant par `/mcp`.
-- Pour les clients MCP locaux, utilisez HTTP localhost ou `local-shell-mcp --mode stdio` selon les capacités du client.
+- Votre MCP client prend en charge les définitions de serveur basées sur une commande.
+- Le client et le workspace contrôlé se trouvent sur la même machine.
+- Vous n’avez pas besoin d’OAuth, de HTTPS public, de reverse proxy ni de tunnel.
+- Vous voulez que le client gère le lifecycle du serveur.
 
-## Étapes
+N’utilisez pas stdio mode lorsque :
 
-1. Choisissez d’abord la page d’installation du Runtime.
-2. Démarrez le Runtime et vérifiez `/healthz` lorsque le mode HTTP est utilisé.
-3. Choisissez ensuite la page de connexion Client.
-4. Enregistrez le MCP endpoint ou la commande stdio dans le Client.
-5. Appelez `environment_get` pour vérifier l’espace de travail et les paramètres effectifs.
+- Le client est ChatGPT web/app.
+- Plusieurs remote clients ont besoin du même serveur.
+- Vous avez besoin de téléchargements tokenisés via HTTP.
+- Vous avez besoin de routes d’inscription remote-worker servies via HTTP.
 
-```text
-Runtime: Docker / VS Code extension / binary / Python / stdio
-Client:  ChatGPT connector / generic HTTP MCP / generic stdio MCP
-Endpoint: https://your-host.example.com/mcp
+## Commande
+
+```bash
+LOCAL_SHELL_MCP_WORKSPACE_ROOT=/path/to/workspace local-shell-mcp --mode stdio
 ```
 
-## Vérification
+Une configuration MCP client générique contient généralement :
 
-- `environment_get` confirme les paramètres du Runtime et l’espace de travail.
-- `file_tree` confirme les fichiers visibles.
-- `run_shell` confirme l’environnement de commande.
+```json
+{
+  "mcpServers": {
+    "local-shell-mcp": {
+      "command": "local-shell-mcp",
+      "args": ["--mode", "stdio"],
+      "env": {
+        "LOCAL_SHELL_MCP_WORKSPACE_ROOT": "/path/to/workspace"
+      }
+    }
+  }
+}
+```
 
-## Notes
+Adaptez le schema à votre client. Certains appellent cette section `servers`, `tools`, `mcpServers` ou `contextServers`.
 
-Privilégiez les étapes petites et vérifiables : inspecter, modifier, examiner le diff, tester, analyser et valider. Les tâches importantes doivent aussi être décomposées en appels d’outils auditables.
+## Différences avec HTTP mode
+
+| Domaine | Stdio mode | HTTP MCP mode |
+|---|---|---|
+| Transport | stdin/stdout | HTTP streamable MCP endpoint |
+| Endpoint | Aucun | `/mcp` |
+| OAuth | Inutile | Recommandé pour un usage public |
+| Health endpoint | Aucun | `/healthz`, `/readyz` |
+| Utilisation publique par ChatGPT | Non | Oui, derrière HTTPS |
+| Server lifecycle | Le client lance le process | Vous gérez le process/runtime |
+
+La tool surface utilise sinon la même implémentation server-side, sous réserve de la configuration et du support du client.
+
+## Notes de sécurité
+
+Stdio mode s’exécute souvent directement sur l’hôte avec le même utilisateur que le MCP client. Utilisez un workspace root limité et évitez un accès large au filesystem. Gardez full-container mode désactivé sauf si stdio s’exécute lui-même dans un container ou une VM jetable.

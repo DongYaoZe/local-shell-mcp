@@ -1,3 +1,4 @@
+<!-- i18n-source-sha256: 3986da6ff877609189b0d88d363aff1f5f45445f0cfe5ffa608a31929078542c -->
 # 网络连通性
 
 机器外部的 HTTP MCP 客户端需要可访问的 HTTPS origin。本页讨论网络路由，不讨论选择哪种运行时。

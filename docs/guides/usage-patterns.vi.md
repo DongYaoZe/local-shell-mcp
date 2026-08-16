@@ -1,38 +1,110 @@
-# Mẫu sử dụng
+<!-- i18n-source-sha256: 0b086e03bb7fd910e016db31a703908be74f7858846c091c8e784a62e00ec6ca -->
+# Mẫu sử dụng và hướng dẫn prompting
 
-Trang này mô tả kịch bản “Mẫu sử dụng” và giữ cấu trúc Runtime/Client chung của trang tài liệu.
+`local-shell-mcp` cung cấp tools mạnh. Kết quả tốt phụ thuộc vào việc yêu cầu model kiểm tra trước, hành động theo bước nhỏ, chạy xác minh và báo cáo thay đổi.
 
-## Tổng quan
+## Vòng vận hành chung
 
-Runtime xác định tiến trình server chạy như thế nào và điều khiển workspace nào. Client xác định ChatGPT hoặc client MCP khác kết nối như thế nào. Docker, tiện ích VS Code, tệp nhị phân độc lập, cài đặt Python/pipx/mã nguồn và stdio là lựa chọn Runtime; trình kết nối ChatGPT, client MCP HTTP chung và client MCP stdio là kết nối Client.
+Dùng vòng này cho phần lớn coding task:
 
-## Khi nào dùng
+1. Inspect: `environment_get`, `file_tree`, `file_grep`, `file_read` và `run_shell` cho command như `git status`.
+2. Plan: yêu cầu model xác định tối thiểu files và tests liên quan.
+3. Edit: dùng `file_edit`, `file_patch` hoặc shell commands.
+4. Verify: chạy targeted tests/builds bằng `run_shell` hoặc persistent shells.
+5. Review: chạy `git diff` qua `run_shell`, sau đó dùng `secret_scan` và `audit_tail` khi cần.
+6. Commit/export: dùng explicit Git CLI commands qua `run_shell` hoặc `link_create`.
 
-- Dùng trang này khi đường dẫn Runtime hoặc Client đã chọn khớp với tiêu đề.
-- Giữ nhất quán workspace root, public base URL, MCP endpoint, chế độ xác thực và các công cụ host khả dụng.
-- Với ChatGPT web/app, hãy công bố MCP endpoint HTTPS kết thúc bằng `/mcp`.
-- Với client MCP cục bộ, dùng HTTP localhost hoặc `local-shell-mcp --mode stdio` tùy khả năng hỗ trợ của client.
+## Chọn tool
 
-## Các bước
+| Task | Ưu tiên | Tránh |
+|---|---|---|
+| One-shot command ngắn | `run_shell` | Khởi động persistent shell cho mọi command |
+| Dev server, REPL hoặc watch task dài | `shell_start` + `shell_read` + `shell_send` | Block `run_shell` đến timeout |
+| Structured analysis hoặc file generation | `run_python` | Shell pipeline mong manh cho JSON/text phức tạp |
+| Edit exact nhỏ | `file_edit` | Viết lại cả file không cần thiết |
+| Một hoặc nhiều replacement trong một file | `file_edit` with an `edits` array | Lặp stale edit mà không đọc lại |
+| Multi-file patch | `file_patch` | Ad hoc shell edit |
+| Tìm file | `file_tree`, `file_glob` | Recursive listing toàn bộ repository lớn |
+| Tìm code | `file_grep` | Đọc nhiều file không định hướng |
+| Browser evidence | `browser_snapshot`, `browser_run_script` | Đoán từ tên page/route |
+| Downloadable artifacts | `link_create` | Dán binary content lớn vào chat |
+| Remote machine work | normal tools with `machine`, plus `remote_transfer` | Mở inbound SSH khi outbound worker đã đủ |
 
-1. Trước tiên chọn trang cài đặt Runtime.
-2. Khởi động Runtime và kiểm tra `/healthz` khi dùng chế độ HTTP.
-3. Sau đó chọn trang kết nối Client.
-4. Đăng ký MCP endpoint hoặc lệnh stdio trong Client.
-5. Gọi `environment_get` để kiểm tra workspace và cấu hình thực tế.
+## Template prompt
+
+### Read-only repository orientation
 
 ```text
-Runtime: Docker / VS Code extension / binary / Python / stdio
-Client:  ChatGPT connector / generic HTTP MCP / generic stdio MCP
-Endpoint: https://your-host.example.com/mcp
+Dùng local-shell-mcp. Kiểm tra layout repository và git status. Không sửa file. Tóm tắt các component chính, test command có thể suy ra và risk rõ ràng trước khi thay đổi.
 ```
 
-## Xác minh
+### Focused bug fix
 
-- `environment_get` xác nhận cấu hình Runtime và workspace.
-- `file_tree` xác nhận các tệp nhìn thấy được.
-- `run_shell` xác nhận môi trường lệnh.
+```text
+Dùng local-shell-mcp để sửa bug. Trước hết reproduce hoặc locate bằng relevant command nhỏ nhất. Đọc file trước khi edit. Tạo minimal patch, chạy targeted verification, sau đó hiển thị git diff và chính xác các tests đã chạy. Không commit cho tới khi tôi chấp thuận.
+```
 
-## Ghi chú
+### Workflow commit và push
 
-Ưu tiên các bước nhỏ và có thể xác minh: kiểm tra, chỉnh sửa, diff, test, scan và commit. Tác vụ lớn cũng nên được chia thành các lời gọi công cụ có thể audit.
+```text
+Dùng local-shell-mcp. Kiểm tra git status và diff, chạy relevant tests và secret_scan, tạo một focused commit với message ngắn, rồi push current branch. Không bao gồm cache, build artifacts hoặc unrelated formatting.
+```
+
+### Long-running process
+
+```text
+Khởi động dev server trong persistent shell session, đọc output đến khi ready, rồi dùng browser tools để xác minh page. Giữ session id và kill session sau khi xác minh.
+```
+
+### Remote worker task
+
+```text
+Dùng remote worker đã kết nối tên <machine>. Trước tiên gọi environment_get với machine=<machine>, sau đó file_list với cùng machine. Chỉ làm việc trong configured remote workdir. Dùng run_shell cho command ngắn và shell_start hoặc job_start cho công việc dài.
+```
+
+## Làm việc với repositories
+
+Sequence khuyến nghị cho thay đổi open-source:
+
+1. Chạy `git status --short --branch` qua `run_shell`.
+2. Fetch và inspect branches bằng explicit Git CLI khi upstream state quan trọng.
+3. Dùng `file_grep` và `file_read` trước edit.
+4. Tạo minimal patch.
+5. Chạy targeted tests trước, rồi broader tests khi phù hợp.
+6. Chạy `secret_scan` trước commit hoặc push.
+7. Stage và commit rõ ràng với message ngắn.
+
+Yêu cầu một commit cho mỗi logical change khi maintainer cần history dễ review.
+
+## Làm việc với generated artifacts
+
+Với PDF, report, screenshot, archive hoặc log:
+
+1. Generate file trong workspace.
+2. Xác minh file tồn tại và có size đúng.
+3. Dùng `link_create` với TTL ngắn và optional `max_downloads`.
+4. Revoke link khi không còn cần.
+
+Không tạo public link cho private key, credential directory hoặc unrelated personal data.
+
+## Làm việc với remote machines
+
+Remote worker mode hữu ích khi machine có thể gửi outbound HTTPS nhưng không nhận inbound SSH.
+
+Thực hành tốt:
+
+- Tạo hoặc rename machine bằng `remote_manage(action="invite", ...)` hoặc `remote_manage(action="rename", ...)`.
+- Gọi `environment_get(machine=...)` trước khi hành động.
+- Dùng `remote_transfer` để khởi động controller/worker hoặc worker/worker transfer jobs rồi quản lý bằng normal `job_*` tools.
+- Revoke worker sau task bằng `remote_manage(action="revoke", ...)`.
+
+## Anti-patterns
+
+Tránh các chỉ dẫn sau trừ khi environment disposable và đã hiểu hậu quả:
+
+- “Install global bất cứ thứ gì cần” trên host-launched server.
+- “Chạy cho đến khi hoạt động” mà không có time bound hoặc verification criteria.
+- “Commit tất cả” trong repository có generated artifacts.
+- “Expose toàn bộ home directory” cho tiện.
+- “Tạo file link cho toàn workspace”.
+- Chạy public deployment với `LOCAL_SHELL_MCP_AUTH_MODE=none`.

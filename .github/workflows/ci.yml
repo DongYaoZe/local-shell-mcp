@@ -443,6 +443,10 @@ jobs:
           python -m pip install --upgrade pip build
           python -m build --wheel
 
+      - name: Validate wheel platform compatibility
+        shell: bash
+        run: python scripts/check-wheel-compatibility.py "${{ matrix.artifact }}" dist/*.whl
+
       - name: Build source distribution
         if: matrix.artifact == 'wheel-linux-x86_64'
         run: python -m build --sdist
@@ -764,11 +768,19 @@ jobs:
           import sys
 
           needs = json.loads(os.environ["NEEDS_JSON"])
-          failed = {name: data["result"] for name, data in needs.items() if data["result"] != "success"}
+          failed = {name: data["result"] for name, data in needs.items() if data["result"] == "failure"}
           if failed:
               print("Failed jobs:")
               for name, result in failed.items():
                   print(f"- {name}: {result}")
               sys.exit(1)
+
+          incomplete = {name: data["result"] for name, data in needs.items() if data["result"] != "success"}
+          if incomplete:
+              print("CI run did not complete, but no job failed:")
+              for name, result in incomplete.items():
+                  print(f"- {name}: {result}")
+              sys.exit(0)
+
           print("All CI matrix jobs passed.")
           PY

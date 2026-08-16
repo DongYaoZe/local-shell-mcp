@@ -1,38 +1,47 @@
+<!-- i18n-source-sha256: d758caead1c922385409aceebf498662f25f4cbf252a48d65b29d91f07e5a173 -->
 # Tautan file
 
-Halaman ini menjelaskan skenario “Tautan file” dan mengikuti struktur Runtime/Client yang sama di situs.
+`local-shell-mcp` dapat mengekspos file dari workspace terkontrol melalui bearer URL berentropi tinggi. Ini berguna ketika AI menghasilkan laporan, arsip, PDF, screenshot, atau artifact lain yang perlu diunduh dari atau ditampilkan di chat.
 
-## Ringkasan
+## Kapan memakai tautan file
 
-Runtime menentukan bagaimana proses server berjalan dan workspace mana yang dikendalikan. Client menentukan bagaimana ChatGPT atau client MCP lain terhubung. Docker, ekstensi VS Code, biner mandiri, instalasi Python/pipx/sumber, dan stdio adalah pilihan Runtime; konektor ChatGPT, client MCP HTTP generik, dan client MCP stdio adalah koneksi Client.
+Gunakan tautan file untuk:
 
-## Kapan digunakan
+- PDF atau laporan yang dibuat.
+- Screenshot dan browser artifact.
+- Output build.
+- Log yang terlalu besar untuk ditempel.
+- Arsip yang disiapkan untuk inspeksi manual.
 
-- Gunakan halaman ini ketika jalur Runtime atau Client yang dipilih cocok dengan judulnya.
-- Jaga agar root workspace, base URL publik, MCP endpoint, mode autentikasi, dan alat host yang tersedia tetap konsisten.
-- Untuk ChatGPT web/app, ekspos MCP endpoint HTTPS yang berakhir dengan `/mcp`.
-- Untuk client MCP lokal, gunakan HTTP localhost atau `local-shell-mcp --mode stdio` sesuai dukungan client.
+Jangan gunakan tautan file untuk secret, private key, penyimpanan credential, atau data pribadi yang tidak terkait.
 
-## Langkah
+## Alur umum
 
-1. Pilih halaman instalasi Runtime terlebih dahulu.
-2. Mulai Runtime dan periksa `/healthz` saat menggunakan mode HTTP.
-3. Pilih halaman koneksi Client berikutnya.
-4. Daftarkan MCP endpoint atau perintah stdio di Client.
-5. Panggil `environment_get` untuk memeriksa workspace dan pengaturan efektif.
+1. Buat atau temukan file di bawah `/workspace`.
+2. Panggil `link_create` dengan TTL dan batas unduhan opsional. Set `inline=true` jika file harus dirender langsung di browser atau sebagai gambar Markdown; defaultnya `false`, yang memaksa attachment download.
+3. Bagikan URL yang dikembalikan.
+4. Cabut tautan ketika tidak lagi diperlukan.
 
-```text
-Runtime: Docker / VS Code extension / binary / Python / stdio
-Client:  ChatGPT connector / generic HTTP MCP / generic stdio MCP
-Endpoint: https://your-host.example.com/mcp
-```
+## Tool terkait
 
-## Verifikasi
+| Tool | Tujuan |
+|---|---|
+| `link_create` | Membuat URL bertoken untuk file workspace. |
+| `link_list` | Menampilkan tautan aktif. |
+| `link_revoke` | Menonaktifkan tautan sebelum kedaluwarsa. |
 
-- `environment_get` mengonfirmasi pengaturan Runtime dan workspace.
-- `file_tree` mengonfirmasi file yang terlihat.
-- `run_shell` mengonfirmasi lingkungan perintah.
+## Kontrol
 
-## Catatan
+Opsi konfigurasi meliputi:
 
-Utamakan langkah kecil yang dapat diverifikasi: inspeksi, edit, diff, test, scan, dan commit. Tugas besar juga harus dipecah menjadi panggilan alat yang dapat diaudit.
+- `LOCAL_SHELL_MCP_FILE_DOWNLOAD_ENABLED`
+- `LOCAL_SHELL_MCP_FILE_DOWNLOAD_DEFAULT_TTL_S`
+- `LOCAL_SHELL_MCP_FILE_DOWNLOAD_MAX_TTL_S`
+- `LOCAL_SHELL_MCP_FILE_DOWNLOAD_DEFAULT_MAX_DOWNLOADS`
+- `LOCAL_SHELL_MCP_FILE_DOWNLOAD_MAX_FILE_BYTES`
+
+Gunakan TTL lebih pendek untuk artifact sensitif dan tetapkan maximum download count jika tautan ditujukan untuk satu penerima.
+
+## Catatan keamanan
+
+Tautan file adalah bearer URL. Siapa pun yang memiliki URL dapat mengunduh file hingga kedaluwarsa, mencapai download limit, atau dicabut. Perlakukan seperti secret sementara. Inline response mencakup CSP sandbox dan `X-Content-Type-Options: nosniff` sehingga format aktif tidak dapat mengakses LSM origin atau berjalan sebagai konten same-origin tanpa sandbox.

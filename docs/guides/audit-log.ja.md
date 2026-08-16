@@ -1,38 +1,55 @@
+<!-- i18n-source-sha256: 4aec137923c38de0ed4a1b760b5dbd6ce99090d508ce3fe838d35ad44b4ba4f1 -->
 # 監査ログ
 
-このページでは「監査ログ」の場面を説明し、サイト全体で共通の Runtime/Client 構造に従います。
+`local-shell-mcp` は、接続した client が行った操作を再構成できるよう、構造化された監査エントリを書き込みます。
 
-## 概要
-
-Runtime はサーバープロセスの起動方法と制御するワークスペースを決めます。Client は ChatGPT または別の MCP クライアントの接続方法を決めます。Docker、VS Code 拡張、スタンドアロンバイナリ、Python/pipx/ソースインストール、stdio は Runtime の選択肢です。ChatGPT コネクタ、汎用 HTTP MCP クライアント、stdio MCP クライアントは Client 接続です。
-
-## 利用する場面
-
-- 選択した Runtime または Client の経路がこのページのタイトルに一致する場合に使用します。
-- ワークスペースルート、公開 base URL、MCP endpoint、認証モード、ホストで利用できるツールをそろえます。
-- ChatGPT の Web/App では `/mcp` で終わる HTTPS MCP endpoint を公開します。
-- ローカル MCP クライアントでは、対応状況に応じて HTTP localhost または `local-shell-mcp --mode stdio` を使用します。
-
-## 手順
-
-1. まず Runtime のインストールページを選びます。
-2. Runtime を起動し、HTTP モードでは `/healthz` を確認します。
-3. 次に Client 接続ページを選びます。
-4. Client に MCP endpoint または stdio コマンドを登録します。
-5. `environment_get` を呼び出して実際のワークスペースと設定を確認します。
+既定のパス：
 
 ```text
-Runtime: Docker / VS Code extension / binary / Python / stdio
-Client:  ChatGPT connector / generic HTTP MCP / generic stdio MCP
-Endpoint: https://your-host.example.com/mcp
+/workspace/.local-shell-mcp/audit.jsonl
 ```
 
-## 検証
+## 記録される内容
 
-- `environment_get` は Runtime 設定とワークスペースを確認します。
-- `file_tree` は見えているファイルを確認します。
-- `run_shell` はコマンド実行環境を確認します。
+監査エントリには、次のようなイベントが含まれます。
 
-## 注記
+- Tool call の開始/終了。
+- コマンド実行メタデータ。
+- Timeout と処理済みエラー。
+- Remote worker の登録と job activity。
+- File-link の作成と失効。
+- 該当する認証関連イベント。
 
-小さく検証可能な手順を優先します。確認、編集、diff、テスト、スキャン、コミットの順に進めます。大きな作業も監査可能なツール呼び出しに分解します。
+サーバーが識別できる機密引数は redaction されます。
+
+## ログの読み取り
+
+MCP tool を使います。
+
+```text
+audit_tail
+```
+
+または直接確認します。
+
+```bash
+tail -n 100 /workspace/.local-shell-mcp/audit.jsonl
+```
+
+## 運用上の用途
+
+監査ログは特に次の用途に役立ちます。
+
+- ファイルを変更したコマンドの確認。
+- Remote worker が使用されたかの確認。
+- 予期しない失敗のデバッグ。
+- File link の誤公開の検出。
+- 公開 deployment の設定ミス後の incident response 支援。
+
+## 保持期間
+
+ログの上限は `LOCAL_SHELL_MCP_MAX_AUDIT_LOG_BYTES` です。長期間保持する必要がある場合は、rotation または外部への export を行ってください。
+
+## 制限
+
+監査ログは sandbox ではありません。追跡性は向上しますが、接続したモデルが設定された権限内で操作することを防止するものではありません。

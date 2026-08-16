@@ -1,38 +1,63 @@
-# Режим stdio
+<!-- i18n-source-sha256: a3d2dc835f99feed33a73ae3dd880dabab04a37d7461b99f1fa49c33ba0506e1 -->
+# Stdio runtime
 
-Эта страница описывает сценарий «Режим stdio» и использует общую структуру Runtime/Client.
+Режим stdio предназначен для локальных MCP client, которые запускают `local-shell-mcp` как child process и обмениваются данными через стандартный ввод/вывод.
 
-## Обзор
+Это не публичный HTTP deployment. ChatGPT web/app не может использовать его напрямую, поскольку ChatGPT не способен запустить process на вашей машине.
 
-Runtime определяет, как запускается серверный процесс и каким рабочим пространством он управляет. Client определяет, как подключается ChatGPT или другой MCP-клиент. Docker, расширение VS Code, автономные бинарные файлы, установки Python/pipx/из исходного кода и stdio — это варианты Runtime; коннектор ChatGPT, общий HTTP MCP-клиент и stdio MCP-клиент — это подключения Client.
+## Когда использовать stdio
 
-## Когда использовать
+Используйте stdio mode, если:
 
-- Используйте эту страницу, когда выбранный путь Runtime или Client соответствует заголовку.
-- Сохраняйте согласованными корень рабочего пространства, публичный base URL, MCP endpoint, режим аутентификации и доступные инструменты хоста.
-- Для ChatGPT web/app опубликуйте HTTPS MCP endpoint, заканчивающийся на `/mcp`.
-- Для локальных MCP-клиентов используйте HTTP localhost или `local-shell-mcp --mode stdio` в зависимости от поддержки клиента.
+- MCP client поддерживает command-based server definition.
+- client и контролируемый workspace находятся на одной машине.
+- OAuth, публичный HTTPS, reverse proxy и tunnel не нужны.
+- Вы хотите, чтобы client управлял server lifecycle.
 
-## Шаги
+Не используйте stdio mode, если:
 
-1. Сначала выберите страницу установки Runtime.
-2. Запустите Runtime и проверьте `/healthz`, если используется HTTP-режим.
-3. Затем выберите страницу подключения Client.
-4. Зарегистрируйте MCP endpoint или stdio-команду в Client.
-5. Вызовите `environment_get`, чтобы проверить фактическое рабочее пространство и настройки.
+- client — ChatGPT web/app.
+- Нескольким remote clients нужен один server.
+- Нужны tokenized file downloads через HTTP.
+- Нужны remote-worker join routes, обслуживаемые по HTTP.
 
-```text
-Runtime: Docker / VS Code extension / binary / Python / stdio
-Client:  ChatGPT connector / generic HTTP MCP / generic stdio MCP
-Endpoint: https://your-host.example.com/mcp
+## Команда
+
+```bash
+LOCAL_SHELL_MCP_WORKSPACE_ROOT=/path/to/workspace local-shell-mcp --mode stdio
 ```
 
-## Проверка
+Типичная конфигурация MCP client обычно содержит:
 
-- `environment_get` подтверждает настройки Runtime и рабочее пространство.
-- `file_tree` подтверждает видимые файлы.
-- `run_shell` подтверждает командную среду.
+```json
+{
+  "mcpServers": {
+    "local-shell-mcp": {
+      "command": "local-shell-mcp",
+      "args": ["--mode", "stdio"],
+      "env": {
+        "LOCAL_SHELL_MCP_WORKSPACE_ROOT": "/path/to/workspace"
+      }
+    }
+  }
+}
+```
 
-## Примечания
+Адаптируйте schema к вашему client. Некоторые clients называют этот раздел `servers`, `tools`, `mcpServers` или `contextServers`.
 
-Предпочитайте небольшие проверяемые шаги: осмотр, правка, diff, тестирование, сканирование и commit. Большие задачи также нужно разбивать на аудируемые вызовы инструментов.
+## Отличия от HTTP mode
+
+| Область | Stdio mode | HTTP MCP mode |
+|---|---|---|
+| Transport | stdin/stdout | HTTP streamable MCP endpoint |
+| Endpoint | Нет | `/mcp` |
+| OAuth | Не нужен | Рекомендуется для публичного использования |
+| Health endpoint | Нет | `/healthz`, `/readyz` |
+| Публичное использование ChatGPT | Нет | Да, за HTTPS |
+| Server lifecycle | client запускает process | Вы управляете process/runtime |
+
+В остальном tool surface использует ту же server-side implementation с учётом configuration и поддержки client.
+
+## Безопасность
+
+Stdio mode часто работает непосредственно на host от того же пользователя, что и MCP client. Ограничивайте workspace root и избегайте широкого filesystem access. Оставляйте full-container mode отключённым, если stdio не запущен внутри одноразового container или VM.

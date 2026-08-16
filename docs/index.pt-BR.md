@@ -1,25 +1,105 @@
-# Documentação do local-shell-mcp
+<!-- i18n-source-sha256: b999ae6985930651e74b974b12109889360442811d6eeb306e6fa39754dbc173 -->
+<div class="hero-shell" markdown>
+<span class="hero-eyebrow">Plano de controle MCP compatível com ChatGPT</span>
 
-Um plano de controle local para ChatGPT Developer Mode e outros clientes MCP. Ele expõe um workspace controlado, shell, arquivos, Git, automação do navegador, links de arquivos e workers remotos como ferramentas MCP.
+# local-shell-mcp
 
-## Caminhos da documentação
+Dê ao seu assistente de IA um shell controlado, workspace real, Git, browser automation, file sharing e acesso a remote workers sem sair do chat.
 
-- [Início rápido](getting-started/quickstart.md)
-- [Conector ChatGPT](getting-started/chatgpt-connector.md)
-- [Workers remotos](guides/remote-workers.md)
-- [Segurança](security.md)
-- [Solução de problemas](troubleshooting.md)
+<div class="hero-actions" markdown>
+[Começar](getting-started/quickstart.md){ .hero-action .hero-action--primary }
+[Escolher runtime](guides/deployment.md){ .hero-action .hero-action--secondary }
+[Referência de ferramentas](reference/tools.md){ .hero-action .hero-action--secondary }
+</div>
+</div>
 
-## Arquitetura principal
+<div class="feature-grid" markdown>
+<div class="feature-card" markdown>
+### Ambiente real de programação
+Execute tests, inspecione repositories, aplique patches, opere Git e mantenha audit trail por um único MCP endpoint.
+</div>
+
+<div class="feature-card" markdown>
+### Camadas de runtime e client
+Escolha um runtime como Docker, VS Code extension, binary, Python ou stdio e depois conecte ChatGPT ou outro MCP client separadamente.
+</div>
+
+<div class="feature-card" markdown>
+### Controle de máquinas remotas
+Conecte máquinas atrás de NAT, firewall ou HPC por conexões worker de saída sem abrir portas SSH.
+</div>
+</div>
+
+## O que oferece
+
+`local-shell-mcp` expõe um workspace local ou em container controlado ao ChatGPT e outros clientes MCP. Ele fornece shell, shell persistente, filesystem, busca, patch, Git, Playwright, auditoria, Sessions lógicas duráveis com Goal Plans opcionais, links de arquivo tokenizados e ferramentas de remote worker por um servidor MCP compatível com ChatGPT e OAuth.
+
+Use quando a IA precisa inspecionar repository, executar tests, editar arquivos, operar Git, coletar browser evidence, produzir downloadable artifacts ou controlar uma remote machine que só consegue conectar de saída ao control server.
+
+## Arquitetura
 
 ```text
-ChatGPT / MCP client
-  -> HTTPS endpoint
-  -> local-shell-mcp control server
-  -> controlled workspace
-  -> optional outbound remote workers
+Camada runtime: Docker / VS Code extension / binary / Python / stdio
+Camada de exposição: localhost / HTTPS proxy / tunnel / stdio pipe
+Camada client: ChatGPT / generic MCP client / editor helper
+Workspace controlado: /workspace or configured workspace root
+Remote workers opcionais: outbound machine connections
 ```
 
-## Regra de segurança essencial
+O limite de isolamento pretendido é o container ou VM que executa o serviço.
 
-Em implantações públicas, habilite OAuth e não monte o Docker socket, a raiz do host nem credenciais de longa duração.
+## Começar por cenário
+
+| Cenário | Comece aqui | Por quê |
+|---|---|---|
+| Primeiro deployment público ChatGPT | [Quickstart](getting-started/quickstart.md) | Caminho Docker Compose com OAuth e configuração `/mcp` |
+| Escolher a camada runtime | [Runtime choices](guides/deployment.md) | Explica Docker, VS Code, binary, Python e stdio como opções de runtime separadas |
+| Adicionar ChatGPT como client | [ChatGPT connector](getting-started/chatgpt-connector.md) | Endpoint, OAuth, primeiro prompt seguro, tool discovery |
+| Adicionar LSM ao DeepSeek Harness | [Plugin DeepSeek Harness](clients/deepseek-harness.md) | Instalar este repository como bundle DSH mantendo toda a superfície de ferramentas LSM e remote workers |
+| Executar pelo VS Code | [VS Code extension runtime](installation/vscode-extension.md) | Runtime iniciado pelo editor e notas de segurança do host |
+| Aprender a operar o toolset | [Usage patterns](guides/usage-patterns.md) | Templates de prompt e orientação de escolha de tools |
+| Entender cada tool | [Tools reference](reference/tools.md) | Purpose, inputs, returns, combinations e notes de cada tool |
+| Conectar HPC, NPU/GPU ou server node | [Remote workers](guides/remote-workers.md) | Outbound worker join flow e remote tool usage |
+| Compartilhar arquivos gerados | [File links](guides/file-links.md) | URLs tokenizadas com TTL e revogação |
+| Endurecer o deployment | [Security](security.md) | Isolamento, OAuth, workspace scope e audit logs |
+
+## Principais famílias de tools
+
+| Família | Exemplos | Uso |
+|---|---|---|
+| Shell and Python | `run_shell`, `run_python`, `shell_start` | Builds, tests, scripts e processos longos |
+| Files and search | `file_tree`, `file_grep`, `file_read`, `file_patch` | Inspeção de repository e edits precisos |
+| Git | `run_shell`, `run_shell`, `run_shell`, `run_shell` | Workflows de controle de versão revisáveis |
+| Sessions e goals | `session_manage`, `plan_manage` | Handoff durável de tarefas, relatórios de progresso e Goal mode opcional |
+| Browser | `browser_session`, `browser_snapshot`, `browser_act`, `browser_run_script` | Interação persistente, UI checks, screenshots, docs renderizados e texto de página |
+| File links | `link_create`, `link_revoke` | Baixar artefatos gerados pelo chat |
+| Remote workers | `remote_manage`, `run_shell`, `remote_transfer` | Máquinas atrás de NAT, firewalls ou fluxos de login de cluster |
+
+## Workflows típicos
+
+### Programando com ChatGPT
+
+1. Inicie um runtime como Docker Compose, VS Code extension, binary ou Python em um workspace dedicado.
+2. Exponha o runtime HTTP se ChatGPT precisar de network access.
+3. Adicione o endpoint público `/mcp` ao ChatGPT.
+4. Peça primeiro inspeção do repository e checks read-only.
+5. Depois permita patch files, tests, diff review, commit e push quando aprovados.
+6. Revise audit log quando o task envolver file links ou remote systems.
+
+### Host HPC ou accelerator remoto
+
+1. Crie um remote worker invite de uso único.
+2. Cole o command gerado no remote host.
+3. Use tools normais com `machine`; Git via `run_shell` e transfer via `remote_transfer`.
+4. Revogue o worker após o task.
+
+### Geração de artefatos
+
+1. Deixe a IA gerar um file em `/workspace`.
+2. Crie tokenized file link com TTL/download limits.
+3. Compartilhe o link no chat.
+4. Revogue quando terminar.
+
+## Idioma
+
+Este site é construído com o plugin i18n nativo do MkDocs. Use o seletor de idioma no header para alternar entre English e páginas traduzidas. Páginas sem tradução fazem fallback para English.

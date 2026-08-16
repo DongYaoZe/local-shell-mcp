@@ -1,38 +1,55 @@
+<!-- i18n-source-sha256: 4aec137923c38de0ed4a1b760b5dbd6ce99090d508ce3fe838d35ad44b4ba4f1 -->
 # Log audit
 
-Halaman ini menjelaskan skenario “Log audit” dan mengikuti struktur Runtime/Client yang sama di situs.
+`local-shell-mcp` menulis entri audit terstruktur untuk membantu merekonstruksi apa yang dilakukan client yang terhubung.
 
-## Ringkasan
-
-Runtime menentukan bagaimana proses server berjalan dan workspace mana yang dikendalikan. Client menentukan bagaimana ChatGPT atau client MCP lain terhubung. Docker, ekstensi VS Code, biner mandiri, instalasi Python/pipx/sumber, dan stdio adalah pilihan Runtime; konektor ChatGPT, client MCP HTTP generik, dan client MCP stdio adalah koneksi Client.
-
-## Kapan digunakan
-
-- Gunakan halaman ini ketika jalur Runtime atau Client yang dipilih cocok dengan judulnya.
-- Jaga agar root workspace, base URL publik, MCP endpoint, mode autentikasi, dan alat host yang tersedia tetap konsisten.
-- Untuk ChatGPT web/app, ekspos MCP endpoint HTTPS yang berakhir dengan `/mcp`.
-- Untuk client MCP lokal, gunakan HTTP localhost atau `local-shell-mcp --mode stdio` sesuai dukungan client.
-
-## Langkah
-
-1. Pilih halaman instalasi Runtime terlebih dahulu.
-2. Mulai Runtime dan periksa `/healthz` saat menggunakan mode HTTP.
-3. Pilih halaman koneksi Client berikutnya.
-4. Daftarkan MCP endpoint atau perintah stdio di Client.
-5. Panggil `environment_get` untuk memeriksa workspace dan pengaturan efektif.
+Path default:
 
 ```text
-Runtime: Docker / VS Code extension / binary / Python / stdio
-Client:  ChatGPT connector / generic HTTP MCP / generic stdio MCP
-Endpoint: https://your-host.example.com/mcp
+/workspace/.local-shell-mcp/audit.jsonl
 ```
 
-## Verifikasi
+## Apa yang dicatat
 
-- `environment_get` mengonfirmasi pengaturan Runtime dan workspace.
-- `file_tree` mengonfirmasi file yang terlihat.
-- `run_shell` mengonfirmasi lingkungan perintah.
+Entri audit mencakup peristiwa seperti:
 
-## Catatan
+- Awal/akhir tool call.
+- Metadata eksekusi perintah.
+- Timeout dan error yang ditangani.
+- Registrasi remote worker dan aktivitas job.
+- Pembuatan dan pencabutan file link.
+- Peristiwa terkait autentikasi jika berlaku.
 
-Utamakan langkah kecil yang dapat diverifikasi: inspeksi, edit, diff, test, scan, dan commit. Tugas besar juga harus dipecah menjadi panggilan alat yang dapat diaudit.
+Argumen sensitif disamarkan jika server dapat mengidentifikasinya.
+
+## Membaca log
+
+Gunakan tool MCP:
+
+```text
+audit_tail
+```
+
+Atau periksa langsung:
+
+```bash
+tail -n 100 /workspace/.local-shell-mcp/audit.jsonl
+```
+
+## Penggunaan operasional
+
+Log audit sangat berguna untuk:
+
+- Meninjau perintah yang mengubah file.
+- Memeriksa apakah remote worker digunakan.
+- Men-debug kegagalan tak terduga.
+- Mendeteksi paparan file link yang tidak disengaja.
+- Mendukung incident response setelah kesalahan deployment publik.
+
+## Retensi
+
+Log dibatasi oleh `LOCAL_SHELL_MCP_MAX_AUDIT_LOG_BYTES`. Lakukan rotasi atau ekspor secara eksternal jika membutuhkan retensi panjang.
+
+## Keterbatasan
+
+Log audit bukan sandbox. Log membantu ketertelusuran, tetapi tidak mencegah model terhubung melakukan tindakan dalam wewenang yang telah dikonfigurasi.

@@ -1,38 +1,55 @@
+<!-- i18n-source-sha256: 4aec137923c38de0ed4a1b760b5dbd6ce99090d508ce3fe838d35ad44b4ba4f1 -->
 # Nhật ký audit
 
-Trang này mô tả kịch bản “Nhật ký audit” và giữ cấu trúc Runtime/Client chung của trang tài liệu.
+`local-shell-mcp` ghi các mục audit có cấu trúc để giúp dựng lại những gì một client đã kết nối thực hiện.
 
-## Tổng quan
-
-Runtime xác định tiến trình server chạy như thế nào và điều khiển workspace nào. Client xác định ChatGPT hoặc client MCP khác kết nối như thế nào. Docker, tiện ích VS Code, tệp nhị phân độc lập, cài đặt Python/pipx/mã nguồn và stdio là lựa chọn Runtime; trình kết nối ChatGPT, client MCP HTTP chung và client MCP stdio là kết nối Client.
-
-## Khi nào dùng
-
-- Dùng trang này khi đường dẫn Runtime hoặc Client đã chọn khớp với tiêu đề.
-- Giữ nhất quán workspace root, public base URL, MCP endpoint, chế độ xác thực và các công cụ host khả dụng.
-- Với ChatGPT web/app, hãy công bố MCP endpoint HTTPS kết thúc bằng `/mcp`.
-- Với client MCP cục bộ, dùng HTTP localhost hoặc `local-shell-mcp --mode stdio` tùy khả năng hỗ trợ của client.
-
-## Các bước
-
-1. Trước tiên chọn trang cài đặt Runtime.
-2. Khởi động Runtime và kiểm tra `/healthz` khi dùng chế độ HTTP.
-3. Sau đó chọn trang kết nối Client.
-4. Đăng ký MCP endpoint hoặc lệnh stdio trong Client.
-5. Gọi `environment_get` để kiểm tra workspace và cấu hình thực tế.
+Đường dẫn mặc định:
 
 ```text
-Runtime: Docker / VS Code extension / binary / Python / stdio
-Client:  ChatGPT connector / generic HTTP MCP / generic stdio MCP
-Endpoint: https://your-host.example.com/mcp
+/workspace/.local-shell-mcp/audit.jsonl
 ```
 
-## Xác minh
+## Nội dung được ghi
 
-- `environment_get` xác nhận cấu hình Runtime và workspace.
-- `file_tree` xác nhận các tệp nhìn thấy được.
-- `run_shell` xác nhận môi trường lệnh.
+Các mục audit bao gồm những sự kiện như:
 
-## Ghi chú
+- Bắt đầu/kết thúc tool call.
+- Metadata thực thi lệnh.
+- Timeout và lỗi đã xử lý.
+- Đăng ký remote worker và hoạt động job.
+- Tạo và thu hồi file link.
+- Sự kiện liên quan tới xác thực khi áp dụng.
 
-Ưu tiên các bước nhỏ và có thể xác minh: kiểm tra, chỉnh sửa, diff, test, scan và commit. Tác vụ lớn cũng nên được chia thành các lời gọi công cụ có thể audit.
+Các đối số nhạy cảm được che nếu máy chủ nhận diện được chúng.
+
+## Đọc nhật ký
+
+Dùng tool MCP:
+
+```text
+audit_tail
+```
+
+Hoặc kiểm tra trực tiếp:
+
+```bash
+tail -n 100 /workspace/.local-shell-mcp/audit.jsonl
+```
+
+## Sử dụng vận hành
+
+Nhật ký audit đặc biệt hữu ích để:
+
+- Xem lại các lệnh đã thay đổi tệp.
+- Kiểm tra có dùng remote worker hay không.
+- Gỡ lỗi các thất bại bất ngờ.
+- Phát hiện việc vô tình làm lộ file link.
+- Hỗ trợ incident response sau lỗi deployment công khai.
+
+## Lưu giữ
+
+Nhật ký bị giới hạn bởi `LOCAL_SHELL_MCP_MAX_AUDIT_LOG_BYTES`. Hãy xoay vòng hoặc export ra bên ngoài nếu cần lưu giữ lâu.
+
+## Giới hạn
+
+Nhật ký audit không phải sandbox. Nó giúp truy vết nhưng không ngăn model đã kết nối thực hiện hành động trong phạm vi quyền được cấu hình.

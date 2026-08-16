@@ -1,38 +1,47 @@
+<!-- i18n-source-sha256: d758caead1c922385409aceebf498662f25f4cbf252a48d65b29d91f07e5a173 -->
 # روابط الملفات
 
-تشرح هذه الصفحة سيناريو “روابط الملفات” وتحافظ على بنية Runtime/Client المشتركة في الموقع.
+يمكن لـ `local-shell-mcp` كشف ملفات من workspace المتحكم به عبر bearer URL عالية العشوائية. يفيد ذلك عندما ينشئ الذكاء الاصطناعي تقارير أو أرشيفات أو PDF أو screenshots أو artifacts أخرى يجب تنزيلها من المحادثة أو عرضها فيها.
 
-## نظرة عامة
+## متى تستخدم روابط الملفات
 
-يحدد Runtime كيفية تشغيل عملية الخادم وأي مساحة عمل يتحكم بها. يحدد Client كيفية اتصال ChatGPT أو أي عميل MCP آخر. Docker وإضافة VS Code والملفات التنفيذية المستقلة وتثبيتات Python/pipx/المصدر و stdio هي خيارات Runtime؛ أما موصل ChatGPT وعميل MCP HTTP العام وعميل MCP عبر stdio فهي اتصالات Client.
+استخدم روابط الملفات من أجل:
 
-## متى تستخدمه
+- ملفات PDF أو تقارير مُنشأة.
+- Screenshots وbrowser artifacts.
+- مخرجات build.
+- Logs أكبر من أن تُلصق في المحادثة.
+- أرشيفات معدّة للفحص اليدوي.
 
-- استخدم هذه الصفحة عندما يطابق مسار Runtime أو Client المختار عنوان الصفحة.
-- حافظ على اتساق جذر مساحة العمل و base URL العام و MCP endpoint ونمط المصادقة والأدوات المتاحة على المضيف.
-- بالنسبة إلى ChatGPT web/app، انشر MCP endpoint عبر HTTPS ينتهي بـ `/mcp`.
-- بالنسبة إلى عملاء MCP المحليين، استخدم HTTP localhost أو `local-shell-mcp --mode stdio` حسب دعم العميل.
+لا تستخدم روابط الملفات مع secrets أو private keys أو مخازن credentials أو بيانات شخصية غير مرتبطة بالمهمة.
 
-## الخطوات
+## المسار المعتاد
 
-1. اختر صفحة تثبيت Runtime أولاً.
-2. شغّل Runtime وتحقق من `/healthz` عند استخدام وضع HTTP.
-3. اختر بعد ذلك صفحة اتصال Client.
-4. سجّل MCP endpoint أو أمر stdio في Client.
-5. استدعِ `environment_get` للتحقق من مساحة العمل والإعدادات الفعلية.
+1. أنشئ ملفاً أو اعثر عليه تحت `/workspace`.
+2. استدعِ `link_create` مع TTL وحد اختياري للتنزيل. اضبط `inline=true` عندما ينبغي عرض الملف مباشرة في المتصفح أو كصورة Markdown؛ القيمة الافتراضية هي `false` وتفرض attachment download.
+3. شارك URL المعاد.
+4. ألغِ الرابط عندما لا يعود مطلوباً.
 
-```text
-Runtime: Docker / VS Code extension / binary / Python / stdio
-Client:  ChatGPT connector / generic HTTP MCP / generic stdio MCP
-Endpoint: https://your-host.example.com/mcp
-```
+## الأدوات ذات الصلة
 
-## التحقق
+| Tool | الغرض |
+|---|---|
+| `link_create` | إنشاء URL مرمّز لملف workspace. |
+| `link_list` | عرض الروابط النشطة. |
+| `link_revoke` | تعطيل رابط قبل انتهاء صلاحيته. |
 
-- `environment_get` يؤكد إعدادات Runtime ومساحة العمل.
-- `file_tree` يؤكد الملفات المرئية.
-- `run_shell` يؤكد بيئة الأوامر.
+## عناصر التحكم
 
-## ملاحظات
+تشمل خيارات الإعداد:
 
-فضّل الخطوات الصغيرة القابلة للتحقق: الفحص، التعديل، مراجعة diff، الاختبار، الفحص الأمني، ثم commit. يجب أيضاً تقسيم المهام الكبيرة إلى استدعاءات أدوات قابلة للتدقيق.
+- `LOCAL_SHELL_MCP_FILE_DOWNLOAD_ENABLED`
+- `LOCAL_SHELL_MCP_FILE_DOWNLOAD_DEFAULT_TTL_S`
+- `LOCAL_SHELL_MCP_FILE_DOWNLOAD_MAX_TTL_S`
+- `LOCAL_SHELL_MCP_FILE_DOWNLOAD_DEFAULT_MAX_DOWNLOADS`
+- `LOCAL_SHELL_MCP_FILE_DOWNLOAD_MAX_FILE_BYTES`
+
+استخدم TTL أقصر مع artifacts الحساسة واضبط maximum download count عندما يكون الرابط مخصصاً لمستلم واحد.
+
+## ملاحظات الأمان
+
+روابط الملفات هي bearer URL. يمكن لأي شخص يملك URL تنزيل الملف حتى تنتهي صلاحيته أو يصل إلى download limit أو يتم إلغاؤه. تعامل معها كـ secrets مؤقتة. تتضمن inline responses ‏CSP sandbox و`X-Content-Type-Options: nosniff` حتى لا تتمكن التنسيقات النشطة من الوصول إلى LSM origin أو التنفيذ كمحتوى same-origin غير معزول.

@@ -1,38 +1,40 @@
+<!-- i18n-source-sha256: 3b7d6ab07c5d6bad2bfb22f366893819ac8de8754c7c28bcb35f24ea5695979c -->
 # Akses Git
 
-Halaman ini menjelaskan skenario “Akses Git” dan mengikuti struktur Runtime/Client yang sama di situs.
+`local-shell-mcp` menggunakan Git CLI standar melalui `run_shell`, `shell_start`, atau `job_start`. Wrapper Git MCP khusus sengaja tidak diekspos: CLI lengkap, familiar bagi coding agent, dan menghindari duplikasi setiap subcommand Git dalam daftar tool.
 
-## Ringkasan
+## Workflow umum
 
-Runtime menentukan bagaimana proses server berjalan dan workspace mana yang dikendalikan. Client menentukan bagaimana ChatGPT atau client MCP lain terhubung. Docker, ekstensi VS Code, biner mandiri, instalasi Python/pipx/sumber, dan stdio adalah pilihan Runtime; konektor ChatGPT, client MCP HTTP generik, dan client MCP stdio adalah koneksi Client.
+Gunakan perintah terbatas dan non-interaktif bila memungkinkan:
 
-## Kapan digunakan
-
-- Gunakan halaman ini ketika jalur Runtime atau Client yang dipilih cocok dengan judulnya.
-- Jaga agar root workspace, base URL publik, MCP endpoint, mode autentikasi, dan alat host yang tersedia tetap konsisten.
-- Untuk ChatGPT web/app, ekspos MCP endpoint HTTPS yang berakhir dengan `/mcp`.
-- Untuk client MCP lokal, gunakan HTTP localhost atau `local-shell-mcp --mode stdio` sesuai dukungan client.
-
-## Langkah
-
-1. Pilih halaman instalasi Runtime terlebih dahulu.
-2. Mulai Runtime dan periksa `/healthz` saat menggunakan mode HTTP.
-3. Pilih halaman koneksi Client berikutnya.
-4. Daftarkan MCP endpoint atau perintah stdio di Client.
-5. Panggil `environment_get` untuk memeriksa workspace dan pengaturan efektif.
-
-```text
-Runtime: Docker / VS Code extension / binary / Python / stdio
-Client:  ChatGPT connector / generic HTTP MCP / generic stdio MCP
-Endpoint: https://your-host.example.com/mcp
+```bash
+git status --short --branch
+git diff --stat
+git diff
+git add -- path/to/file
+git commit -m "fix: concise description"
+git push origin HEAD
 ```
 
-## Verifikasi
+Urutan agent yang umum:
 
-- `environment_get` mengonfirmasi pengaturan Runtime dan workspace.
-- `file_tree` mengonfirmasi file yang terlihat.
-- `run_shell` mengonfirmasi lingkungan perintah.
+1. Inspeksi dengan `run_shell(command="git status --short --branch")`.
+2. Baca dan edit hanya file yang relevan.
+3. Jalankan test yang ditargetkan.
+4. Tinjau dengan `run_shell(command="git diff --check && git diff")`.
+5. Jalankan `secret_scan` sebelum commit atau push.
+6. Lakukan stage, commit, dan push dengan perintah Git CLI eksplisit.
 
-## Catatan
+Gunakan `machine` pada shell tool yang sama ketika repository berada di remote worker.
 
-Utamakan langkah kecil yang dapat diverifikasi: inspeksi, edit, diff, test, scan, dan commit. Tugas besar juga harus dipecah menjadi panggilan alat yang dapat diaudit.
+## Credential
+
+Deployment Docker dapat mempertahankan lokasi credential Git umum di `/persist/credentials`. Perlakukan volume tersebut sebagai sensitif. Prioritaskan deploy key dengan cakupan repository, token GitHub App berumur pendek, pengguna automation terisolasi, dan review manual sebelum push.
+
+## Kebersihan commit
+
+Jaga commit tetap fokus, abaikan cache hasil generasi dan build artifact, catat test yang dijalankan, dan hindari stage perubahan yang tidak terkait. Untuk perintah destruktif seperti reset, clean, atau force-push, periksa target persis terlebih dahulu.
+
+## Pemecahan masalah
+
+Ketika `git push` gagal, periksa remote URL, persistensi credential, branch protection, dan izin token. `gh auth status` berguna jika GitHub CLI terpasang.

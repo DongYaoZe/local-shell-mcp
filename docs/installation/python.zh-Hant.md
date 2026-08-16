@@ -1,3 +1,4 @@
+<!-- i18n-source-sha256: 19347ba1d8d3f26f227506397f4093281319e6a2a59833ced1da286c1d46f21a -->
 # Python、pipx 與源碼運行時
 
 Python 運行時適合開發、調試，以及 Python 包管理比 Docker 更容易維護的環境。它運行的服務與 Docker 和二進制運行時相同。
