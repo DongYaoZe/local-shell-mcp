@@ -1115,6 +1115,8 @@ async def test_tmux_scrollback_cleanup_waits_for_last_attachment(monkeypatch):
     first = await ui._register_tmux_scrollback_attachment(process, 1)
     second = await ui._register_tmux_scrollback_attachment(process, 2)
     copy_mode = True
+    assert first is not None
+    first[1].owned_copy_mode = True
 
     await ui._release_tmux_scrollback_attachment(process, 2, second)
     assert scroll_requests == []
@@ -1244,9 +1246,11 @@ async def test_tmux_scrollback_requests_are_serialized_per_session(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_tmux_scrollback_requests_stay_on_registered_pane(monkeypatch):
+async def test_tmux_scrollback_requests_retarget_after_active_pane_change(monkeypatch):
     group = ui._TmuxScrollbackAttachmentGroup()
     group.initial_copy_mode = False
+    group.initial_position = 0
+    group.owned_copy_mode = True
     group.pane_id = "%7"
     registration = ("shared", group)
     process = SimpleNamespace(_tmux_session_id="shared")
@@ -1254,30 +1258,47 @@ async def test_tmux_scrollback_requests_stay_on_registered_pane(monkeypatch):
 
     async def fake_state(process, pane_id=None):
         targets.append(("state", pane_id))
+        if pane_id == "%7":
+            return {
+                "type": "scrollback",
+                "supported": True,
+                "history": 100,
+                "position": 9,
+                "copy_mode": True,
+            }
         return {
             "type": "scrollback",
             "supported": True,
-            "history": 100,
+            "history": 200,
             "position": 0,
             "copy_mode": False,
         }
 
+    async def fake_baseline(process):
+        return await fake_state(process, "%8"), "%8"
+
     async def fake_scroll(process, requested, pane_id=None):
-        targets.append(("scroll", pane_id))
+        targets.append(("scroll", pane_id, requested))
         return {
             "type": "scrollback",
             "supported": True,
-            "history": 100,
+            "history": 200,
             "position": requested,
             "copy_mode": requested > 0,
         }
 
     monkeypatch.setattr(ui, "_tmux_scrollback_state", fake_state)
+    monkeypatch.setattr(ui, "_tmux_scrollback_baseline", fake_baseline)
     monkeypatch.setattr(ui, "_tmux_scroll_to", fake_scroll)
 
     await ui._tmux_apply_scrollback_request(process, registration, {"position": 12})
 
-    assert targets == [("state", "%7"), ("scroll", "%7")]
+    assert ("state", "%7") in targets
+    assert ("scroll", "%7", 0) in targets
+    assert ("scroll", "%8", 12) in targets
+    assert group.pane_id == "%8"
+    assert group.initial_copy_mode is False
+    assert group.owned_copy_mode is True
 
 
 @pytest.mark.asyncio
@@ -1285,6 +1306,7 @@ async def test_tmux_terminal_input_leaves_webui_owned_copy_mode(monkeypatch):
     group = ui._TmuxScrollbackAttachmentGroup()
     group.initial_copy_mode = False
     group.owned_copy_mode = True
+    group.pane_id = "%1"
     registration = ("shared", group)
     events = []
 
@@ -1293,6 +1315,15 @@ async def test_tmux_terminal_input_leaves_webui_owned_copy_mode(monkeypatch):
 
         async def write(self, data):
             events.append(("write", data))
+
+    async def fake_baseline(process):
+        return {
+            "type": "scrollback",
+            "supported": True,
+            "history": 100,
+            "position": 8,
+            "copy_mode": True,
+        }, "%1"
 
     async def fake_scroll(process, position, pane_id=None):
         events.append(("scroll", position))
@@ -1304,7 +1335,57 @@ async def test_tmux_terminal_input_leaves_webui_owned_copy_mode(monkeypatch):
             "copy_mode": False,
         }
 
+    monkeypatch.setattr(ui, "_tmux_scrollback_baseline", fake_baseline)
     monkeypatch.setattr(ui, "_tmux_scroll_to", fake_scroll)
+
+    await ui._tmux_write_terminal_input(Process(), registration, b"echo ok\r")
+
+    assert events == [("scroll", 0), ("write", b"echo ok\r")]
+    assert group.owned_copy_mode is False
+
+
+@pytest.mark.asyncio
+async def test_tmux_mouse_sync_claims_copy_mode_before_next_input(monkeypatch):
+    group = ui._TmuxScrollbackAttachmentGroup()
+    group.initial_copy_mode = False
+    group.pane_id = "%1"
+    registration = ("shared", group)
+    copy_mode = True
+    events = []
+
+    class Process:
+        _tmux_session_id = "shared"
+
+        async def write(self, data):
+            events.append(("write", data))
+
+    async def fake_baseline(process):
+        return {
+            "type": "scrollback",
+            "supported": True,
+            "history": 100,
+            "position": 6 if copy_mode else 0,
+            "copy_mode": copy_mode,
+        }, "%1"
+
+    async def fake_scroll(process, position, pane_id=None):
+        nonlocal copy_mode
+        events.append(("scroll", position))
+        copy_mode = position > 0
+        return {
+            "type": "scrollback",
+            "supported": True,
+            "history": 100,
+            "position": position,
+            "copy_mode": copy_mode,
+        }
+
+    monkeypatch.setattr(ui, "_tmux_scrollback_baseline", fake_baseline)
+    monkeypatch.setattr(ui, "_tmux_scroll_to", fake_scroll)
+
+    state = await ui._tmux_claim_scrollback_state(Process(), registration)
+    assert state["copy_mode"] is True
+    assert group.owned_copy_mode is True
 
     await ui._tmux_write_terminal_input(Process(), registration, b"echo ok\r")
 
@@ -1559,6 +1640,10 @@ async def test_native_shell_websocket_exposes_opt_in_tmux_scrollback(tmp_path, m
                 },
                 {
                     "type": "websocket.receive",
+                    "text": json.dumps({"type": "scrollback-sync"}),
+                },
+                {
+                    "type": "websocket.receive",
                     "text": json.dumps({"type": "resize", "cols": 100, "rows": 35}),
                 },
                 {"type": "websocket.disconnect"},
@@ -1585,6 +1670,7 @@ async def test_native_shell_websocket_exposes_opt_in_tmux_scrollback(tmp_path, m
         return Process()
 
     requested = []
+    syncs = []
 
     async def fake_state(process, pane_id=None):
         position = requested[-1] if requested else 10
@@ -1606,16 +1692,22 @@ async def test_native_shell_websocket_exposes_opt_in_tmux_scrollback(tmp_path, m
             "copy_mode": position > 0,
         }
 
+    async def fake_claim(process, registration):
+        syncs.append(registration[1].pane_id)
+        return await fake_state(process, registration[1].pane_id)
+
     monkeypatch.setattr(ui, "_authorize_websocket", lambda websocket: True)
     monkeypatch.setattr(ui, "_spawn_shell_process", fake_spawn)
     _stub_tmux_scrollback(monkeypatch, fake_state)
     monkeypatch.setattr(ui, "_tmux_scroll_to", fake_scroll)
+    monkeypatch.setattr(ui, "_tmux_claim_scrollback_state", fake_claim)
     ui._ACTIVE_UI_TERMINALS.clear()
     socket = Socket()
 
     await ui.ui_shell_websocket(socket)
 
     assert requested == [15, 42, 0]
+    assert syncs == ["%1"]
     assert socket.sent_text[0] == {
         "type": "scrollback",
         "supported": True,
@@ -1828,6 +1920,10 @@ async def test_native_shell_websocket_cleans_up_tmux_mouse_copy_mode(tmp_path, m
         def __init__(self):
             self.messages = [
                 {"type": "websocket.receive", "bytes": b"mouse-wheel"},
+                {
+                    "type": "websocket.receive",
+                    "text": json.dumps({"type": "scrollback-sync"}),
+                },
                 {"type": "websocket.disconnect"},
             ]
 

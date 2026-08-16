@@ -5,9 +5,11 @@ describe("Native WebUI terminal scrolling", () => {
   test("leaves wheel input to mouse-aware terminal applications", () => {
     let prevented = false
     let stopped = false
+    let synced = false
     const controller = {
       scrollbackSupported: true,
       terminal: { modes: { mouseTrackingMode: "vt200" } },
+      queueScrollbackSync: () => { synced = true },
     }
     const event = {
       deltaY: -120,
@@ -19,6 +21,7 @@ describe("Native WebUI terminal scrolling", () => {
 
     expect(prevented).toBe(false)
     expect(stopped).toBe(false)
+    expect(synced).toBe(true)
   })
 
   test("uses tmux scrollback for ordinary shell wheel input", () => {

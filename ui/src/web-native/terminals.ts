@@ -34,6 +34,7 @@ export class TerminalsController extends BaseController {
   private scrollbackHistory = 0
   private scrollbackPosition = 0
   private scrollRequestTimer: number | null = null
+  private scrollbackSyncTimer: number | null = null
   private pendingScrollPosition: number | null = null
   private history: string[] = []
   private historyIndex = 0
@@ -382,7 +383,11 @@ export class TerminalsController extends BaseController {
 
   private onTerminalWheel(event: WheelEvent): void {
     const terminal = this.terminal
-    if (!this.scrollbackSupported || !terminal || terminal.modes.mouseTrackingMode !== "none" || event.deltaY === 0) return
+    if (!this.scrollbackSupported || !terminal || event.deltaY === 0) return
+    if (terminal.modes.mouseTrackingMode !== "none") {
+      this.queueScrollbackSync()
+      return
+    }
     event.preventDefault()
     event.stopPropagation()
     const magnitude = Math.max(1, Math.min(24, Math.ceil(Math.abs(event.deltaY) / 24)))
@@ -426,6 +431,8 @@ export class TerminalsController extends BaseController {
     this.reconnectTimer = null
     if (this.scrollRequestTimer !== null) window.clearTimeout(this.scrollRequestTimer)
     this.scrollRequestTimer = null
+    if (this.scrollbackSyncTimer !== null) window.clearTimeout(this.scrollbackSyncTimer)
+    this.scrollbackSyncTimer = null
     this.pendingScrollPosition = null
     const socket = this.socket
     this.socket = null
@@ -451,6 +458,17 @@ export class TerminalsController extends BaseController {
 
   private sendRaw(value: string): void {
     if (this.socket?.readyState === WebSocket.OPEN) this.socket.send(encoder.encode(value))
+  }
+
+  private queueScrollbackSync(): void {
+    if (!this.scrollbackSupported || this.socket?.readyState !== WebSocket.OPEN) return
+    if (this.scrollbackSyncTimer !== null) return
+    const socket = this.socket
+    this.scrollbackSyncTimer = window.setTimeout(() => {
+      this.scrollbackSyncTimer = null
+      if (this.socket !== socket || socket.readyState !== WebSocket.OPEN) return
+      socket.send(JSON.stringify({ type: "scrollback-sync" }))
+    }, 0)
   }
 
   private async createSession(): Promise<void> {

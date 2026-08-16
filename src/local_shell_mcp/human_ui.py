@@ -1946,6 +1946,49 @@ class _TmuxScrollbackAttachmentGroup:
 _TMUX_SCROLLBACK_ATTACHMENTS: dict[str, _TmuxScrollbackAttachmentGroup] = {}
 
 
+async def _tmux_restore_attachment_baseline(
+    process: Any, group: _TmuxScrollbackAttachmentGroup
+) -> None:
+    if group.pane_id is None or group.initial_copy_mode is None:
+        group.owned_copy_mode = False
+        return
+    state = await _tmux_scrollback_state(process, group.pane_id)
+    copy_mode = bool(state.get("copy_mode"))
+    position = int(state.get("position") or 0)
+    if group.initial_copy_mode is False:
+        if group.owned_copy_mode and copy_mode:
+            await _tmux_scroll_to(process, 0, group.pane_id)
+    elif not copy_mode or position != group.initial_position:
+        await _tmux_restore_copy_mode_position(
+            process, group.initial_position, group.pane_id
+        )
+    group.owned_copy_mode = False
+
+
+async def _tmux_sync_attachment_pane(
+    process: Any,
+    group: _TmuxScrollbackAttachmentGroup,
+    *,
+    claim_copy_mode: bool = False,
+) -> dict[str, Any]:
+    state, pane_id = await _tmux_scrollback_baseline(process)
+    if group.pane_id != pane_id:
+        try:
+            await _tmux_restore_attachment_baseline(process, group)
+        except Exception:
+            _LOGGER.debug(
+                "Unable to restore previous Native WebUI tmux pane during retarget",
+                exc_info=True,
+            )
+        group.pane_id = pane_id
+        group.initial_copy_mode = bool(state.get("copy_mode"))
+        group.initial_position = int(state.get("position") or 0)
+        group.owned_copy_mode = False
+    elif claim_copy_mode and group.initial_copy_mode is False and state.get("copy_mode"):
+        group.owned_copy_mode = True
+    return state
+
+
 async def _register_tmux_scrollback_attachment(
     process: Any, marker: int
 ) -> tuple[str, _TmuxScrollbackAttachmentGroup] | None:
@@ -1994,18 +2037,14 @@ async def _release_tmux_scrollback_attachment(
         if group.members:
             return
         try:
-            final_state = await _tmux_scrollback_state(process, group.pane_id)
-            final_copy_mode = bool(final_state.get("copy_mode"))
-            final_position = int(final_state.get("position") or 0)
-            if group.initial_copy_mode is False:
-                if final_copy_mode:
-                    await _tmux_scroll_to(process, 0, group.pane_id)
-            elif group.initial_copy_mode is True and (
-                not final_copy_mode or final_position != group.initial_position
-            ):
-                await _tmux_restore_copy_mode_position(
-                    process, group.initial_position, group.pane_id
+            try:
+                await _tmux_sync_attachment_pane(process, group)
+            except Exception:
+                _LOGGER.debug(
+                    "Unable to refresh Native WebUI tmux pane before detach",
+                    exc_info=True,
                 )
+            await _tmux_restore_attachment_baseline(process, group)
         except Exception:
             _LOGGER.debug("Unable to leave Native WebUI tmux copy mode", exc_info=True)
         finally:
@@ -2020,7 +2059,7 @@ async def _tmux_apply_scrollback_request(
 ) -> dict[str, Any]:
     _, group = registration
     async with group.lock:
-        state = await _tmux_scrollback_state(process, group.pane_id)
+        state = await _tmux_sync_attachment_pane(process, group)
         current = int(state["position"])
         history = int(state["history"])
         if "position" in control:
@@ -2034,6 +2073,17 @@ async def _tmux_apply_scrollback_request(
         return state
 
 
+async def _tmux_claim_scrollback_state(
+    process: Any,
+    registration: tuple[str, _TmuxScrollbackAttachmentGroup],
+) -> dict[str, Any]:
+    _, group = registration
+    async with group.lock:
+        return await _tmux_sync_attachment_pane(
+            process, group, claim_copy_mode=True
+        )
+
+
 async def _tmux_write_terminal_input(
     process: Any,
     registration: tuple[str, _TmuxScrollbackAttachmentGroup] | None,
@@ -2044,6 +2094,8 @@ async def _tmux_write_terminal_input(
         return
     _, group = registration
     async with group.lock:
+        if group.owned_copy_mode:
+            await _tmux_sync_attachment_pane(process, group)
         if group.owned_copy_mode:
             await _tmux_scroll_to(process, 0, group.pane_id)
             group.owned_copy_mode = False
@@ -2372,7 +2424,7 @@ async def ui_shell_websocket(websocket: WebSocket) -> None:
         try:
             _, group = scrollback_registration
             async with group.lock:
-                state = await _tmux_scrollback_state(process, group.pane_id)
+                state = await _tmux_sync_attachment_pane(process, group)
         except Exception:
             _LOGGER.debug("Unable to read Native WebUI scrollback state", exc_info=True)
             return
@@ -2470,6 +2522,23 @@ async def ui_shell_websocket(websocket: WebSocket) -> None:
                     return
                 except Exception:
                     _LOGGER.debug("Unable to scroll Native WebUI terminal", exc_info=True)
+                    continue
+                async with send_lock:
+                    await websocket.send_text(json.dumps(state, separators=(",", ":")))
+            elif (
+                scrollback_available
+                and scrollback_registration is not None
+                and control.get("type") == "scrollback-sync"
+            ):
+                try:
+                    state = await _tmux_claim_scrollback_state(
+                        process, scrollback_registration
+                    )
+                except Exception:
+                    _LOGGER.debug(
+                        "Unable to synchronize Native WebUI terminal scrollback",
+                        exc_info=True,
+                    )
                     continue
                 async with send_lock:
                     await websocket.send_text(json.dumps(state, separators=(",", ":")))
