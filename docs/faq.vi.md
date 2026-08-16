@@ -1,3 +1,4 @@
+<!-- i18n-source-sha256: f0abfd8b2a3118c630bf6693921a7e5f95ad61e089bfa6645a583467a0b9832e -->
 # Câu hỏi thường gặp
 
 Trang này tổng hợp các vấn đề Client và reverse proxy thường gặp có thể trông giống lỗi LSM dù máy chủ vẫn hoạt động bình thường.

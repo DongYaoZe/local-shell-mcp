@@ -1,42 +1,726 @@
+<!-- i18n-source-sha256: 9e104b7a893f61206aea6ed76b78bb04387fc5349535c46ffafd8f2e4c9ccd3e -->
 # Tool-Referenz
 
-Diese Seite ist eine lokalisierte Übersicht der Tools. Tool- und Parameternamen bleiben Code-Bezeichner, damit sie zum MCP schema, zum Audit-Log und zu Runtime-Rückgabewerten passen. Vollständige Felddetails stehen in der englischen Referenz und im vom Runtime exportierten tools JSON.
+Diese Seite wird aus den tatsächlichen MCP-Tool-Schemas aufgebaut. Führen Sie nach Änderungen an der öffentlichen Tool-Oberfläche `python scripts/generate-tools-reference.py` aus, um die English-Referenz zu aktualisieren.
 
-## Tool-Gruppen
+Die meisten Tools liefern ein strukturiertes `ToolResult` mit `ok`, `message` und `data`. `workspace_open` liefert den model-visible State zum Rendern der MCP App. Die meisten Ausführungs- und Datei-Tools akzeptieren ein optionales `machine`; ohne Wert wird der Controller-Workspace verwendet, mit Wert ein verbundener Worker. Git-Operationen nutzen absichtlich `run_shell` oder ein anderes Shell-Tool statt eigener Git-Wrapper.
 
-### Live Workspace
+## Auswahlhilfe
 
-`workspace_open`
+| Bedarf | Bevorzugte Tools |
+|---|---|
+| Ausführung in ChatGPT beobachten oder daran mitarbeiten | `workspace_open` |
+| Umgebung untersuchen | `environment_get`, `file_tree`, `file_read` |
+| Kurzen Befehl oder Git-Operation ausführen | `run_shell` |
+| Interaktive oder lange Aufgabe ausführen | `shell_start` or `job_start` |
+| Dateien exakt ändern | `file_edit` or `file_patch` |
+| Datei oder Verzeichnis übertragen | `remote_transfer` |
+| Externe MCP-Capability entdecken | `mcp_tool_search`, then `mcp_tool_inspect` |
+| Mit einer Seite interagieren | `browser_session`, `browser_snapshot`, then `browser_act` |
+| Eigene Browser-Logik ausführen | `browser_run_script` |
+| Auf einer Remote-Maschine arbeiten | dasselbe Tool mit `machine` verwenden; `remote_*` nur zur Worker-Administration |
 
+## Interaktiver Workspace
 
-### Environment / audit / task state
+### `workspace_open`
 
-`environment_get`, `audit_tail`, `session_manage`, `plan_manage`, `secret_scan`
+Öffnet oder verwendet den interaktiven Live Workspace für Echtzeit-Zusammenarbeit zwischen Mensch und Agent. Für eine aktive Aufgabe einmal aufrufen und danach den sich selbst wiederverbindenden schwebenden Workspace wiederverwenden statt wiederholt neu zu öffnen. Verwenden, wenn Terminal-Output, Files/Diffs, Jobs, Remotes oder Audit-Aktivität den Workflow wesentlich verbessern.
 
-### Skills
+| Parameter | Typ | Erforderlich/default | Beschreibung |
+|---|---|---|---|
+| `machine` | `string \| null` | `null` |  |
+| `cwd` | `string` | `"."` |  |
+| `session_run_id` | `string \| null` | required | Dieses Feld immer angeben. Verwenden Sie `null`, wenn keine logische Session aktiv ist; nach start/resume von `session_manage` den zurückgegebenen `active_run.run_id` übergeben und über MCP-Transport-Reconnects hinweg weiterverwenden. Nach explizitem resume/takeover den neuen Wert verwenden. |
 
-`skill_list`, `skill_load`, `skill_read`
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
-### Filesystem
+Wenn `machine` angegeben ist, benötigt der Aufruf zusätzlich `remote:use` und läuft über das Remote-Worker-Protokoll.
 
-`file_list`, `file_read`, `image_view`, `file_write`, `file_edit`, `file_delete`, `remote_transfer`, `file_tree`, `file_glob`, `file_grep`
+## Umgebung, Skills und Task-State
 
-### Shell and jobs
+### `environment_get`
 
-`run_shell`, `run_python`, `shell_start`, `shell_read`, `shell_send`, `shell_stop`, `shell_list`, `job_start`, `job_list`, `job_tail`, `job_stop`, `job_retry`
+Gibt Version, Workspace, Auth, Policy und Umgebungsinformationen lokal oder auf einer Remote-Maschine zurück.
 
-### Browser automation
+| Parameter | Typ | Erforderlich/default | Beschreibung |
+|---|---|---|---|
+| `machine` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | required | Dieses Feld immer angeben. Verwenden Sie `null`, wenn keine logische Session aktiv ist; nach start/resume von `session_manage` den zurückgegebenen `active_run.run_id` übergeben und über MCP-Transport-Reconnects hinweg weiterverwenden. Nach explizitem resume/takeover den neuen Wert verwenden. |
 
-`browser_session`, `browser_snapshot`, `browser_act`, `browser_run_script`
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
-### File links
+Wenn `machine` angegeben ist, benötigt der Aufruf zusätzlich `remote:use` und läuft über das Remote-Worker-Protokoll.
 
-`link_create`, `link_list`, `link_revoke`
+### `skill_list`
 
-### Remote workers
+Listet installierte Agent Skills, ohne deren Instructions zu laden. Die MCP-Tool-Oberfläche bleibt fest; hinzugefügte oder entfernte Skill-Verzeichnisse erscheinen beim nächsten Aufruf.
 
-`remote_manage`; normal tools use optional `machine`, and `remote_transfer` handles transfers
+| Parameter | Typ | Erforderlich/default | Beschreibung |
+|---|---|---|---|
+| `session_run_id` | `string \| null` | required | Dieses Feld immer angeben. Verwenden Sie `null`, wenn keine logische Session aktiv ist; nach start/resume von `session_manage` den zurückgegebenen `active_run.run_id` übergeben und über MCP-Transport-Reconnects hinweg weiterverwenden. Nach explizitem resume/takeover den neuen Wert verwenden. |
 
-## Nutzungshinweise
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
-Bestätige den Kontext zuerst mit read-only Tools und nutze danach Schreib-, shell-, Git- oder Remote-Tools. Fülle bei riskanteren Aufrufen purpose oder explanation aus, damit der Vorgang auditierbar bleibt.
+### `skill_load`
+
+Lädt einen installierten Skill über den exakten von `skill_list` gelieferten Namen. Gibt vollständige `SKILL.md`-Instructions und Pfade zu Related Files zurück.
+
+| Parameter | Typ | Erforderlich/default | Beschreibung |
+|---|---|---|---|
+| `name` | `string` | required |  |
+| `session_run_id` | `string \| null` | required | Dieses Feld immer angeben. Verwenden Sie `null`, wenn keine logische Session aktiv ist; nach start/resume von `session_manage` den zurückgegebenen `active_run.run_id` übergeben und über MCP-Transport-Reconnects hinweg weiterverwenden. Nach explizitem resume/takeover den neuen Wert verwenden. |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+### `skill_read`
+
+Liest eine zu einem installierten Skill gehörende Textdatei.
+
+| Parameter | Typ | Erforderlich/default | Beschreibung |
+|---|---|---|---|
+| `name` | `string` | required |  |
+| `path` | `string` | required |  |
+| `session_run_id` | `string \| null` | required | Dieses Feld immer angeben. Verwenden Sie `null`, wenn keine logische Session aktiv ist; nach start/resume von `session_manage` den zurückgegebenen `active_run.run_id` übergeben und über MCP-Transport-Reconnects hinweg weiterverwenden. Nach explizitem resume/takeover den neuen Wert verwenden. |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+### `secret_scan`
+
+Scannt lokale Workspace-Textdateien vor Commit oder Push nach gängigen Secrets.
+
+| Parameter | Typ | Erforderlich/default | Beschreibung |
+|---|---|---|---|
+| `cwd` | `string` | `"."` |  |
+| `glob` | `string \| null` | `null` |  |
+| `max_results` | `integer` | `200` |  |
+| `session_run_id` | `string \| null` | required | Dieses Feld immer angeben. Verwenden Sie `null`, wenn keine logische Session aktiv ist; nach start/resume von `session_manage` den zurückgegebenen `active_run.run_id` übergeben und über MCP-Transport-Reconnects hinweg weiterverwenden. Nach explizitem resume/takeover den neuen Wert verwenden. |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+### `session_manage`
+
+Verwaltet eine dauerhafte logische Task-Session unabhängig von machine und cwd. Vor substantieller Tool-Arbeit start ausführen, an sinnvollen Checkpoints semantischen Fortschritt reporten und per `session_id` resume, um an einen neuen GPT/MCP-Run zu übergeben. `resume(takeover=true)` erzeugt immer einen neuen Agent-Run und ersetzt den alten. Den zurückgegebenen `active_run.run_id` als `session_run_id` für report/finish/cancel und weitere Tools verwenden. Aktionen: start, resume, get, report, list, finish, cancel, delete.
+
+| Parameter | Typ | Erforderlich/default | Beschreibung |
+|---|---|---|---|
+| `action` | `string` | required |  |
+| `session_id` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | `null` |  |
+| `label` | `string \| null` | `null` |  |
+| `objective` | `string \| null` | `null` |  |
+| `summary` | `string \| null` | `null` |  |
+| `findings` | `array[string] \| null` | `null` |  |
+| `next` | `string \| null` | `null` |  |
+| `blockers` | `array[string] \| null` | `null` |  |
+| `takeover` | `boolean` | `false` |  |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+### `plan_manage`
+
+Verwaltet den optionalen Goal-Plan der aktuellen logischen Session. Ein aktiver Plan aktiviert nach 15 Minuten ohne Agent-Aktivität automatische Fortsetzung, begrenzt auf 10 Versuche. Zuerst die Session mit `session_manage` start/resume; mutierende Aktionen müssen deren `active_run.run_id` als `session_run_id` verwenden. Aktionen: start, get, update, block, resume, finish, cancel. start erfordert objective und steps; finish verlangt, dass alle steps completed oder skipped sind.
+
+| Parameter | Typ | Erforderlich/default | Beschreibung |
+|---|---|---|---|
+| `action` | `string` | required |  |
+| `session_run_id` | `string \| null` | `null` |  |
+| `objective` | `string \| null` | `null` |  |
+| `steps` | `array[object] \| null` | `null` |  |
+| `step_id` | `string \| null` | `null` |  |
+| `status` | `string \| null` | `null` |  |
+| `text` | `string \| null` | `null` |  |
+| `note` | `string \| null` | `null` |  |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+### `audit_tail`
+
+Liest aktuelle Einträge des lokalen Audit Logs.
+
+| Parameter | Typ | Erforderlich/default | Beschreibung |
+|---|---|---|---|
+| `lines` | `integer` | `100` |  |
+| `session_run_id` | `string \| null` | required | Dieses Feld immer angeben. Verwenden Sie `null`, wenn keine logische Session aktiv ist; nach start/resume von `session_manage` den zurückgegebenen `active_run.run_id` übergeben und über MCP-Transport-Reconnects hinweg weiterverwenden. Nach explizitem resume/takeover den neuen Wert verwenden. |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+## Shells und Jobs
+
+### `run_shell`
+
+Führt einen nicht-interaktiven Shell-Befehl lokal oder auf einer Remote-Maschine aus. Für Build-, Test-, Package-Manager-, Git- und Inspektionsbefehle, die zeitnah enden sollen. Für lang laufende, interaktive oder streamende Prozesse `shell_start` oder `job_start` verwenden. Optionale purpose/explanation-Felder können den Ausführungsgrund angeben.
+
+| Parameter | Typ | Erforderlich/default | Beschreibung |
+|---|---|---|---|
+| `command` | `string` | required |  |
+| `cwd` | `string` | `"."` |  |
+| `timeout_s` | `integer \| null` | `null` |  |
+| `max_output_bytes` | `integer \| null` | `null` |  |
+| `purpose` | `string \| null` | `null` |  |
+| `explanation` | `string \| null` | `null` |  |
+| `machine` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | required | Dieses Feld immer angeben. Verwenden Sie `null`, wenn keine logische Session aktiv ist; nach start/resume von `session_manage` den zurückgegebenen `active_run.run_id` übergeben und über MCP-Transport-Reconnects hinweg weiterverwenden. Nach explizitem resume/takeover den neuen Wert verwenden. |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+Wenn `machine` angegeben ist, benötigt der Aufruf zusätzlich `remote:use` und läuft über das Remote-Worker-Protokoll.
+
+### `run_python`
+
+Schreibt und führt ein kurzes Python-Skript lokal oder auf einer Remote-Maschine aus.
+
+| Parameter | Typ | Erforderlich/default | Beschreibung |
+|---|---|---|---|
+| `code` | `string` | required |  |
+| `cwd` | `string` | `"."` |  |
+| `timeout_s` | `integer` | `60` |  |
+| `purpose` | `string \| null` | `null` |  |
+| `explanation` | `string \| null` | `null` |  |
+| `machine` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | required | Dieses Feld immer angeben. Verwenden Sie `null`, wenn keine logische Session aktiv ist; nach start/resume von `session_manage` den zurückgegebenen `active_run.run_id` übergeben und über MCP-Transport-Reconnects hinweg weiterverwenden. Nach explizitem resume/takeover den neuen Wert verwenden. |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+Wenn `machine` angegeben ist, benötigt der Aufruf zusätzlich `remote:use` und läuft über das Remote-Worker-Protokoll.
+
+### `shell_start`
+
+Startet eine persistente interaktive Shell lokal oder auf einer Remote-Maschine.
+
+| Parameter | Typ | Erforderlich/default | Beschreibung |
+|---|---|---|---|
+| `cwd` | `string` | `"."` |  |
+| `name` | `string \| null` | `null` |  |
+| `command` | `string \| null` | `null` |  |
+| `purpose` | `string \| null` | `null` |  |
+| `explanation` | `string \| null` | `null` |  |
+| `machine` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | required | Dieses Feld immer angeben. Verwenden Sie `null`, wenn keine logische Session aktiv ist; nach start/resume von `session_manage` den zurückgegebenen `active_run.run_id` übergeben und über MCP-Transport-Reconnects hinweg weiterverwenden. Nach explizitem resume/takeover den neuen Wert verwenden. |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+Wenn `machine` angegeben ist, benötigt der Aufruf zusätzlich `remote:use` und läuft über das Remote-Worker-Protokoll.
+
+### `shell_send`
+
+Sendet Eingabe an eine persistente lokale oder Remote-Shell-Session.
+
+| Parameter | Typ | Erforderlich/default | Beschreibung |
+|---|---|---|---|
+| `session_id` | `string` | required |  |
+| `input_text` | `string` | required |  |
+| `enter` | `boolean` | `true` |  |
+| `machine` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | required | Dieses Feld immer angeben. Verwenden Sie `null`, wenn keine logische Session aktiv ist; nach start/resume von `session_manage` den zurückgegebenen `active_run.run_id` übergeben und über MCP-Transport-Reconnects hinweg weiterverwenden. Nach explizitem resume/takeover den neuen Wert verwenden. |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+Wenn `machine` angegeben ist, benötigt der Aufruf zusätzlich `remote:use` und läuft über das Remote-Worker-Protokoll.
+
+### `shell_read`
+
+Liest aktuelle Ausgabe einer persistenten lokalen oder Remote-Shell-Session.
+
+| Parameter | Typ | Erforderlich/default | Beschreibung |
+|---|---|---|---|
+| `session_id` | `string` | required |  |
+| `lines` | `integer` | `200` |  |
+| `machine` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | required | Dieses Feld immer angeben. Verwenden Sie `null`, wenn keine logische Session aktiv ist; nach start/resume von `session_manage` den zurückgegebenen `active_run.run_id` übergeben und über MCP-Transport-Reconnects hinweg weiterverwenden. Nach explizitem resume/takeover den neuen Wert verwenden. |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+Wenn `machine` angegeben ist, benötigt der Aufruf zusätzlich `remote:use` und läuft über das Remote-Worker-Protokoll.
+
+### `shell_stop`
+
+Beendet eine persistente lokale oder Remote-Shell-Session.
+
+| Parameter | Typ | Erforderlich/default | Beschreibung |
+|---|---|---|---|
+| `session_id` | `string` | required |  |
+| `machine` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | required | Dieses Feld immer angeben. Verwenden Sie `null`, wenn keine logische Session aktiv ist; nach start/resume von `session_manage` den zurückgegebenen `active_run.run_id` übergeben und über MCP-Transport-Reconnects hinweg weiterverwenden. Nach explizitem resume/takeover den neuen Wert verwenden. |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+Wenn `machine` angegeben ist, benötigt der Aufruf zusätzlich `remote:use` und läuft über das Remote-Worker-Protokoll.
+
+### `shell_list`
+
+Listet persistente Shell-Sessions lokal oder auf einer Remote-Maschine.
+
+| Parameter | Typ | Erforderlich/default | Beschreibung |
+|---|---|---|---|
+| `machine` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | required | Dieses Feld immer angeben. Verwenden Sie `null`, wenn keine logische Session aktiv ist; nach start/resume von `session_manage` den zurückgegebenen `active_run.run_id` übergeben und über MCP-Transport-Reconnects hinweg weiterverwenden. Nach explizitem resume/takeover den neuen Wert verwenden. |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+Wenn `machine` angegeben ist, benötigt der Aufruf zusätzlich `remote:use` und läuft über das Remote-Worker-Protokoll.
+
+### `job_start`
+
+Startet einen getrackten lang laufenden Job lokal oder auf einer Remote-Maschine.
+
+| Parameter | Typ | Erforderlich/default | Beschreibung |
+|---|---|---|---|
+| `command` | `string` | required |  |
+| `cwd` | `string` | `"."` |  |
+| `name` | `string \| null` | `null` |  |
+| `purpose` | `string \| null` | `null` |  |
+| `explanation` | `string \| null` | `null` |  |
+| `machine` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | required | Dieses Feld immer angeben. Verwenden Sie `null`, wenn keine logische Session aktiv ist; nach start/resume von `session_manage` den zurückgegebenen `active_run.run_id` übergeben und über MCP-Transport-Reconnects hinweg weiterverwenden. Nach explizitem resume/takeover den neuen Wert verwenden. |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+Wenn `machine` angegeben ist, benötigt der Aufruf zusätzlich `remote:use` und läuft über das Remote-Worker-Protokoll.
+
+### `job_list`
+
+Listet getrackte Jobs lokal oder auf einer Remote-Maschine.
+
+| Parameter | Typ | Erforderlich/default | Beschreibung |
+|---|---|---|---|
+| `include_finished` | `boolean` | `true` |  |
+| `machine` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | required | Dieses Feld immer angeben. Verwenden Sie `null`, wenn keine logische Session aktiv ist; nach start/resume von `session_manage` den zurückgegebenen `active_run.run_id` übergeben und über MCP-Transport-Reconnects hinweg weiterverwenden. Nach explizitem resume/takeover den neuen Wert verwenden. |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+Wenn `machine` angegeben ist, benötigt der Aufruf zusätzlich `remote:use` und läuft über das Remote-Worker-Protokoll.
+
+### `job_tail`
+
+Liest aktuelle Ausgabe eines getrackten lokalen oder Remote-Jobs.
+
+| Parameter | Typ | Erforderlich/default | Beschreibung |
+|---|---|---|---|
+| `job_id` | `string` | required |  |
+| `lines` | `integer` | `200` |  |
+| `machine` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | required | Dieses Feld immer angeben. Verwenden Sie `null`, wenn keine logische Session aktiv ist; nach start/resume von `session_manage` den zurückgegebenen `active_run.run_id` übergeben und über MCP-Transport-Reconnects hinweg weiterverwenden. Nach explizitem resume/takeover den neuen Wert verwenden. |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+Wenn `machine` angegeben ist, benötigt der Aufruf zusätzlich `remote:use` und läuft über das Remote-Worker-Protokoll.
+
+### `job_stop`
+
+Stoppt einen getrackten lokalen oder Remote-Job.
+
+| Parameter | Typ | Erforderlich/default | Beschreibung |
+|---|---|---|---|
+| `job_id` | `string` | required |  |
+| `machine` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | required | Dieses Feld immer angeben. Verwenden Sie `null`, wenn keine logische Session aktiv ist; nach start/resume von `session_manage` den zurückgegebenen `active_run.run_id` übergeben und über MCP-Transport-Reconnects hinweg weiterverwenden. Nach explizitem resume/takeover den neuen Wert verwenden. |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+Wenn `machine` angegeben ist, benötigt der Aufruf zusätzlich `remote:use` und läuft über das Remote-Worker-Protokoll.
+
+### `job_retry`
+
+Startet einen gestoppten oder beendeten getrackten lokalen oder Remote-Job neu.
+
+| Parameter | Typ | Erforderlich/default | Beschreibung |
+|---|---|---|---|
+| `job_id` | `string` | required |  |
+| `purpose` | `string \| null` | `null` |  |
+| `explanation` | `string \| null` | `null` |  |
+| `machine` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | required | Dieses Feld immer angeben. Verwenden Sie `null`, wenn keine logische Session aktiv ist; nach start/resume von `session_manage` den zurückgegebenen `active_run.run_id` übergeben und über MCP-Transport-Reconnects hinweg weiterverwenden. Nach explizitem resume/takeover den neuen Wert verwenden. |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+Wenn `machine` angegeben ist, benötigt der Aufruf zusätzlich `remote:use` und läuft über das Remote-Worker-Protokoll.
+
+## Dateien und Transfer
+
+### `file_list`
+
+Listet Dateien und Verzeichnisse lokal oder auf einer Remote-Maschine.
+
+| Parameter | Typ | Erforderlich/default | Beschreibung |
+|---|---|---|---|
+| `path` | `string` | `"."` |  |
+| `recursive` | `boolean` | `false` |  |
+| `max_entries` | `integer` | `500` |  |
+| `machine` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | required | Dieses Feld immer angeben. Verwenden Sie `null`, wenn keine logische Session aktiv ist; nach start/resume von `session_manage` den zurückgegebenen `active_run.run_id` übergeben und über MCP-Transport-Reconnects hinweg weiterverwenden. Nach explizitem resume/takeover den neuen Wert verwenden. |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+Wenn `machine` angegeben ist, benötigt der Aufruf zusätzlich `remote:use` und läuft über das Remote-Worker-Protokoll.
+
+### `file_tree`
+
+Gibt einen kompakten Verzeichnisbaum lokal oder auf einer Remote-Maschine zurück.
+
+| Parameter | Typ | Erforderlich/default | Beschreibung |
+|---|---|---|---|
+| `cwd` | `string` | `"."` |  |
+| `depth` | `integer` | `3` |  |
+| `max_entries` | `integer` | `500` |  |
+| `machine` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | required | Dieses Feld immer angeben. Verwenden Sie `null`, wenn keine logische Session aktiv ist; nach start/resume von `session_manage` den zurückgegebenen `active_run.run_id` übergeben und über MCP-Transport-Reconnects hinweg weiterverwenden. Nach explizitem resume/takeover den neuen Wert verwenden. |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+Wenn `machine` angegeben ist, benötigt der Aufruf zusätzlich `remote:use` und läuft über das Remote-Worker-Protokoll.
+
+### `file_glob`
+
+Findet Pfade per Glob lokal oder auf einer Remote-Maschine.
+
+| Parameter | Typ | Erforderlich/default | Beschreibung |
+|---|---|---|---|
+| `pattern` | `string` | required |  |
+| `cwd` | `string` | `"."` |  |
+| `max_results` | `integer` | `500` |  |
+| `machine` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | required | Dieses Feld immer angeben. Verwenden Sie `null`, wenn keine logische Session aktiv ist; nach start/resume von `session_manage` den zurückgegebenen `active_run.run_id` übergeben und über MCP-Transport-Reconnects hinweg weiterverwenden. Nach explizitem resume/takeover den neuen Wert verwenden. |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+Wenn `machine` angegeben ist, benötigt der Aufruf zusätzlich `remote:use` und läuft über das Remote-Worker-Protokoll.
+
+### `file_grep`
+
+Durchsucht Dateiinhalte lokal oder auf einer Remote-Maschine.
+
+| Parameter | Typ | Erforderlich/default | Beschreibung |
+|---|---|---|---|
+| `query` | `string` | required |  |
+| `cwd` | `string` | `"."` |  |
+| `glob` | `string \| null` | `null` |  |
+| `regex` | `boolean` | `true` |  |
+| `case_sensitive` | `boolean` | `true` |  |
+| `max_results` | `integer \| null` | `null` |  |
+| `machine` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | required | Dieses Feld immer angeben. Verwenden Sie `null`, wenn keine logische Session aktiv ist; nach start/resume von `session_manage` den zurückgegebenen `active_run.run_id` übergeben und über MCP-Transport-Reconnects hinweg weiterverwenden. Nach explizitem resume/takeover den neuen Wert verwenden. |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+Wenn `machine` angegeben ist, benötigt der Aufruf zusätzlich `remote:use` und läuft über das Remote-Worker-Protokoll.
+
+### `file_read`
+
+Liest eine Datei oder Liste von Dateien lokal oder auf einer Remote-Maschine.
+
+| Parameter | Typ | Erforderlich/default | Beschreibung |
+|---|---|---|---|
+| `path` | `string \| array[string]` | required |  |
+| `start_line` | `integer \| null` | `null` |  |
+| `end_line` | `integer \| null` | `null` |  |
+| `binary_preview` | `string \| null` | `null` |  |
+| `binary_preview_bytes` | `integer` | `256` |  |
+| `machine` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | required | Dieses Feld immer angeben. Verwenden Sie `null`, wenn keine logische Session aktiv ist; nach start/resume von `session_manage` den zurückgegebenen `active_run.run_id` übergeben und über MCP-Transport-Reconnects hinweg weiterverwenden. Nach explizitem resume/takeover den neuen Wert verwenden. |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+Wenn `machine` angegeben ist, benötigt der Aufruf zusätzlich `remote:use` und läuft über das Remote-Worker-Protokoll.
+
+### `image_view`
+
+Zeigt PNG-, JPEG-, GIF- oder WebP-Dateien als nativen MCP-Bildinhalt lokal oder auf einer Remote-Maschine. Bei visueller Inspektion statt `file_read` verwenden. Remote-Bilder nutzen das bestehende Dateiübertragungsprotokoll, daher braucht der Worker keinen bildspezifischen RPC.
+
+| Parameter | Typ | Erforderlich/default | Beschreibung |
+|---|---|---|---|
+| `path` | `string` | required |  |
+| `machine` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | required | Dieses Feld immer angeben. Verwenden Sie `null`, wenn keine logische Session aktiv ist; nach start/resume von `session_manage` den zurückgegebenen `active_run.run_id` übergeben und über MCP-Transport-Reconnects hinweg weiterverwenden. Nach explizitem resume/takeover den neuen Wert verwenden. |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+Wenn `machine` angegeben ist, benötigt der Aufruf zusätzlich `remote:use` und läuft über das Remote-Worker-Protokoll.
+
+### `file_write`
+
+Schreibt eine UTF-8-Textdatei lokal oder auf einer Remote-Maschine.
+
+| Parameter | Typ | Erforderlich/default | Beschreibung |
+|---|---|---|---|
+| `path` | `string` | required |  |
+| `content` | `string` | required |  |
+| `overwrite` | `boolean` | `true` |  |
+| `purpose` | `string \| null` | `null` |  |
+| `explanation` | `string \| null` | `null` |  |
+| `machine` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | required | Dieses Feld immer angeben. Verwenden Sie `null`, wenn keine logische Session aktiv ist; nach start/resume von `session_manage` den zurückgegebenen `active_run.run_id` übergeben und über MCP-Transport-Reconnects hinweg weiterverwenden. Nach explizitem resume/takeover den neuen Wert verwenden. |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+Wenn `machine` angegeben ist, benötigt der Aufruf zusätzlich `remote:use` und läuft über das Remote-Worker-Protokoll.
+
+### `file_edit`
+
+Wendet einen oder mehrere exakte Text-Edits auf eine lokale oder Remote-Datei an. Jeder Edit enthält old, new und optional `replace_all`; old muss einschließlich Whitespace und Einrückung exakt übereinstimmen.
+
+| Parameter | Typ | Erforderlich/default | Beschreibung |
+|---|---|---|---|
+| `path` | `string` | required |  |
+| `edits` | `array[TextEdit]` | required |  |
+| `purpose` | `string \| null` | `null` |  |
+| `explanation` | `string \| null` | `null` |  |
+| `machine` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | required | Dieses Feld immer angeben. Verwenden Sie `null`, wenn keine logische Session aktiv ist; nach start/resume von `session_manage` den zurückgegebenen `active_run.run_id` übergeben und über MCP-Transport-Reconnects hinweg weiterverwenden. Nach explizitem resume/takeover den neuen Wert verwenden. |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+Wenn `machine` angegeben ist, benötigt der Aufruf zusätzlich `remote:use` und läuft über das Remote-Worker-Protokoll.
+
+### `file_delete`
+
+Löscht eine lokale oder Remote-Datei bzw. ein Verzeichnis. `recursive=false` löscht Dateien oder leere Verzeichnisse; für nicht leere Verzeichnisse ist `recursive=true` erforderlich und vorsichtig zu verwenden.
+
+| Parameter | Typ | Erforderlich/default | Beschreibung |
+|---|---|---|---|
+| `path` | `string` | required |  |
+| `recursive` | `boolean` | `false` |  |
+| `purpose` | `string \| null` | `null` |  |
+| `explanation` | `string \| null` | `null` |  |
+| `machine` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | required | Dieses Feld immer angeben. Verwenden Sie `null`, wenn keine logische Session aktiv ist; nach start/resume von `session_manage` den zurückgegebenen `active_run.run_id` übergeben und über MCP-Transport-Reconnects hinweg weiterverwenden. Nach explizitem resume/takeover den neuen Wert verwenden. |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+Wenn `machine` angegeben ist, benötigt der Aufruf zusätzlich `remote:use` und läuft über das Remote-Worker-Protokoll.
+
+### `file_patch`
+
+Prüft und wendet einen Unified Diff oder Apply-Patch-Envelope lokal oder remote an.
+
+| Parameter | Typ | Erforderlich/default | Beschreibung |
+|---|---|---|---|
+| `patch` | `string` | required |  |
+| `cwd` | `string` | `"."` |  |
+| `purpose` | `string \| null` | `null` |  |
+| `explanation` | `string \| null` | `null` |  |
+| `machine` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | required | Dieses Feld immer angeben. Verwenden Sie `null`, wenn keine logische Session aktiv ist; nach start/resume von `session_manage` den zurückgegebenen `active_run.run_id` übergeben und über MCP-Transport-Reconnects hinweg weiterverwenden. Nach explizitem resume/takeover den neuen Wert verwenden. |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+Wenn `machine` angegeben ist, benötigt der Aufruf zusätzlich `remote:use` und läuft über das Remote-Worker-Protokoll.
+
+### `remote_transfer`
+
+Startet einen verfolgten Job, der eine Datei oder ein Verzeichnis zwischen Controller und Remote-Maschinen kopiert. Remote-Uploads verwenden fortsetzbare Raw-Binary-Chunks; verwalten Sie den Transfer mit `job_list`, `job_tail`, `job_stop` und `job_retry`.
+
+| Parameter | Typ | Erforderlich/default | Beschreibung |
+|---|---|---|---|
+| `source_path` | `string` | required |  |
+| `destination_path` | `string` | required |  |
+| `source_machine` | `string \| null` | `null` |  |
+| `destination_machine` | `string \| null` | `null` |  |
+| `overwrite` | `boolean` | `false` |  |
+| `chunk_size` | `integer \| null` | `null` |  |
+| `purpose` | `string \| null` | `null` |  |
+| `explanation` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | required | Dieses Feld immer angeben. Verwenden Sie `null`, wenn keine logische Session aktiv ist; nach start/resume von `session_manage` den zurückgegebenen `active_run.run_id` übergeben und über MCP-Transport-Reconnects hinweg weiterverwenden. Nach explizitem resume/takeover den neuen Wert verwenden. |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+Mindestens eines von `source_machine` und `destination_machine` muss angegeben werden. Ausgelassene Endpoints beziehen sich auf den Controller-Workspace; die Quelle kann Datei oder Verzeichnis sein.
+
+### `link_create`
+
+Erstellt eine temporäre browserzugängliche URL für eine lokale Datei. Standardmäßig wird als Attachment heruntergeladen; `inline=true` rendert direkt im Browser oder als Markdown-Bild. Links sind öffentliche Bearer-URLs, geschützt durch High-Entropy-Token, TTL, optionales Download-Count-Limit und expliziten Widerruf.
+
+| Parameter | Typ | Erforderlich/default | Beschreibung |
+|---|---|---|---|
+| `path` | `string` | required |  |
+| `ttl_s` | `integer \| null` | `null` |  |
+| `filename` | `string \| null` | `null` |  |
+| `max_downloads` | `integer \| null` | `null` |  |
+| `inline` | `boolean` | `false` |  |
+| `session_run_id` | `string \| null` | required | Dieses Feld immer angeben. Verwenden Sie `null`, wenn keine logische Session aktiv ist; nach start/resume von `session_manage` den zurückgegebenen `active_run.run_id` übergeben und über MCP-Transport-Reconnects hinweg weiterverwenden. Nach explizitem resume/takeover den neuen Wert verwenden. |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+### `link_list`
+
+Listet erzeugte lokale Datei-Download-URLs.
+
+| Parameter | Typ | Erforderlich/default | Beschreibung |
+|---|---|---|---|
+| `include_expired` | `boolean` | `false` |  |
+| `session_run_id` | `string \| null` | required | Dieses Feld immer angeben. Verwenden Sie `null`, wenn keine logische Session aktiv ist; nach start/resume von `session_manage` den zurückgegebenen `active_run.run_id` übergeben und über MCP-Transport-Reconnects hinweg weiterverwenden. Nach explizitem resume/takeover den neuen Wert verwenden. |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+### `link_revoke`
+
+Widerruft eine erzeugte lokale Datei-Download-URL.
+
+| Parameter | Typ | Erforderlich/default | Beschreibung |
+|---|---|---|---|
+| `token` | `string` | required |  |
+| `session_run_id` | `string \| null` | required | Dieses Feld immer angeben. Verwenden Sie `null`, wenn keine logische Session aktiv ist; nach start/resume von `session_manage` den zurückgegebenen `active_run.run_id` übergeben und über MCP-Transport-Reconnects hinweg weiterverwenden. Nach explizitem resume/takeover den neuen Wert verwenden. |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+## Dynamisches MCP-Gateway
+
+### `mcp_manage`
+
+Registriert, listet, liest, aktiviert, deaktiviert, aktualisiert, entfernt oder ändert isolierte Environment/Headers dynamischer MCP-Server. Transport `stdio` verwendet command/args/cwd, `streamable_http` verwendet url. Secret-Env/Header-Werte werden privat persistiert und nie zurückgegeben.
+
+| Parameter | Typ | Erforderlich/default | Beschreibung |
+|---|---|---|---|
+| `action` | `string` | required |  |
+| `name` | `string \| null` | `null` |  |
+| `transport` | `string \| null` | `null` |  |
+| `command` | `string \| null` | `null` |  |
+| `args` | `array[string] \| null` | `null` |  |
+| `cwd` | `string \| null` | `null` |  |
+| `url` | `string \| null` | `null` |  |
+| `env` | `object \| null` | `null` |  |
+| `headers` | `object \| null` | `null` |  |
+| `enabled` | `boolean` | `true` |  |
+| `overwrite` | `boolean` | `false` |  |
+| `refresh` | `boolean` | `true` |  |
+| `key` | `string \| null` | `null` |  |
+| `value` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | required | Dieses Feld immer angeben. Verwenden Sie `null`, wenn keine logische Session aktiv ist; nach start/resume von `session_manage` den zurückgegebenen `active_run.run_id` übergeben und über MCP-Transport-Reconnects hinweg weiterverwenden. Nach explizitem resume/takeover den neuen Wert verwenden. |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+### `mcp_tool_search`
+
+Durchsucht gecachte kompakte Tool-Zusammenfassungen aktivierter dynamischer MCP-Server. Dynamische Tools bleiben aus `tools/list` dieses Servers heraus; verwenden Sie den gelieferten Namen `<server>:<tool>` mit `mcp_tool_inspect`, bevor Sie es aufrufen.
+
+| Parameter | Typ | Erforderlich/default | Beschreibung |
+|---|---|---|---|
+| `query` | `string` | `""` |  |
+| `server` | `string \| null` | `null` |  |
+| `limit` | `integer` | `20` |  |
+| `session_run_id` | `string \| null` | required | Dieses Feld immer angeben. Verwenden Sie `null`, wenn keine logische Session aktiv ist; nach start/resume von `session_manage` den zurückgegebenen `active_run.run_id` übergeben und über MCP-Transport-Reconnects hinweg weiterverwenden. Nach explizitem resume/takeover den neuen Wert verwenden. |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+### `mcp_tool_inspect`
+
+Gibt das vollständige gecachte Schema eines dynamischen MCP-Tools namens `<server>:<tool>` zurück. Refresh den Server mit `mcp_manage`, wenn der Cache stale ist.
+
+| Parameter | Typ | Erforderlich/default | Beschreibung |
+|---|---|---|---|
+| `name` | `string` | required |  |
+| `session_run_id` | `string \| null` | required | Dieses Feld immer angeben. Verwenden Sie `null`, wenn keine logische Session aktiv ist; nach start/resume von `session_manage` den zurückgegebenen `active_run.run_id` übergeben und über MCP-Transport-Reconnects hinweg weiterverwenden. Nach explizitem resume/takeover den neuen Wert verwenden. |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+### `mcp_tool_call`
+
+Ruft ein gecachtes dynamisches MCP-Tool namens `<server>:<tool>` auf. Zuerst mit `mcp_tool_search` entdecken und mit `mcp_tool_inspect` das Schema prüfen. Externe MCP-Verbindungen werden nur für die Dauer dieses Aufrufs geöffnet.
+
+| Parameter | Typ | Erforderlich/default | Beschreibung |
+|---|---|---|---|
+| `name` | `string` | required |  |
+| `arguments` | `object \| null` | `null` |  |
+| `timeout_s` | `integer \| null` | `null` |  |
+| `session_run_id` | `string \| null` | required | Dieses Feld immer angeben. Verwenden Sie `null`, wenn keine logische Session aktiv ist; nach start/resume von `session_manage` den zurückgegebenen `active_run.run_id` übergeben und über MCP-Transport-Reconnects hinweg weiterverwenden. Nach explizitem resume/takeover den neuen Wert verwenden. |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+## Browser-Automatisierung
+
+### `browser_session`
+
+Startet, listet, schließt oder bereinigt persistente High-Level-Browser-Sessions lokal oder remote. `start` kann URL öffnen, persistentes `profile_id` wiederverwenden oder `storage_state_path` laden; `close` kann Storage State speichern.
+
+| Parameter | Typ | Erforderlich/default | Beschreibung |
+|---|---|---|---|
+| `action` | `string` | required |  |
+| `session_id` | `string \| null` | `null` |  |
+| `browser` | `string` | `"chromium"` |  |
+| `headless` | `boolean` | `true` |  |
+| `width` | `integer` | `1440` |  |
+| `height` | `integer` | `1000` |  |
+| `url` | `string \| null` | `null` |  |
+| `wait_until` | `string` | `"domcontentloaded"` |  |
+| `profile_id` | `string \| null` | `null` |  |
+| `storage_state_path` | `string \| null` | `null` |  |
+| `save_storage_state_path` | `string \| null` | `null` |  |
+| `machine` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | required | Dieses Feld immer angeben. Verwenden Sie `null`, wenn keine logische Session aktiv ist; nach start/resume von `session_manage` den zurückgegebenen `active_run.run_id` übergeben und über MCP-Transport-Reconnects hinweg weiterverwenden. Nach explizitem resume/takeover den neuen Wert verwenden. |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+Wenn `machine` angegeben ist, benötigt der Aufruf zusätzlich `remote:use` und läuft über das Remote-Worker-Protokoll.
+
+### `browser_snapshot`
+
+Erfasst eine persistente Browser-Seite mit Title, URL, begrenztem sichtbarem Text, interaktiven Elementen mit stabilen kurzen Refs wie `e1`, aktuellen Page-/Network-Fehlern und optionalem Screenshot-Pfad. Refs direkt als `browser_act`-Targets verwenden, bis Navigation oder neuer Snapshot erfolgt.
+
+| Parameter | Typ | Erforderlich/default | Beschreibung |
+|---|---|---|---|
+| `session_id` | `string` | required |  |
+| `page_id` | `string \| null` | `null` |  |
+| `include_text` | `boolean` | `true` |  |
+| `screenshot` | `boolean` | `true` |  |
+| `full_page` | `boolean` | `false` |  |
+| `max_text_chars` | `integer` | `100000` |  |
+| `max_elements` | `integer` | `100` |  |
+| `machine` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | required | Dieses Feld immer angeben. Verwenden Sie `null`, wenn keine logische Session aktiv ist; nach start/resume von `session_manage` den zurückgegebenen `active_run.run_id` übergeben und über MCP-Transport-Reconnects hinweg weiterverwenden. Nach explizitem resume/takeover den neuen Wert verwenden. |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+Wenn `machine` angegeben ist, benötigt der Aufruf zusätzlich `remote:use` und läuft über das Remote-Worker-Protokoll.
+
+### `browser_act`
+
+Führt strukturierte Aktionen in einer persistenten Browser-Session aus: navigate, new_page, close_page, click, fill, type, select, press, check, uncheck, hover, wait, wait_for_text und wait_for_url. `target` kann eine `browser_snapshot`-Ref wie `e1` oder CSS-Selector sein. `browser_run_script` nur verwenden, wenn diese High-Level-Aktionen nicht reichen.
+
+| Parameter | Typ | Erforderlich/default | Beschreibung |
+|---|---|---|---|
+| `session_id` | `string` | required |  |
+| `actions` | `array[object]` | required |  |
+| `page_id` | `string \| null` | `null` |  |
+| `timeout_ms` | `integer` | `30000` |  |
+| `machine` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | required | Dieses Feld immer angeben. Verwenden Sie `null`, wenn keine logische Session aktiv ist; nach start/resume von `session_manage` den zurückgegebenen `active_run.run_id` übergeben und über MCP-Transport-Reconnects hinweg weiterverwenden. Nach explizitem resume/takeover den neuen Wert verwenden. |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+Wenn `machine` angegeben ist, benötigt der Aufruf zusätzlich `remote:use` und läuft über das Remote-Worker-Protokoll.
+
+### `browser_run_script`
+
+Führt ein vollständiges Python-Playwright-Skript lokal oder auf einer Remote-Maschine aus.
+
+| Parameter | Typ | Erforderlich/default | Beschreibung |
+|---|---|---|---|
+| `script` | `string` | required |  |
+| `cwd` | `string` | `"."` |  |
+| `timeout_s` | `integer` | `60` |  |
+| `machine` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | required | Dieses Feld immer angeben. Verwenden Sie `null`, wenn keine logische Session aktiv ist; nach start/resume von `session_manage` den zurückgegebenen `active_run.run_id` übergeben und über MCP-Transport-Reconnects hinweg weiterverwenden. Nach explizitem resume/takeover den neuen Wert verwenden. |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+Wenn `machine` angegeben ist, benötigt der Aufruf zusätzlich `remote:use` und läuft über das Remote-Worker-Protokoll.
+
+## Remote-Worker-Administration
+
+### `remote_manage`
+
+Verwaltet Remote Workers mit action=invite, list, revoke oder rename. invite akzeptiert name/workdir/ttl_s; revoke benötigt machine; rename benötigt machine und new_name.
+
+| Parameter | Typ | Erforderlich/default | Beschreibung |
+|---|---|---|---|
+| `action` | `string` | required |  |
+| `name` | `string \| null` | `null` |  |
+| `workdir` | `string \| null` | `null` |  |
+| `ttl_s` | `integer \| null` | `null` |  |
+| `machine` | `string \| null` | `null` |  |
+| `new_name` | `string \| null` | `null` |  |
+| `session_run_id` | `string \| null` | required | Dieses Feld immer angeben. Verwenden Sie `null`, wenn keine logische Session aktiv ist; nach start/resume von `session_manage` den zurückgegebenen `active_run.run_id` übergeben und über MCP-Transport-Reconnects hinweg weiterverwenden. Nach explizitem resume/takeover den neuen Wert verwenden. |
+
+OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
+
+Wenn `machine` angegeben ist, benötigt der Aufruf zusätzlich `remote:use` und läuft über das Remote-Worker-Protokoll.

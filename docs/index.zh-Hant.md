@@ -1,3 +1,4 @@
+<!-- i18n-source-sha256: b999ae6985930651e74b974b12109889360442811d6eeb306e6fa39754dbc173 -->
 <div class="hero-shell" markdown>
 <span class="hero-eyebrow">ChatGPT-compatible MCP control plane</span>
 
@@ -31,7 +32,7 @@ Docker、VS Code 擴展、二進制、Python 和 stdio 是運行時；ChatGPT �
 
 ## 它提供什麼
 
-`local-shell-mcp` 會把一個受控的本地或容器工作區暴露給 ChatGPT 和其它 MCP 客戶端。它提供 Shell、持久 Shell、文件系統、搜索、補丁、Git、Playwright、審計、持久邏輯會話與可選 Goal plan、臨時文件鏈接和遠程節點工具，並支持 ChatGPT 兼容的 MCP over HTTP 與 OAuth。
+`local-shell-mcp` 會把一個受控的本地或容器工作區暴露給 ChatGPT 和其他 MCP Client。它提供 Shell、持久 Shell、檔案系統、搜尋、patch、Git、Playwright、稽核、帶可選 Goal Plan 的持久 logical Session、暫時檔案連結和遠端節點工具，並支援 ChatGPT 相容的 MCP over HTTP 與 OAuth。
 
 適用場景包括：檢查倉庫、運行測試、修改代碼、操作 Git、採集網頁證據、生成可下載產物，或者控制只能主動連接控制端的遠程機器。
 
@@ -54,6 +55,7 @@ Docker、VS Code 擴展、二進制、Python 和 stdio 是運行時；ChatGPT �
 | 第一次部署給 ChatGPT 使用 | [快速開始](getting-started/quickstart.md) | Docker Compose、OAuth 和 `/mcp` 基礎路徑 |
 | 選擇運行時層 | [運行時選擇](guides/deployment.md) | 把 Docker、VS Code、二進制、Python 和 stdio 與客戶端接入分開說明 |
 | 把 ChatGPT 作爲客戶端接入 | [ChatGPT 連接器](getting-started/chatgpt-connector.md) | 端點、OAuth、首次安全提示和工具發現 |
+| 把 LSM 接入 DeepSeek Harness | [DeepSeek Harness 外掛](clients/deepseek-harness.md) | 將本 repository 作為 DSH bundle 安裝，同時保留完整 LSM 工具與 remote worker 能力 |
 | 從 VS Code 啓動運行時 | [VS Code 擴展運行時](installation/vscode-extension.md) | 編輯器啓動、設置和主機安全邊界 |
 | 學習如何使用工具集 | [使用模式](guides/usage-patterns.md) | 提示詞模板和工具選擇建議 |
 | 理解所有工具 | [工具參考](reference/tools.md) | 每個工具的用途、參數、返回值、組合方式和注意事項 |
@@ -68,7 +70,7 @@ Docker、VS Code 擴展、二進制、Python 和 stdio 是運行時；ChatGPT �
 | Shell 和 Python | `run_shell`, `run_python`, `shell_start` | 構建、測試、腳本、長時間進程 |
 | 文件和搜索 | `file_tree`, `file_grep`, `file_read`, `file_patch` | 倉庫檢查和精確修改 |
 | Git | `run_shell`, `run_shell`, `run_shell`, `run_shell` | 可審查的源碼管理流程 |
-| Session 與 Goal | `session_manage`, `plan_manage` | 持久任務繼承、進度彙報和可選 Goal 模式 |
+| Session 與 Goal | `session_manage`, `plan_manage` | 持久任務交接、進度回報與可選 Goal mode |
 | 瀏覽器 | `browser_session`, `browser_snapshot`, `browser_act`、`browser_run_script` | 持久互動、UI 檢查、截圖、渲染文檔、頁面文字 |
 | 文件鏈接 | `link_create`, `link_revoke` | 從聊天中下載生成產物 |
 | 遠程節點 | `remote_manage`, `run_shell`, `remote_transfer` | NAT、防火牆或集羣登錄流程後的機器 |

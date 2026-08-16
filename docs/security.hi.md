@@ -1,12 +1,8 @@
+<!-- i18n-source-sha256: 1f30fc9935125c84fb0838d17ec894d78aaa6253fe3903356414aac716ba2adc -->
 # सुरक्षा
 
-Public deployment में OAuth सक्षम रखें और Docker socket, host root या long-lived credentials mount न करें।
+सार्वजनिक डिप्लॉयमेंट के लिए OAuth का उपयोग करें। `LOCAL_SHELL_MCP_OAUTH_ADMIN_PIN` और `LOCAL_SHELL_MCP_OAUTH_JWT_SECRET` को मजबूत रखें और गोपनीय बनाए रखें।
 
-Mandatory rules:
+डिफ़ॉल्ट रूप से, पथ संबंधी कार्रवाइयाँ workspace तक सीमित रहती हैं और संवेदनशील path fragments ब्लॉक किए जाते हैं। Full-container मोड अंतर्निहित workspace और path प्रतिबंधों को निष्क्रिय कर देता है; इसका उपयोग केवल disposable container या VM में करें।
 
-1. Keep OAuth enabled for public deployments.
-2. Do not mount `/var/run/docker.sock`.
-3. Do not mount the host root filesystem.
-4. Do not expose unauthenticated MCP tools on the public internet.
-5. Treat file links and credential volumes as sensitive.
-6. Use disposable containers or VMs when granting broad authority.
+बनाए गए फ़ाइल डाउनलोड लिंक सार्वजनिक bearer URL होते हैं। वे high-entropy token, TTL, वैकल्पिक download-count limit, वैकल्पिक size limit और revocation पर निर्भर करते हैं।

@@ -1,21 +1,20 @@
-# DeepSeek Harness（DSH）
+<!-- i18n-source-sha256: 6fa729155fcc9e524eb3f8081b80d40ceb72c59f5ece4b311809350005468851 -->
+# DeepSeek Harness (DSH)
 
-`local-shell-mcp` 可以直接安装到 DeepSeek Harness Web profile。仓库内置一层面向 DSH 的桥接：保留完整 LSM 工具面，把每个 DSH Session 稳定映射到 v4 Logical Session，并把 **Live Workspace** 作为 DSH 原生 `conversation.view` 页面挂入会话。
+`local-shell-mcp` 可以直接安装到 DeepSeek Harness Web profile。仓库自带 DSH-aware bridge：保留完整 LSM 工具面，把每个 DSH Session 映射到稳定的 v4 logical-session identity，并把 **Live Workspace** 作为原生 DSH conversation view 注入。执行状态仍由 LSM 统一管理，包括本地/远程机器、logical Session 与 Goal Plan、持久终端、job、浏览器 session、Dynamic MCP、文件链接、审计数据和 Live Workspace timeline。
 
-执行状态仍由 LSM 负责：本机/远程机器、Logical Session 与 Goal Plan、持久终端、Jobs、Browser Session、Dynamic MCP、文件链接、Audit 和 Live Workspace timeline 都只有 LSM controller 这一份权威状态。
+## 推荐拓扑
 
-## 推荐部署结构
-
-推荐 DSH 和 LSM 直接运行在同一台机器：
+推荐让 DSH 与 LSM 直接运行在同一台机器上。每个 DSH Session 使用独立的 LSM MCP connection，并默认连接 `127.0.0.1:8765/mcp`。
 
 ```text
 DSH Web
   |
-  | 每个 DSH Session 一条独立 LSM MCP 连接
+  | one LSM MCP connection per DSH Session
   | 127.0.0.1:8765/mcp
   v
 local-shell-mcp :8765
-  |-- local 执行 = 运行 LSM 的这台环境
+  |-- local execution = this LSM host
   |-- /mcp
   |-- /remote/*
   |-- /ui
@@ -24,9 +23,7 @@ local-shell-mcp :8765
   +--> Remote Workers
 ```
 
-这种部署下，**运行 LSM 的环境就是 LSM 的 `local`**。如果 LSM 自己运行在 Docker 容器中，那么 `local` 指该容器，而不会自动变成宿主机上的 DSH 环境。
-
-LSM 默认监听 `0.0.0.0:8765`，而 DSH bundle 默认通过 `127.0.0.1:8765/mcp` 连接。配置好网络、防火墙、公开 URL 和认证后，同一个 LSM controller 仍可供 Remote Worker 和其它外部客户端访问。
+在这种布局里，运行 LSM 的机器就是 LSM 的 `local` target；如果 LSM 本身在容器中，`local` 指容器而不会自动指向 DSH host。LSM 默认监听 `0.0.0.0:8765`，DSH bundle 默认走 loopback；只要正确配置网络、防火墙、public URL 和认证，同一 controller 也能供 Remote Workers 与其它外部 client 使用。
 
 ## 安装
 
@@ -36,19 +33,19 @@ LSM 默认监听 `0.0.0.0:8765`，而 DSH bundle 默认通过 `127.0.0.1:8765/mc
 local-shell-mcp --mode mcp
 ```
 
-然后安装本仓库到 DSH Web profile：
+然后把本 repository 安装到 DSH Web profile：
 
 ```bash
 dsh plugin --profile web add 'github:fwerkor/local-shell-mcp#main'
 ```
 
-生产环境建议固定到经过审查的 release tag 或 commit。本地开发 checkout 可直接：
+生产环境应把 Git spec 固定到已审核的 release tag 或 commit；从 checkout 开发时可直接安装当前目录：
 
 ```bash
 dsh plugin --profile web add .
 ```
 
-bundle 会从 `cordis.patch.yml` 加载 `local-shell-mcp-dsh`。模型看到的 LSM 工具使用 DSH 常规 MCP 命名，例如：
+bundle 通过 `cordis.patch.yml` 加载 `local-shell-mcp-dsh`。DSH 会在普通 MCP namespace 下看到面向模型的完整 LSM 工具，例如：
 
 ```text
 mcp__lsm__run_shell
@@ -62,45 +59,35 @@ mcp__lsm__plan_manage
 ...
 ```
 
-该 bridge **不会主动裁剪 LSM 的模型工具面**，Remote Worker 能力也完整保留。内部的 `live_workspace_reconnect` 是 app-only 工具，只由 bridge 使用，不暴露给模型。如果某个 DSH 部署希望减少模型可见工具，应在更后的 DSH layer 使用 `ctx.tools.restrict()`，而不是修改 LSM bundle。
+bridge 有意保留完整的 model-facing LSM catalog，包括 Remote Worker 能力。内部 app-only `live_workspace_reconnect` 只供 bridge 使用，不暴露给模型。若部署希望减少模型工具集，应在后续 DSH 层使用 `ctx.tools.restrict()`，而不是从 LSM bundle 删除能力。
 
-## DSH Session 如何绑定 v4 Logical Session
+## DSH Session 与 LSM logical Session 绑定
 
-实现直接建立在 v4 Logical Session runtime 上。每个 DSH Session 都拥有独立的上游 Streamable HTTP MCP client，同时 bridge 会根据 DSH Session id 计算一个不透明、稳定的 session-affinity 值发送给 LSM。
-
-因此身份链是：
+集成基于 v4 logical-session runtime。每个 DSH Session 都有自己的 upstream Streamable HTTP MCP client；bridge 还会根据 DSH Session id 生成不透明且确定性的 session-affinity 值，从而形成以下稳定身份链：
 
 ```text
 DSH Session A
-  -> 稳定 affinity A
+  -> stable LSM session affinity A
   -> v4 MCP session key A
-  -> LSM Logical Session / active run A
+  -> LSM logical Session / active run A
   -> Live Workspace A
 
 DSH Session B
-  -> 稳定 affinity B
+  -> stable LSM session affinity B
   -> v4 MCP session key B
-  -> LSM Logical Session / active run B
+  -> LSM logical Session / active run B
   -> Live Workspace B
 ```
 
-因此多个 DSH 会话的工具 Activity 不会混到同一个 Live Workspace timeline。即使重启 DSH，新建的 MCP transport 仍使用相同 affinity；只要 LSM controller 仍持有该 Logical Session，原来的 Logical Session 和 active run 会继续绑定，不需要用户额外手动接管。
-
-bridge 还会定期 ping 活跃的 MCP client，避免 LSM 正常的 MCP idle-session 清理破坏长时间闲置的 DSH 会话。
+不同 DSH conversation 的工具活动因此不会合并进同一个 Live Workspace timeline。DSH 重启后会用相同 affinity 重建 MCP transport，所以只要 LSM controller 仍拥有该 Session，原有 v4 logical Session 和 active run 会继续附着。bridge 还会定期 ping 活跃 MCP client，避免 LSM 的正常 idle-session cleanup 破坏长生命周期 DSH conversation。
 
 ## DSH 内的 Live Workspace
 
-浏览器侧插件会给 `conversation.view` 增加 **Live Workspace** 页面。它直接复用 v4 已有的 Live Workspace 实现，不复制第二套 UI 状态系统。
+DSH browser plugin 会向 `conversation.view` 添加 **Live Workspace**，直接复用现有 v4 Live Workspace，而不维护第二套 UI/state model。该 view 按当前 DSH Session 隔离，展示对应 LSM logical Session、Plan/Goal state、Activity、终端、文件、diff、jobs、remotes 和 audit；**Ask** 与 Goal 自动续跑会回到同一 DSH conversation。Live Workspace credential 由 DSH host 通过该 Session 自己的 LSM MCP connection 在服务端获取，不会放进 DSH conversation 或模型可见 tool result。
 
-页面按当前 DSH Session 隔离，能看到对应的 LSM Logical Session、Plan/Goal、Activity、Terminal、Files、Diff、Jobs、Remotes 和 Audit。Live Workspace 中的 **Ask** 以及 Goal 自动续跑消息，也会回到当前这一个 DSH conversation。
+## 为什么使用 HTTP 而不是 stdio
 
-Live Workspace 凭据由 DSH Host 使用该 Session 自己的 LSM MCP 连接在服务端获取；token 不进入 DSH 对话，也不会作为模型可见工具结果暴露。
-
-## 为什么使用 HTTP，而不是 stdio
-
-Remote Worker 不只有 MCP 工具调用。它还需要 controller 的 `/remote/*` HTTP 路由完成注册、轮询、心跳、结果回传和文件传输。仅启动一个 stdio LSM 子进程既无法保留这些服务，又会产生第二份 controller 状态。
-
-连接已经运行的 LSM HTTP 服务，可以让 Remote Worker、Browser 状态、Jobs、Dynamic MCP、Audit、文件链接、Logical Session 和 Live Workspace 始终只有一个权威 controller。
+Remote Workers 不只依赖 MCP tools，还需要 controller 的 `/remote/*` HTTP routes 完成注册、polling、heartbeat、结果回传和 transfer traffic。stdio-only child process 会破坏这条 service plane，并产生第二个 controller state domain。复用已经运行的 LSM HTTP service，可让 Remote Workers、browser state、jobs、Dynamic MCP、audit、file links、logical Sessions 和 Live Workspace 始终由同一个 authority 管理。
 
 ## 配置
 
@@ -108,15 +95,13 @@ DSH Host bridge 支持以下环境变量：
 
 | 变量 | 默认值 | 用途 |
 |---|---|---|
-| `DSH_LSM_MCP_URL` | `http://127.0.0.1:8765/mcp` | DSH Host 使用的 LSM Streamable HTTP MCP 地址 |
-| `DSH_LSM_AUTHORIZATION` | 未设置 | 可选的完整 `Authorization` 请求头，例如 `Bearer ...` |
-| `DSH_LSM_TOOL_CALL_TIMEOUT_MS` | `120000` | 单次工具调用超时，单位毫秒 |
-| `DSH_LSM_KEEPALIVE_INTERVAL_MS` | `30000` | 保持每个 Session MCP identity 的 ping 周期；最小 5000 ms |
-| `DSH_LSM_BROWSER_URL` | 未设置 | 当浏览器访问 LSM 的地址与 DSH Host 连接 MCP 的地址不同，用它指定浏览器可访问的 LSM origin |
+| `DSH_LSM_MCP_URL` | `http://127.0.0.1:8765/mcp` | DSH 使用的 LSM Streamable HTTP MCP endpoint。 |
+| `DSH_LSM_AUTHORIZATION` | unset | 可选的完整 `Authorization` header，例如 `Bearer ...`。 |
+| `DSH_LSM_TOOL_CALL_TIMEOUT_MS` | `120000` | 单次 tool call timeout，单位毫秒。 |
+| `DSH_LSM_KEEPALIVE_INTERVAL_MS` | `30000` | 用于保持长生命周期 per-Session MCP identity 的 ping 间隔；最小 5000 ms。 |
+| `DSH_LSM_BROWSER_URL` | unset | 当浏览器可访问的 LSM origin 与 Host-side MCP origin 不同时使用。 |
 
-同机部署一般不需要额外认证头，因为 LSM 默认允许配置范围内的 localhost auth bypass。不要把未认证的 LSM 服务直接暴露到公网。
-
-连接受保护的远程 LSM 时：
+同机部署通常不需要 authorization header，因为 LSM 默认启用 localhost auth bypass；但不要把未认证的 LSM 服务暴露到公网。连接受保护的远程 LSM controller 时可设置 endpoint 与 bearer token：
 
 ```bash
 export DSH_LSM_MCP_URL='https://lsm.example.com/mcp'
@@ -124,47 +109,41 @@ export DSH_LSM_AUTHORIZATION='Bearer <token>'
 dsh --profile web
 ```
 
-bridge 可以发送固定的上游请求头，但不会代替 DSH 运行交互式 OAuth 授权和 refresh token 流程。
+bridge 只发送固定 upstream headers，不代表 DSH 执行交互式 OAuth authorization/refresh flow。
 
-### DSH Web 运行在远程机器时
+### 远程 DSH Web 浏览器
 
-`DSH_LSM_MCP_URL` 是 **DSH Host 进程**访问的地址；Live Workspace 的 API 请求则由用户浏览器发起。如果 DSH 部署在远端，而 LSM 返回的 `127.0.0.1` 对用户浏览器不可达，应显式配置：
+`DSH_LSM_MCP_URL` 由 DSH **Host** process 解析，但 Live Workspace API request 运行在用户浏览器里。如果 DSH 远程托管，而 LSM 返回的 loopback URL 对浏览器不可达，就配置浏览器可达的 LSM origin：
 
 ```bash
 export DSH_LSM_BROWSER_URL='https://lsm.example.com'
 ```
 
-浏览器请求仍使用 Live Workspace token 做授权。
+Live Workspace token 仍负责授权这些 browser API request。
 
 ## Remote Workers
 
-Remote Worker 能力在 DSH 中完整保留。`mcp__lsm__remote_manage`、`mcp__lsm__remote_transfer`，以及带 `machine` 参数的普通 LSM 工具，都会使用同一个 controller 和同一份 Remote Worker 状态。
+通过 DSH 仍可完整使用 Remote Worker mode。`mcp__lsm__remote_manage`、`mcp__lsm__remote_transfer` 以及带 `machine` 参数的普通 LSM 工具都使用与其它 LSM client 相同的 controller 和 remote-worker state。若 worker 从 controller host 外部连接，按通常方式配置 LSM public URL 和网络暴露即可；DSH 自己仍可继续使用 `127.0.0.1:8765/mcp`。
 
-如果 worker 从 controller 外部连接，只需照普通 LSM 部署配置 public URL 和网络暴露；DSH 自己仍然可以继续走 `127.0.0.1:8765/mcp`。
+## 生命周期与故障行为
 
-## 生命周期与故障语义
-
-bundle 不会启动第二个 LSM。DSH 可以在 LSM 尚未上线时启动：catalog connection 会按退避策略重连，LSM 可用后再同步工具目录。
-
-对于一次结果不确定的 transport failure，bridge **不会自动重放模型工具调用**。原因是 Shell、文件或 Remote 操作可能已经执行成功，盲目重放会造成二次执行。稳定 session-affinity 和 keepalive 负责处理正常的 MCP transport 重建与长时间空闲，而真正替换整个 LSM controller 时，则按该部署本身的 Durable Session 恢复规则处理。
-
-移除插件只会删除 DSH 一侧的集成：
+bundle 不会再启动一个 LSM process。即使启动时 LSM 不可用也没关系：catalog connection 会按 backoff 重连，并在 LSM 出现后同步 tool catalog。模型 tool call 在不明确的 transport failure 后不会自动 replay，因为 mutating shell/file/remote call 重放可能执行两次。稳定 affinity key 与 keepalive 负责普通 MCP transport 重建和 idle period；真正替换 LSM controller 时仍遵循该部署正常的 durable Session recovery 规则。移除 plugin 只删除 DSH-side integration：
 
 ```bash
 dsh plugin --profile web remove local-shell-mcp-dsh
 ```
 
-不会停止 LSM。
+它不会停止 LSM。
 
 ## 验证安装
 
-先检查 DSH 合成配置：
+检查组合后的 DSH profile：
 
 ```bash
 dsh --profile web --dump-config
 ```
 
-应看到类似：
+输出应包含类似 `id: local-shell-mcp`、`name: local-shell-mcp-dsh`、`url: http://127.0.0.1:8765/mcp` 的条目。LSM 在线后，DSH 应暴露如下 `mcp__lsm__*` 工具：
 
 ```text
 id: local-shell-mcp
@@ -172,7 +151,7 @@ name: local-shell-mcp-dsh
 url: http://127.0.0.1:8765/mcp
 ```
 
-LSM 在线后，DSH 应出现 `mcp__lsm__*` 工具，例如：
+LSM 在线后，DSH 应暴露包括以下内容在内的 `mcp__lsm__*` 工具：
 
 ```text
 mcp__lsm__run_shell
@@ -182,4 +161,4 @@ mcp__lsm__browser_session
 mcp__lsm__session_manage
 ```
 
-DSH Web 中，只要 conversation 已进入正常会话页面，还会出现 **Live Workspace** view。若工具整体不存在，检查 `DSH_LSM_MCP_URL`、LSM `/healthz`、`/mcp` 和 DSH Host 日志；如果只有嵌入页面无法连接，再检查 `DSH_LSM_BROWSER_URL`。
+在 DSH Web 中，非空 conversation 还应出现 **Live Workspace** conversation view。若集成缺失，检查 `DSH_LSM_MCP_URL`、LSM `/healthz`、`/mcp` 可达性、DSH Host log；若只有嵌入 UI 失败，再检查 `DSH_LSM_BROWSER_URL`。

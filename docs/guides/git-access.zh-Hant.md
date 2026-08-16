@@ -1,10 +1,11 @@
+<!-- i18n-source-sha256: 3b7d6ab07c5d6bad2bfb22f366893819ac8de8754c7c28bcb35f24ea5695979c -->
 # Git 存取
 
-`local-shell-mcp` 透過 `run_shell`、`shell_start` 或 `job_start` 使用標準 Git CLI，不再暴露專用 Git MCP 工具。這樣可以覆蓋完整 Git 功能，並避免為每個子命令維護重複工具。
+`local-shell-mcp` 透過 `run_shell`、`shell_start` 或 `job_start` 使用標準 Git 命令列介面。專案刻意不提供專用的 Git MCP wrapper：CLI 功能完整、coding agent 熟悉，而且可避免在工具清單中重複實作每一個 Git 子命令。
 
-## 常見流程
+## 常見工作流程
 
-盡量使用有邊界、非互動式命令：
+盡可能使用有明確邊界的非互動式命令：
 
 ```bash
 git status --short --branch
@@ -15,17 +16,25 @@ git commit -m "fix: concise description"
 git push origin HEAD
 ```
 
-建議流程：
+典型的 agent 流程如下：
 
-1. 用 `run_shell` 執行 `git status --short --branch`。
-2. 只讀取和修改相關檔案。
-3. 執行定向測試。
-4. 用 `git diff --check && git diff` 複查。
-5. 提交或推送前執行 `secret_scan`。
-6. 使用明確的 Git CLI 命令暫存、提交和推送。
+1. 使用 `run_shell(command="git status --short --branch")` 檢查狀態。
+2. 只讀取與修改相關檔案。
+3. 執行針對性測試。
+4. 使用 `run_shell(command="git diff --check && git diff")` 檢查變更。
+5. Commit 或 push 前執行 `secret_scan`。
+6. 使用明確的 Git CLI 命令 stage、commit 並 push。
 
-倉庫位於遠端 worker 時，在同一個 shell 工具中指定 `machine`。
+如果 repository 位於遠端 worker，請在同一個 shell 工具中指定 `machine`。
 
-## 憑據與提交衛生
+## 憑證
 
-優先使用倉庫範圍的 deploy key、短期 GitHub App token 和隔離的自動化帳戶。提交應保持聚焦，不包含快取、建置產物或無關改動。執行 reset、clean、force-push 等破壞性命令前，應先檢查準確目標。
+Docker 部署可在 `/persist/credentials` 下持久化常見 Git 憑證位置。應將該 volume 視為敏感資料。優先使用 repository 範圍的 deploy key、短期 GitHub App token、隔離的自動化帳號，並在 push 前人工檢查。
+
+## Commit 規範
+
+保持 commit 聚焦，不要包含產生的 cache 與 build artifact，記錄執行過的測試，並避免 stage 無關變更。對 reset、clean、force-push 等破壞性命令，應先檢查確切目標。
+
+## 疑難排解
+
+`git push` 失敗時，檢查 remote URL、憑證持久化、branch protection 與 token 權限。若已安裝 GitHub CLI，`gh auth status` 很有幫助。

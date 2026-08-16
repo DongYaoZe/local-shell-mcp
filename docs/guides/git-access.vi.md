@@ -1,38 +1,40 @@
+<!-- i18n-source-sha256: 3b7d6ab07c5d6bad2bfb22f366893819ac8de8754c7c28bcb35f24ea5695979c -->
 # Truy cập Git
 
-Trang này mô tả kịch bản “Truy cập Git” và giữ cấu trúc Runtime/Client chung của trang tài liệu.
+`local-shell-mcp` dùng Git CLI chuẩn thông qua `run_shell`, `shell_start` hoặc `job_start`. Các Git MCP wrapper chuyên dụng cố ý không được cung cấp: CLI đầy đủ, quen thuộc với coding agent và tránh lặp lại mọi subcommand Git trong danh sách tool.
 
-## Tổng quan
+## Workflow thông thường
 
-Runtime xác định tiến trình server chạy như thế nào và điều khiển workspace nào. Client xác định ChatGPT hoặc client MCP khác kết nối như thế nào. Docker, tiện ích VS Code, tệp nhị phân độc lập, cài đặt Python/pipx/mã nguồn và stdio là lựa chọn Runtime; trình kết nối ChatGPT, client MCP HTTP chung và client MCP stdio là kết nối Client.
+Ưu tiên lệnh có giới hạn và không tương tác khi có thể:
 
-## Khi nào dùng
-
-- Dùng trang này khi đường dẫn Runtime hoặc Client đã chọn khớp với tiêu đề.
-- Giữ nhất quán workspace root, public base URL, MCP endpoint, chế độ xác thực và các công cụ host khả dụng.
-- Với ChatGPT web/app, hãy công bố MCP endpoint HTTPS kết thúc bằng `/mcp`.
-- Với client MCP cục bộ, dùng HTTP localhost hoặc `local-shell-mcp --mode stdio` tùy khả năng hỗ trợ của client.
-
-## Các bước
-
-1. Trước tiên chọn trang cài đặt Runtime.
-2. Khởi động Runtime và kiểm tra `/healthz` khi dùng chế độ HTTP.
-3. Sau đó chọn trang kết nối Client.
-4. Đăng ký MCP endpoint hoặc lệnh stdio trong Client.
-5. Gọi `environment_get` để kiểm tra workspace và cấu hình thực tế.
-
-```text
-Runtime: Docker / VS Code extension / binary / Python / stdio
-Client:  ChatGPT connector / generic HTTP MCP / generic stdio MCP
-Endpoint: https://your-host.example.com/mcp
+```bash
+git status --short --branch
+git diff --stat
+git diff
+git add -- path/to/file
+git commit -m "fix: concise description"
+git push origin HEAD
 ```
 
-## Xác minh
+Một chuỗi agent điển hình:
 
-- `environment_get` xác nhận cấu hình Runtime và workspace.
-- `file_tree` xác nhận các tệp nhìn thấy được.
-- `run_shell` xác nhận môi trường lệnh.
+1. Kiểm tra bằng `run_shell(command="git status --short --branch")`.
+2. Chỉ đọc và chỉnh sửa các tệp liên quan.
+3. Chạy test mục tiêu.
+4. Xem lại bằng `run_shell(command="git diff --check && git diff")`.
+5. Chạy `secret_scan` trước commit hoặc push.
+6. Stage, commit và push bằng lệnh Git CLI rõ ràng.
 
-## Ghi chú
+Dùng `machine` trên cùng shell tool khi repository nằm trên remote worker.
 
-Ưu tiên các bước nhỏ và có thể xác minh: kiểm tra, chỉnh sửa, diff, test, scan và commit. Tác vụ lớn cũng nên được chia thành các lời gọi công cụ có thể audit.
+## Credential
+
+Deployment Docker có thể lưu bền các vị trí credential Git phổ biến dưới `/persist/credentials`. Hãy coi volume đó là nhạy cảm. Ưu tiên deploy key giới hạn theo repository, GitHub App token sống ngắn, tài khoản automation tách biệt và review thủ công trước push.
+
+## Vệ sinh commit
+
+Giữ commit tập trung, bỏ cache được tạo và build artifact, ghi lại test đã chạy và tránh stage thay đổi không liên quan. Với lệnh phá hủy như reset, clean hoặc force-push, hãy kiểm tra chính xác mục tiêu trước.
+
+## Xử lý sự cố
+
+Khi `git push` thất bại, kiểm tra remote URL, lưu credential, branch protection và quyền token. `gh auth status` hữu ích nếu đã cài GitHub CLI.

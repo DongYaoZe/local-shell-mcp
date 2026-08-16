@@ -1,38 +1,63 @@
-# stdio modu
+<!-- i18n-source-sha256: a3d2dc835f99feed33a73ae3dd880dabab04a37d7461b99f1fa49c33ba0506e1 -->
+# Stdio runtime
 
-Bu sayfa “stdio modu” senaryosunu açıklar ve sitenin ortak Runtime/Client yapısını korur.
+Stdio mode, `local-shell-mcp` sürecini child process olarak başlatan ve standart giriş/çıkış üzerinden iletişim kuran yerel MCP client’lar içindir.
 
-## Genel bakış
+Bu bir genel HTTP deployment değildir. ChatGPT web/app, makinenizde process başlatamadığı için bunu doğrudan kullanamaz.
 
-Runtime, sunucu sürecinin nasıl çalıştığını ve hangi workspace’i kontrol ettiğini belirler. Client, ChatGPT veya başka bir MCP istemcisinin nasıl bağlandığını belirler. Docker, VS Code eklentisi, bağımsız ikililer, Python/pipx/kaynak kurulumları ve stdio Runtime seçenekleridir; ChatGPT bağlayıcısı, genel HTTP MCP istemcisi ve stdio MCP istemcisi Client bağlantılarıdır.
+## stdio ne zaman kullanılır
 
-## Ne zaman kullanılır
+Şu durumlarda stdio mode kullanın:
 
-- Seçilen Runtime veya Client yolu bu başlıkla eşleştiğinde bu sayfayı kullanın.
-- Workspace kökü, public base URL, MCP endpoint, kimlik doğrulama modu ve kullanılabilir host araçlarını tutarlı tutun.
-- ChatGPT web/app için `/mcp` ile biten bir HTTPS MCP endpoint yayımlayın.
-- Yerel MCP istemcileri için istemci desteğine göre HTTP localhost veya `local-shell-mcp --mode stdio` kullanın.
+- MCP client command-based server definitions destekliyorsa.
+- Client ve kontrol edilen workspace aynı makinedeyse.
+- OAuth, genel HTTPS, reverse proxy veya tunnel gerekmiyorsa.
+- Server lifecycle’ı client’ın yönetmesini istiyorsanız.
 
-## Adımlar
+Şu durumlarda stdio mode kullanmayın:
 
-1. Önce Runtime kurulum sayfasını seçin.
-2. Runtime’ı başlatın ve HTTP modu kullanılıyorsa `/healthz` değerini doğrulayın.
-3. Sonra Client bağlantı sayfasını seçin.
-4. Client içinde MCP endpoint veya stdio komutunu kaydedin.
-5. Etkin workspace ve ayarları doğrulamak için `environment_get` çağırın.
+- Client ChatGPT web/app ise.
+- Birden fazla remote client aynı server’a ihtiyaç duyuyorsa.
+- HTTP üzerinden tokenized file download gerekiyorsa.
+- HTTP üzerinden sunulan remote-worker join route gerekiyorsa.
 
-```text
-Runtime: Docker / VS Code extension / binary / Python / stdio
-Client:  ChatGPT connector / generic HTTP MCP / generic stdio MCP
-Endpoint: https://your-host.example.com/mcp
+## Komut
+
+```bash
+LOCAL_SHELL_MCP_WORKSPACE_ROOT=/path/to/workspace local-shell-mcp --mode stdio
 ```
 
-## Doğrulama
+Genel bir MCP client yapılandırması genellikle şunu içerir:
 
-- `environment_get` Runtime ayarlarını ve workspace’i doğrular.
-- `file_tree` görünen dosyaları doğrular.
-- `run_shell` komut ortamını doğrular.
+```json
+{
+  "mcpServers": {
+    "local-shell-mcp": {
+      "command": "local-shell-mcp",
+      "args": ["--mode", "stdio"],
+      "env": {
+        "LOCAL_SHELL_MCP_WORKSPACE_ROOT": "/path/to/workspace"
+      }
+    }
+  }
+}
+```
 
-## Notlar
+Schema’yı client’ınıza uyarlayın. Bazı client’lar bu bölümü `servers`, `tools`, `mcpServers` veya `contextServers` olarak adlandırır.
 
-Küçük ve doğrulanabilir adımları tercih edin: incele, düzenle, diff kontrol et, test et, tara ve commit yap. Büyük görevler de denetlenebilir araç çağrılarına bölünmelidir.
+## HTTP mode ile davranış farkları
+
+| Alan | Stdio mode | HTTP MCP mode |
+|---|---|---|
+| Transport | stdin/stdout | HTTP streamable MCP endpoint |
+| Endpoint | Yok | `/mcp` |
+| OAuth | Gerekmez | Genel kullanım için önerilir |
+| Health endpoint | Yok | `/healthz`, `/readyz` |
+| Genel ChatGPT kullanımı | Hayır | Evet, HTTPS arkasında |
+| Server lifecycle | client process başlatır | process/runtime’ı siz yönetirsiniz |
+
+Bunun dışında tool surface, configuration ve client support sınırları içinde aynı server-side implementation’ı kullanır.
+
+## Güvenlik notları
+
+Stdio mode çoğu zaman host üzerinde MCP client ile aynı kullanıcı olarak doğrudan çalışır. Dar bir workspace root kullanın ve geniş filesystem access’ten kaçının. stdio kendisi disposable container veya VM içinde çalışmıyorsa full-container mode kapalı kalmalıdır.

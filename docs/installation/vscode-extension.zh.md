@@ -1,3 +1,4 @@
+<!-- i18n-source-sha256: db40797f92f76326aa62db50ac4bb293edb4248791806c2fb46477a65c3e73cc -->
 # VS Code 扩展运行时
 
 VS Code 扩展是同一个 `local-shell-mcp` 服务的启动器和便捷 UI。它属于运行时选择，因为它会为当前编辑器工作区启动服务进程。

@@ -1,38 +1,55 @@
+<!-- i18n-source-sha256: 4aec137923c38de0ed4a1b760b5dbd6ce99090d508ce3fe838d35ad44b4ba4f1 -->
 # 감사 로그
 
-이 페이지는 “감사 로그” 시나리오를 설명하며 문서 사이트의 공통 Runtime/Client 구조를 따릅니다.
+`local-shell-mcp`는 연결된 client가 수행한 작업을 재구성할 수 있도록 구조화된 감사 항목을 기록합니다.
 
-## 개요
-
-Runtime은 서버 프로세스가 어떻게 실행되고 어떤 워크스페이스를 제어하는지 정합니다. Client는 ChatGPT 또는 다른 MCP 클라이언트가 어떻게 연결되는지 정합니다. Docker, VS Code 확장, 독립 실행 바이너리, Python/pipx/소스 설치, stdio는 Runtime 선택지입니다. ChatGPT 커넥터, 일반 HTTP MCP 클라이언트, stdio MCP 클라이언트는 Client 연결입니다.
-
-## 사용 시점
-
-- 선택한 Runtime 또는 Client 경로가 이 페이지 제목과 일치할 때 사용합니다.
-- 워크스페이스 루트, 공개 base URL, MCP endpoint, 인증 모드, 호스트에서 사용할 수 있는 도구를 일관되게 유지합니다.
-- ChatGPT 웹/App에는 `/mcp`로 끝나는 HTTPS MCP endpoint를 노출합니다.
-- 로컬 MCP 클라이언트는 지원 범위에 따라 HTTP localhost 또는 `local-shell-mcp --mode stdio`를 사용합니다.
-
-## 단계
-
-1. 먼저 Runtime 설치 페이지를 선택합니다.
-2. Runtime을 시작하고 HTTP 모드에서는 `/healthz`를 확인합니다.
-3. 그다음 Client 연결 페이지를 선택합니다.
-4. Client에 MCP endpoint 또는 stdio 명령을 등록합니다.
-5. `environment_get`를 호출해 실제 워크스페이스와 설정을 확인합니다.
+기본 경로:
 
 ```text
-Runtime: Docker / VS Code extension / binary / Python / stdio
-Client:  ChatGPT connector / generic HTTP MCP / generic stdio MCP
-Endpoint: https://your-host.example.com/mcp
+/workspace/.local-shell-mcp/audit.jsonl
 ```
 
-## 검증
+## 기록되는 내용
 
-- `environment_get`는 Runtime 설정과 워크스페이스를 확인합니다.
-- `file_tree`는 보이는 파일을 확인합니다.
-- `run_shell`은 명령 실행 환경을 확인합니다.
+감사 항목에는 다음과 같은 이벤트가 포함됩니다.
 
-## 참고
+- Tool call 시작/종료.
+- 명령 실행 metadata.
+- Timeout 및 처리된 오류.
+- Remote worker 등록 및 job activity.
+- File-link 생성 및 철회.
+- 해당하는 인증 관련 이벤트.
 
-작고 검증 가능한 단계, 즉 확인, 편집, diff, 테스트, 스캔, 커밋을 우선합니다. 큰 작업도 감사 가능한 도구 호출로 나눕니다.
+서버가 식별할 수 있는 민감한 인수는 redaction됩니다.
+
+## 로그 읽기
+
+MCP tool을 사용합니다.
+
+```text
+audit_tail
+```
+
+또는 직접 확인합니다.
+
+```bash
+tail -n 100 /workspace/.local-shell-mcp/audit.jsonl
+```
+
+## 운영 용도
+
+감사 로그는 특히 다음에 유용합니다.
+
+- 파일을 변경한 명령 검토.
+- Remote worker 사용 여부 확인.
+- 예상하지 못한 실패 디버깅.
+- File link의 실수로 인한 노출 탐지.
+- 공개 deployment 오류 이후 incident response 지원.
+
+## 보존
+
+로그 크기는 `LOCAL_SHELL_MCP_MAX_AUDIT_LOG_BYTES`로 제한됩니다. 장기간 보존이 필요하면 rotation하거나 외부로 export하십시오.
+
+## 제한 사항
+
+감사 로그는 sandbox가 아닙니다. 추적성을 제공하지만 연결된 모델이 구성된 권한 범위 내에서 작업하는 것을 막지는 않습니다.

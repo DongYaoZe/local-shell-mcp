@@ -1,38 +1,23 @@
+<!-- i18n-source-sha256: 91695da5acbb82a8550b150249a9b97f17470140a72b27233e2470a93305e7fb -->
 # Automação do navegador
 
-Esta página descreve o cenário “Automação do navegador” e mantém a estrutura Runtime/Client comum do site.
+As ferramentas de navegador usam Playwright para inspecionar páginas, capturar evidências e executar fluxos de navegador reproduzíveis. A tool surface pública é deliberadamente pequena.
 
-## Visão geral
+## Ferramentas
 
-Runtime define como o processo do servidor é executado e qual workspace ele controla. Client define como ChatGPT ou outro cliente MCP se conecta. Docker, extensão do VS Code, binários independentes, instalações por Python/pipx/código-fonte e stdio são opções de Runtime; conector ChatGPT, cliente MCP HTTP genérico e cliente MCP stdio são conexões Client.
+| Tool | Finalidade |
+|---|---|
+| `browser_session` | Iniciar, listar, fechar ou limpar sessões persistentes do navegador; opcionalmente reutilizar um profile ou storage state. |
+| `browser_snapshot` | Ler texto limitado da página, erros de page/network e elementos interativos com refs curtas como `e1`; opcionalmente capturar uma screenshot. |
+| `browser_act` | Executar navigation, click, fill, select, key, wait e ações multipágina estruturadas usando refs de snapshot ou CSS selectors. |
+| `browser_run_script` | Executar um script Python Playwright completo quando o conjunto de ações de alto nível não for suficiente. |
 
-## Quando usar
+Todas as ferramentas de navegador aceitam `machine` opcional. As dependências de navegador devem estar instaladas no controller ou worker selecionado; a instalação é feita com comandos shell comuns, como `python -m playwright install chromium`.
 
-- Use esta página quando o caminho de Runtime ou Client escolhido corresponder ao título.
-- Mantenha consistentes a raiz do workspace, a base URL pública, o MCP endpoint, o modo de autenticação e as ferramentas disponíveis no host.
-- Para ChatGPT web/app, exponha um MCP endpoint HTTPS terminado em `/mcp`.
-- Para clientes MCP locais, use HTTP localhost ou `local-shell-mcp --mode stdio` conforme o suporte do cliente.
+## Fluxos comuns
 
-## Passos
+Para trabalho interativo, chame `browser_session(action="start", url=...)` e depois `browser_snapshot`. O snapshot retorna referências curtas como `e1` e `e2`; passe-as diretamente para `browser_act`, por exemplo `{"action": "click", "target": "e1"}` ou `{"action": "fill", "target": "e2", "value": "..."}`. Faça um novo snapshot após navigation porque as refs dos elementos são referências ao estado da página, não selectors permanentes.
 
-1. Escolha primeiro a página de instalação do Runtime.
-2. Inicie o Runtime e verifique `/healthz` quando usar o modo HTTP.
-3. Depois escolha a página de conexão do Client.
-4. Registre o MCP endpoint ou o comando stdio no Client.
-5. Chame `environment_get` para verificar o workspace e as configurações efetivas.
+Para inspeção comum e screenshots, prefira `browser_session` mais `browser_snapshot`; o snapshot pode retornar texto visível limitado e salvar uma screenshot. Use `browser_run_script` para JavaScript evaluation, lógica personalizada de captura/PDF ou interações não representadas por `browser_act`.
 
-```text
-Runtime: Docker / VS Code extension / binary / Python / stdio
-Client:  ChatGPT connector / generic HTTP MCP / generic stdio MCP
-Endpoint: https://your-host.example.com/mcp
-```
-
-## Verificação
-
-- `environment_get` confirma configurações do Runtime e workspace.
-- `file_tree` confirma arquivos visíveis.
-- `run_shell` confirma o ambiente de comandos.
-
-## Notas
-
-Prefira etapas pequenas e verificáveis: inspecionar, editar, ver o diff, testar, escanear e fazer commit. Tarefas grandes também devem ser divididas em chamadas de ferramentas auditáveis.
+Mantenha os scripts limitados, defina timeouts explícitos, salve artifacts no workspace e evite inserir credentials, a menos que o ambiente seja dedicado à tarefa.

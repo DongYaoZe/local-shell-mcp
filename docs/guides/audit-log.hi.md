@@ -1,38 +1,55 @@
-# ऑडिट लॉग
+<!-- i18n-source-sha256: 4aec137923c38de0ed4a1b760b5dbd6ce99090d508ce3fe838d35ad44b4ba4f1 -->
+# Audit log
 
-यह पृष्ठ “ऑडिट लॉग” परिदृश्य समझाता है और साइट की समान Runtime/Client संरचना का पालन करता है।
+`local-shell-mcp` structured audit entries लिखता है ताकि यह पुनर्निर्मित किया जा सके कि जुड़े हुए client ने क्या किया।
 
-## सारांश
-
-Runtime यह तय करता है कि सर्वर प्रक्रिया कैसे चलेगी और कौन-सा workspace नियंत्रित होगा। Client यह तय करता है कि ChatGPT या कोई अन्य MCP क्लाइंट कैसे जुड़ेगा। Docker, VS Code एक्सटेंशन, स्वतंत्र बाइनरी, Python/pipx/source स्थापना और stdio Runtime विकल्प हैं; ChatGPT कनेक्टर, सामान्य HTTP MCP क्लाइंट और stdio MCP क्लाइंट Client कनेक्शन हैं।
-
-## कब उपयोग करें
-
-- जब चुना गया Runtime या Client पथ इस शीर्षक से मेल खाए, तब इस पृष्ठ का उपयोग करें।
-- workspace root, public base URL, MCP endpoint, authentication mode और host पर उपलब्ध टूल को संगत रखें।
-- ChatGPT web/app के लिए `/mcp` पर समाप्त होने वाला HTTPS MCP endpoint उपलब्ध कराएँ।
-- स्थानीय MCP क्लाइंट के लिए क्लाइंट समर्थन के अनुसार HTTP localhost या `local-shell-mcp --mode stdio` का उपयोग करें।
-
-## चरण
-
-1. पहले Runtime स्थापना पृष्ठ चुनें।
-2. Runtime शुरू करें और HTTP मोड में `/healthz` जाँचें।
-3. फिर Client कनेक्शन पृष्ठ चुनें।
-4. Client में MCP endpoint या stdio command पंजीकृत करें।
-5. वास्तविक workspace और settings की जाँच के लिए `environment_get` कॉल करें।
+Default path:
 
 ```text
-Runtime: Docker / VS Code extension / binary / Python / stdio
-Client:  ChatGPT connector / generic HTTP MCP / generic stdio MCP
-Endpoint: https://your-host.example.com/mcp
+/workspace/.local-shell-mcp/audit.jsonl
 ```
 
-## सत्यापन
+## क्या रिकॉर्ड होता है
 
-- `environment_get` Runtime settings और workspace की पुष्टि करता है।
-- `file_tree` दिखाई देने वाली फ़ाइलों की पुष्टि करता है।
-- `run_shell` command environment की पुष्टि करता है।
+Audit entries में ऐसे events शामिल होते हैं:
 
-## टिप्पणियाँ
+- Tool call start/end.
+- Command execution metadata.
+- Timeouts और handled errors.
+- Remote worker registration और job activity.
+- File-link creation और revocation.
+- लागू होने पर authentication-related events.
 
-छोटे और सत्यापित किए जा सकने वाले चरणों को प्राथमिकता दें: निरीक्षण, संपादन, diff, test, scan और commit। बड़े कार्यों को भी audit योग्य tool calls में बाँटें।
+Server जिन sensitive arguments को पहचान सकता है उन्हें redact किया जाता है।
+
+## Log पढ़ना
+
+MCP tool उपयोग करें:
+
+```text
+audit_tail
+```
+
+या सीधे देखें:
+
+```bash
+tail -n 100 /workspace/.local-shell-mcp/audit.jsonl
+```
+
+## Operational use
+
+Audit logs विशेष रूप से इन कार्यों में उपयोगी हैं:
+
+- Files बदलने वाले commands की समीक्षा।
+- यह जाँचना कि remote worker उपयोग हुआ या नहीं।
+- Unexpected failures को debug करना।
+- File links के accidental exposure का पता लगाना।
+- Public deployment गलती के बाद incident response में सहायता।
+
+## Retention
+
+Log `LOCAL_SHELL_MCP_MAX_AUDIT_LOG_BYTES` से bounded है। लंबे retention की आवश्यकता हो तो इसे rotate करें या बाहर export करें।
+
+## सीमाएँ
+
+Audit logs sandbox नहीं हैं। वे traceability में मदद करते हैं, लेकिन connected model को उसकी configured authority के भीतर actions लेने से नहीं रोकते।

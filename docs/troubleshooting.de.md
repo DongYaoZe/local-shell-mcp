@@ -1,18 +1,18 @@
+<!-- i18n-source-sha256: ed71ed496e65545264c76f97a154e8e0758faf58be0ba74c24c82f3b860ff4f2 -->
 # Fehlerbehebung
 
-Check server health:
+Prüfen Sie den Dienststatus:
 
 ```bash
-docker compose ps
-docker compose logs --tail=200 local-shell-mcp
 curl -i http://127.0.0.1:8765/healthz
 ```
 
-Common checks:
+Prüfen Sie die Logs:
 
-- Public HTTPS URL is reachable.
-- MCP endpoint ends with `/mcp`.
-- OAuth values match the current deployment.
-- Reverse proxy supports streaming requests.
-- Remote worker invite has not expired.
-- Workspace permissions allow writes to `/workspace/.local-shell-mcp`.
+```bash
+docker compose logs --tail=100 local-shell-mcp
+```
+
+Wenn ChatGPT keine Verbindung herstellen kann, prüfen Sie, ob `LOCAL_SHELL_MCP_PUBLIC_BASE_URL` exakt dem öffentlichen HTTPS-Origin entspricht und ob `/mcp`, die OAuth-Metadaten und `/healthz` über Tunnel oder Reverse Proxy erreichbar sind.
+
+Wenn Remote-Worker nicht erscheinen, prüfen Sie, ob der Remote-Modus aktiviert ist, die Einladung noch gültig ist und die entfernte Maschine ausgehende HTTPS-Anfragen an den Kontrollserver senden kann.

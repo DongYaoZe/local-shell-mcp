@@ -1,38 +1,44 @@
+<!-- i18n-source-sha256: 87dd7fb66311534dcd5a7217bba8c809f71fe6189e8c39b3e265da923cc82d22 -->
 # REST API
 
-تشرح هذه الصفحة سيناريو “REST API” وتحافظ على بنية Runtime/Client المشتركة في الموقع.
+الواجهة الأساسية هي MCP على `/mcp`. تتوفر أيضًا REST surface لفحوصات الصحة وروابط الملفات وبعض عمليات الخدمة.
 
-## نظرة عامة
+## الصحة
 
-يحدد Runtime كيفية تشغيل عملية الخادم وأي مساحة عمل يتحكم بها. يحدد Client كيفية اتصال ChatGPT أو أي عميل MCP آخر. Docker وإضافة VS Code والملفات التنفيذية المستقلة وتثبيتات Python/pipx/المصدر و stdio هي خيارات Runtime؛ أما موصل ChatGPT وعميل MCP HTTP العام وعميل MCP عبر stdio فهي اتصالات Client.
-
-## متى تستخدمه
-
-- استخدم هذه الصفحة عندما يطابق مسار Runtime أو Client المختار عنوان الصفحة.
-- حافظ على اتساق جذر مساحة العمل و base URL العام و MCP endpoint ونمط المصادقة والأدوات المتاحة على المضيف.
-- بالنسبة إلى ChatGPT web/app، انشر MCP endpoint عبر HTTPS ينتهي بـ `/mcp`.
-- بالنسبة إلى عملاء MCP المحليين، استخدم HTTP localhost أو `local-shell-mcp --mode stdio` حسب دعم العميل.
-
-## الخطوات
-
-1. اختر صفحة تثبيت Runtime أولاً.
-2. شغّل Runtime وتحقق من `/healthz` عند استخدام وضع HTTP.
-3. اختر بعد ذلك صفحة اتصال Client.
-4. سجّل MCP endpoint أو أمر stdio في Client.
-5. استدعِ `environment_get` للتحقق من مساحة العمل والإعدادات الفعلية.
-
-```text
-Runtime: Docker / VS Code extension / binary / Python / stdio
-Client:  ChatGPT connector / generic HTTP MCP / generic stdio MCP
-Endpoint: https://your-host.example.com/mcp
+```http
+GET /healthz
 ```
 
-## التحقق
+يعيد حالة صحة الخادم ومعلومات الحالة الأساسية.
 
-- `environment_get` يؤكد إعدادات Runtime ومساحة العمل.
-- `file_tree` يؤكد الملفات المرئية.
-- `run_shell` يؤكد بيئة الأوامر.
+## MCP
 
-## ملاحظات
+```http
+POST /mcp
+```
 
-فضّل الخطوات الصغيرة القابلة للتحقق: الفحص، التعديل، مراجعة diff، الاختبار، الفحص الأمني، ثم commit. يجب أيضاً تقسيم المهام الكبيرة إلى استدعاءات أدوات قابلة للتدقيق.
+نقطة Streamable HTTP MCP endpoint يستخدمها ChatGPT وغيره من MCP client.
+
+## استدعاءات الأدوات عبر REST
+
+تستخدم استدعاءات أدوات REST envelopes موحّدة للنجاح والأخطاء. تعيد أخطاء التحقق payloads منظمة تحتوي `ok: false` بدلاً من استثناءات framework الخام.
+
+## Agent Skills
+
+يتوفر سجل Skills الثابت أيضاً عبر REST:
+
+```text
+GET  /tools/skill_list
+POST /tools/skill_load       {"name": "debugging"}
+POST /tools/skill_read  {"name": "debugging", "path": "checklist.md"}
+```
+
+تظهر تغييرات مجلدات Skill في الاستدعاء التالي ولا تغيّر قائمة أدوات MCP.
+
+## روابط الملفات
+
+يقدّم تطبيق HTTP المدمج تنزيلات الملفات المرمّزة. الروابط هي bearer URL مع TTL وحد أقصى اختياري لعدد التنزيلات ودعم الإلغاء.
+
+## المصادقة
+
+ينبغي استخدام OAuth في عمليات النشر العامة. يمكن تفعيل localhost bypass للتطوير، لكن الوصول العام دون مصادقة غير آمن.

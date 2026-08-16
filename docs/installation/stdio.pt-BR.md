@@ -1,38 +1,63 @@
-# Modo stdio
+<!-- i18n-source-sha256: a3d2dc835f99feed33a73ae3dd880dabab04a37d7461b99f1fa49c33ba0506e1 -->
+# Runtime Stdio
 
-Esta página descreve o cenário “Modo stdio” e mantém a estrutura Runtime/Client comum do site.
+O modo stdio é destinado a MCP client locais que iniciam `local-shell-mcp` como child process e se comunicam por entrada/saída padrão.
 
-## Visão geral
+Não é um deployment HTTP público. O ChatGPT web/app não consegue usá-lo diretamente porque o ChatGPT não pode iniciar um process na sua máquina.
 
-Runtime define como o processo do servidor é executado e qual workspace ele controla. Client define como ChatGPT ou outro cliente MCP se conecta. Docker, extensão do VS Code, binários independentes, instalações por Python/pipx/código-fonte e stdio são opções de Runtime; conector ChatGPT, cliente MCP HTTP genérico e cliente MCP stdio são conexões Client.
+## Quando usar stdio
 
-## Quando usar
+Use stdio mode quando:
 
-- Use esta página quando o caminho de Runtime ou Client escolhido corresponder ao título.
-- Mantenha consistentes a raiz do workspace, a base URL pública, o MCP endpoint, o modo de autenticação e as ferramentas disponíveis no host.
-- Para ChatGPT web/app, exponha um MCP endpoint HTTPS terminado em `/mcp`.
-- Para clientes MCP locais, use HTTP localhost ou `local-shell-mcp --mode stdio` conforme o suporte do cliente.
+- Seu MCP client aceita definições de servidor baseadas em comandos.
+- O client e o workspace controlado estão na mesma máquina.
+- Você não precisa de OAuth, HTTPS público, reverse proxies ou tunnels.
+- Você quer que o client gerencie o server lifecycle.
 
-## Passos
+Não use stdio mode quando:
 
-1. Escolha primeiro a página de instalação do Runtime.
-2. Inicie o Runtime e verifique `/healthz` quando usar o modo HTTP.
-3. Depois escolha a página de conexão do Client.
-4. Registre o MCP endpoint ou o comando stdio no Client.
-5. Chame `environment_get` para verificar o workspace e as configurações efetivas.
+- O client é ChatGPT web/app.
+- Vários remote clients precisam do mesmo servidor.
+- Você precisa de downloads tokenizados por HTTP.
+- Você precisa de rotas de entrada de remote workers servidas por HTTP.
 
-```text
-Runtime: Docker / VS Code extension / binary / Python / stdio
-Client:  ChatGPT connector / generic HTTP MCP / generic stdio MCP
-Endpoint: https://your-host.example.com/mcp
+## Comando
+
+```bash
+LOCAL_SHELL_MCP_WORKSPACE_ROOT=/path/to/workspace local-shell-mcp --mode stdio
 ```
 
-## Verificação
+Uma configuração genérica de MCP client geralmente contém:
 
-- `environment_get` confirma configurações do Runtime e workspace.
-- `file_tree` confirma arquivos visíveis.
-- `run_shell` confirma o ambiente de comandos.
+```json
+{
+  "mcpServers": {
+    "local-shell-mcp": {
+      "command": "local-shell-mcp",
+      "args": ["--mode", "stdio"],
+      "env": {
+        "LOCAL_SHELL_MCP_WORKSPACE_ROOT": "/path/to/workspace"
+      }
+    }
+  }
+}
+```
 
-## Notas
+Adapte o schema ao seu client. Alguns clients chamam esta seção de `servers`, `tools`, `mcpServers` ou `contextServers`.
 
-Prefira etapas pequenas e verificáveis: inspecionar, editar, ver o diff, testar, escanear e fazer commit. Tarefas grandes também devem ser divididas em chamadas de ferramentas auditáveis.
+## Diferenças de comportamento em relação ao HTTP mode
+
+| Área | Stdio mode | HTTP MCP mode |
+|---|---|---|
+| Transport | stdin/stdout | HTTP streamable MCP endpoint |
+| Endpoint | Nenhum | `/mcp` |
+| OAuth | Não necessário | Recomendado para uso público |
+| Health endpoint | Nenhum | `/healthz`, `/readyz` |
+| Uso público pelo ChatGPT | Não | Sim, atrás de HTTPS |
+| Server lifecycle | client inicia process | Você gerencia process/runtime |
+
+A tool surface usa, no restante, a mesma implementação server-side, sujeita à configuration e ao suporte do client.
+
+## Notas de segurança
+
+Stdio mode costuma executar diretamente no host como o mesmo usuário do MCP client. Use um workspace root restrito e evite acesso amplo ao filesystem. Mantenha full-container mode desativado, a menos que o próprio stdio esteja sendo executado em um container ou VM descartável.

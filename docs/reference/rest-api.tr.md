@@ -1,38 +1,44 @@
+<!-- i18n-source-sha256: 87dd7fb66311534dcd5a7217bba8c809f71fe6189e8c39b3e265da923cc82d22 -->
 # REST API
 
-Bu sayfa “REST API” senaryosunu açıklar ve sitenin ortak Runtime/Client yapısını korur.
+Birincil interface `/mcp` üzerindeki MCP’dir. Health check, file link ve seçili service operation’lar için REST surface de vardır.
 
-## Genel bakış
+## Sağlık
 
-Runtime, sunucu sürecinin nasıl çalıştığını ve hangi workspace’i kontrol ettiğini belirler. Client, ChatGPT veya başka bir MCP istemcisinin nasıl bağlandığını belirler. Docker, VS Code eklentisi, bağımsız ikililer, Python/pipx/kaynak kurulumları ve stdio Runtime seçenekleridir; ChatGPT bağlayıcısı, genel HTTP MCP istemcisi ve stdio MCP istemcisi Client bağlantılarıdır.
-
-## Ne zaman kullanılır
-
-- Seçilen Runtime veya Client yolu bu başlıkla eşleştiğinde bu sayfayı kullanın.
-- Workspace kökü, public base URL, MCP endpoint, kimlik doğrulama modu ve kullanılabilir host araçlarını tutarlı tutun.
-- ChatGPT web/app için `/mcp` ile biten bir HTTPS MCP endpoint yayımlayın.
-- Yerel MCP istemcileri için istemci desteğine göre HTTP localhost veya `local-shell-mcp --mode stdio` kullanın.
-
-## Adımlar
-
-1. Önce Runtime kurulum sayfasını seçin.
-2. Runtime’ı başlatın ve HTTP modu kullanılıyorsa `/healthz` değerini doğrulayın.
-3. Sonra Client bağlantı sayfasını seçin.
-4. Client içinde MCP endpoint veya stdio komutunu kaydedin.
-5. Etkin workspace ve ayarları doğrulamak için `environment_get` çağırın.
-
-```text
-Runtime: Docker / VS Code extension / binary / Python / stdio
-Client:  ChatGPT connector / generic HTTP MCP / generic stdio MCP
-Endpoint: https://your-host.example.com/mcp
+```http
+GET /healthz
 ```
 
-## Doğrulama
+Sunucu sağlığını ve temel durum bilgisini döndürür.
 
-- `environment_get` Runtime ayarlarını ve workspace’i doğrular.
-- `file_tree` görünen dosyaları doğrular.
-- `run_shell` komut ortamını doğrular.
+## MCP
 
-## Notlar
+```http
+POST /mcp
+```
 
-Küçük ve doğrulanabilir adımları tercih edin: incele, düzenle, diff kontrol et, test et, tara ve commit yap. Büyük görevler de denetlenebilir araç çağrılarına bölünmelidir.
+ChatGPT ve diğer MCP client’ların kullandığı Streamable HTTP MCP endpoint.
+
+## REST üzerinden araç çağrıları
+
+REST araç çağrıları tutarlı başarı/hata envelopes kullanır. Doğrulama hataları ham framework istisnaları yerine yapılandırılmış `ok: false` payload döndürür.
+
+## Agent Skills
+
+Sabit Skills registry REST üzerinden de kullanılabilir:
+
+```text
+GET  /tools/skill_list
+POST /tools/skill_load       {"name": "debugging"}
+POST /tools/skill_read  {"name": "debugging", "path": "checklist.md"}
+```
+
+Skill dizinlerindeki değişiklikler bir sonraki çağrıda görünür ve MCP araç listesini değiştirmez.
+
+## Dosya bağlantıları
+
+Token’lı dosya indirmeleri yerleşik HTTP uygulaması tarafından sunulur. Bağlantılar TTL, isteğe bağlı azami indirme sayısı ve iptal desteğine sahip bearer URL’lerdir.
+
+## Kimlik doğrulama
+
+Genel kullanıma açık dağıtımlarda OAuth kullanılmalıdır. Geliştirme için localhost bypass etkinleştirilebilir, ancak kimlik doğrulamasız genel erişim güvenli değildir.

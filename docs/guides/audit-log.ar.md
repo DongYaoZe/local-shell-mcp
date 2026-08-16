@@ -1,38 +1,55 @@
+<!-- i18n-source-sha256: 4aec137923c38de0ed4a1b760b5dbd6ce99090d508ce3fe838d35ad44b4ba4f1 -->
 # سجل التدقيق
 
-تشرح هذه الصفحة سيناريو “سجل التدقيق” وتحافظ على بنية Runtime/Client المشتركة في الموقع.
+يكتب `local-shell-mcp` إدخالات تدقيق منظمة للمساعدة على إعادة بناء ما فعله client متصل.
 
-## نظرة عامة
-
-يحدد Runtime كيفية تشغيل عملية الخادم وأي مساحة عمل يتحكم بها. يحدد Client كيفية اتصال ChatGPT أو أي عميل MCP آخر. Docker وإضافة VS Code والملفات التنفيذية المستقلة وتثبيتات Python/pipx/المصدر و stdio هي خيارات Runtime؛ أما موصل ChatGPT وعميل MCP HTTP العام وعميل MCP عبر stdio فهي اتصالات Client.
-
-## متى تستخدمه
-
-- استخدم هذه الصفحة عندما يطابق مسار Runtime أو Client المختار عنوان الصفحة.
-- حافظ على اتساق جذر مساحة العمل و base URL العام و MCP endpoint ونمط المصادقة والأدوات المتاحة على المضيف.
-- بالنسبة إلى ChatGPT web/app، انشر MCP endpoint عبر HTTPS ينتهي بـ `/mcp`.
-- بالنسبة إلى عملاء MCP المحليين، استخدم HTTP localhost أو `local-shell-mcp --mode stdio` حسب دعم العميل.
-
-## الخطوات
-
-1. اختر صفحة تثبيت Runtime أولاً.
-2. شغّل Runtime وتحقق من `/healthz` عند استخدام وضع HTTP.
-3. اختر بعد ذلك صفحة اتصال Client.
-4. سجّل MCP endpoint أو أمر stdio في Client.
-5. استدعِ `environment_get` للتحقق من مساحة العمل والإعدادات الفعلية.
+المسار الافتراضي:
 
 ```text
-Runtime: Docker / VS Code extension / binary / Python / stdio
-Client:  ChatGPT connector / generic HTTP MCP / generic stdio MCP
-Endpoint: https://your-host.example.com/mcp
+/workspace/.local-shell-mcp/audit.jsonl
 ```
 
-## التحقق
+## ما يتم تسجيله
 
-- `environment_get` يؤكد إعدادات Runtime ومساحة العمل.
-- `file_tree` يؤكد الملفات المرئية.
-- `run_shell` يؤكد بيئة الأوامر.
+تشمل إدخالات التدقيق أحداثاً مثل:
 
-## ملاحظات
+- بداية/نهاية tool call.
+- بيانات تنفيذ الأوامر الوصفية.
+- Timeouts والأخطاء التي تمت معالجتها.
+- تسجيل remote worker ونشاط jobs.
+- إنشاء file links وإلغاؤها.
+- أحداث المصادقة عند انطباقها.
 
-فضّل الخطوات الصغيرة القابلة للتحقق: الفحص، التعديل، مراجعة diff، الاختبار، الفحص الأمني، ثم commit. يجب أيضاً تقسيم المهام الكبيرة إلى استدعاءات أدوات قابلة للتدقيق.
+تُحجب الوسائط الحساسة عندما يستطيع الخادم التعرف عليها.
+
+## قراءة السجل
+
+استخدم أداة MCP:
+
+```text
+audit_tail
+```
+
+أو افحصه مباشرة:
+
+```bash
+tail -n 100 /workspace/.local-shell-mcp/audit.jsonl
+```
+
+## الاستخدام التشغيلي
+
+تكون سجلات التدقيق مفيدة خصوصاً في:
+
+- مراجعة الأوامر التي غيّرت الملفات.
+- التحقق مما إذا تم استخدام remote worker.
+- تصحيح الإخفاقات غير المتوقعة.
+- اكتشاف الكشف العرضي عن file links.
+- دعم incident response بعد خطأ في deployment عام.
+
+## الاحتفاظ
+
+السجل محدود بواسطة `LOCAL_SHELL_MCP_MAX_AUDIT_LOG_BYTES`. نفّذ rotation أو صدّره إلى تخزين خارجي إذا احتجت إلى احتفاظ طويل.
+
+## القيود
+
+سجلات التدقيق ليست sandbox. فهي تساعد على التتبع، لكنها لا تمنع نموذجاً متصلاً من العمل ضمن الصلاحيات المهيأة له.

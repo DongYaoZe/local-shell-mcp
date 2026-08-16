@@ -1,38 +1,23 @@
+<!-- i18n-source-sha256: 91695da5acbb82a8550b150249a9b97f17470140a72b27233e2470a93305e7fb -->
 # Browser-Automatisierung
 
-Diese Seite beschreibt das Szenario „Browser-Automatisierung“ und verwendet die gemeinsame Runtime/Client-Struktur der Dokumentation.
+Browser-Tools verwenden Playwright, um Seiten zu untersuchen, Nachweise zu erfassen und reproduzierbare Browser-Workflows auszuführen. Die öffentliche Tool-Oberfläche ist bewusst klein gehalten.
 
-## Überblick
+## Tools
 
-Runtime legt fest, wie der Serverprozess läuft und welchen Workspace er kontrolliert. Client legt fest, wie ChatGPT oder ein anderer MCP-Client eine Verbindung herstellt. Docker, die VS Code-Erweiterung, eigenständige Binärdateien, Python/pipx/Quellcode-Installationen und stdio sind Runtime-Optionen; der ChatGPT-Connector, generische HTTP-MCP-Clients und stdio-MCP-Clients sind Client-Verbindungen.
+| Tool | Zweck |
+|---|---|
+| `browser_session` | Persistente Browser-Sitzungen starten, auflisten, schließen oder bereinigen; optional ein Profile oder Storage State wiederverwenden. |
+| `browser_snapshot` | Begrenzten Seitentext, Page-/Network-Fehler und interaktive Elemente mit kurzen Refs wie `e1` lesen; optional einen Screenshot aufnehmen. |
+| `browser_act` | Strukturierte Navigation-, Click-, Fill-, Select-, Key-, Wait- und Mehrseiten-Aktionen über Snapshot-Refs oder CSS-Selektoren ausführen. |
+| `browser_run_script` | Ein vollständiges Python-Playwright-Skript ausführen, wenn der Satz von High-Level-Aktionen nicht ausreicht. |
 
-## Wann verwenden
+Alle Browser-Tools akzeptieren optional `machine`. Browser-Abhängigkeiten müssen auf dem ausgewählten Controller oder Worker bereits installiert sein; installiert wird mit normalen Shell-Befehlen wie `python -m playwright install chromium`.
 
-- Verwende diese Seite, wenn der gewählte Runtime- oder Client-Pfad zum Titel passt.
-- Halte Workspace-Wurzel, öffentliche base URL, MCP endpoint, Authentifizierungsmodus und verfügbare Host-Tools konsistent.
-- Für ChatGPT Web/App muss ein HTTPS-MCP-endpoint bereitgestellt werden, der auf `/mcp` endet.
-- Für lokale MCP-Clients verwende je nach Client-Unterstützung HTTP localhost oder `local-shell-mcp --mode stdio`.
+## Übliche Abläufe
 
-## Schritte
+Rufen Sie für interaktive Arbeit zuerst `browser_session(action="start", url=...)` und dann `browser_snapshot` auf. Der Snapshot liefert kurze Referenzen wie `e1` und `e2`; übergeben Sie diese direkt an `browser_act`, etwa `{"action": "click", "target": "e1"}` oder `{"action": "fill", "target": "e2", "value": "..."}`. Erstellen Sie nach Navigation einen neuen Snapshot, da Element-Refs Zustandsreferenzen der Seite und keine permanenten Selektoren sind.
 
-1. Wähle zuerst die Runtime-Installationsseite.
-2. Starte die Runtime und prüfe im HTTP-Modus `/healthz`.
-3. Wähle danach die Client-Verbindungsseite.
-4. Registriere den MCP endpoint oder den stdio-Befehl im Client.
-5. Rufe `environment_get` auf, um den effektiven Workspace und die Einstellungen zu prüfen.
+Für normale Inspektionen und Screenshots bevorzugen Sie `browser_session` plus `browser_snapshot`; der Snapshot kann begrenzten sichtbaren Text zurückgeben und einen Screenshot speichern. Verwenden Sie `browser_run_script` für JavaScript-Auswertung, benutzerdefinierte Capture-/PDF-Logik oder Interaktionen, die `browser_act` nicht abbildet.
 
-```text
-Runtime: Docker / VS Code extension / binary / Python / stdio
-Client:  ChatGPT connector / generic HTTP MCP / generic stdio MCP
-Endpoint: https://your-host.example.com/mcp
-```
-
-## Überprüfung
-
-- `environment_get` bestätigt Runtime-Einstellungen und Workspace.
-- `file_tree` bestätigt sichtbare Dateien.
-- `run_shell` bestätigt die Befehlsumgebung.
-
-## Hinweise
-
-Arbeite bevorzugt in kleinen, überprüfbaren Schritten: prüfen, bearbeiten, diff ansehen, testen, scannen und committen. Große Aufgaben sollten ebenfalls in auditierbare Tool-Aufrufe zerlegt werden.
+Halten Sie Skripte begrenzt, setzen Sie explizite Timeouts, speichern Sie Artefakte unter dem Workspace und vermeiden Sie die Eingabe von Credentials, sofern die Umgebung nicht ausschließlich für die Aufgabe vorgesehen ist.

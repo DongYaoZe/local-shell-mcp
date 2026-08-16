@@ -1,3 +1,4 @@
+<!-- i18n-source-sha256: df2b62b1f847968432f0ba0309173e5de379bc9b821789715295018f72d58cf6 -->
 # Agent Skills
 
 `local-shell-mcp` 透過固定的 MCP 工具面支援基於 Markdown 的可重用 Agent Skill。安裝或刪除 Skill 不會改變 MCP 工具列表，因此客戶端無需重新連接。
@@ -87,7 +88,7 @@ Registry 會跳過非法 Skill 名稱和缺少可讀 `SKILL.md` 的目錄。入�
 可選 REST 介面使用同一份合併後的 Registry：
 
 ```text
-GET  /tools/skills_list
+GET  /tools/skill_list
 POST /tools/skill_load       {"name": "debugging"}
-POST /tools/skill_read_file  {"name": "debugging", "path": "checklist.md"}
+POST /tools/skill_read  {"name": "debugging", "path": "checklist.md"}
 ```

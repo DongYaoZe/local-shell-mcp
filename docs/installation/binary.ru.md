@@ -1,38 +1,133 @@
-# Автономный бинарный файл
+<!-- i18n-source-sha256: 42daa6d3dd931530a1d2e86d6a36fc6424b7494ff078626157c158b38b1f4b1e -->
+# Автономный binary runtime
 
-Эта страница описывает сценарий «Автономный бинарный файл» и использует общую структуру Runtime/Client.
+Release binaries запускают `local-shell-mcp` без Docker и Python environment. Используйте этот runtime, когда Docker недоступен либо dedicated VM, container host, lab server или restricted user account уже обеспечивает границу безопасности.
 
-## Обзор
+Это выбор runtime. Доступ ChatGPT настраивается отдельно через HTTPS endpoint `/mcp`.
 
-Runtime определяет, как запускается серверный процесс и каким рабочим пространством он управляет. Client определяет, как подключается ChatGPT или другой MCP-клиент. Docker, расширение VS Code, автономные бинарные файлы, установки Python/pipx/из исходного кода и stdio — это варианты Runtime; коннектор ChatGPT, общий HTTP MCP-клиент и stdio MCP-клиент — это подключения Client.
+## Release artifacts
 
-## Когда использовать
+GitHub Releases собирает self-contained executable для распространённых платформ:
 
-- Используйте эту страницу, когда выбранный путь Runtime или Client соответствует заголовку.
-- Сохраняйте согласованными корень рабочего пространства, публичный base URL, MCP endpoint, режим аутентификации и доступные инструменты хоста.
-- Для ChatGPT web/app опубликуйте HTTPS MCP endpoint, заканчивающийся на `/mcp`.
-- Для локальных MCP-клиентов используйте HTTP localhost или `local-shell-mcp --mode stdio` в зависимости от поддержки клиента.
+| Platform artifact | Archive |
+|---|---|
+| `local-shell-mcp-linux-x86_64` | `.tar.gz` |
+| `local-shell-mcp-linux-aarch64` | `.tar.gz` |
+| `local-shell-mcp-macos-x86_64` | `.tar.gz` |
+| `local-shell-mcp-macos-aarch64` | `.tar.gz` |
+| `local-shell-mcp-windows-x86_64` | `.zip` |
 
-## Шаги
+Каждый archive содержит executable, README, license и краткий quickstart file.
 
-1. Сначала выберите страницу установки Runtime.
-2. Запустите Runtime и проверьте `/healthz`, если используется HTTP-режим.
-3. Затем выберите страницу подключения Client.
-4. Зарегистрируйте MCP endpoint или stdio-команду в Client.
-5. Вызовите `environment_get`, чтобы проверить фактическое рабочее пространство и настройки.
+## Установка
 
-```text
-Runtime: Docker / VS Code extension / binary / Python / stdio
-Client:  ChatGPT connector / generic HTTP MCP / generic stdio MCP
-Endpoint: https://your-host.example.com/mcp
+1. Скачайте с GitHub Releases archive для вашей платформы.
+2. Распакуйте его.
+3. Поместите executable в `PATH` или сохраните его absolute path.
+4. Запустите `local-shell-mcp --help`, чтобы проверить запуск binary.
+
+Linux и macOS обычно требуют executable bit:
+
+```bash
+chmod +x local-shell-mcp
+./local-shell-mcp --help
 ```
 
-## Проверка
+Пользователям Windows следует запускать `local-shell-mcp.exe` из PowerShell или добавить содержащий его directory в `PATH`.
 
-- `environment_get` подтверждает настройки Runtime и рабочее пространство.
-- `file_tree` подтверждает видимые файлы.
-- `run_shell` подтверждает командную среду.
+## Минимальный локальный запуск
 
-## Примечания
+```bash
+mkdir -p ~/local-shell-mcp-workspace
+export LOCAL_SHELL_MCP_WORKSPACE_ROOT=~/local-shell-mcp-workspace
+local-shell-mcp --mode mcp
+```
 
-Предпочитайте небольшие проверяемые шаги: осмотр, правка, diff, тестирование, сканирование и commit. Большие задачи также нужно разбивать на аудируемые вызовы инструментов.
+В другом terminal:
+
+```bash
+curl -i http://127.0.0.1:8765/healthz
+```
+
+## Публичный HTTP MCP запуск
+
+Для ChatGPT или public HTTP MCP client задайте следующие категории configuration:
+
+| Setting | Purpose |
+|---|---|
+| `LOCAL_SHELL_MCP_WORKSPACE_ROOT` | Directory, контролируемый tools |
+| `LOCAL_SHELL_MCP_HOST` and `LOCAL_SHELL_MCP_PORT` | Local bind address и port |
+| `LOCAL_SHELL_MCP_PUBLIC_BASE_URL` | Public HTTPS origin без `/mcp` |
+| `LOCAL_SHELL_MCP_AUTH_MODE` | Для public deployment используйте `oauth` |
+| OAuth PIN and JWT secret settings | Требуются для public OAuth authorization |
+
+Опубликуйте local HTTP port через reverse proxy или tunnel. Public endpoint:
+
+```text
+https://your-public-host.example.com/mcp
+```
+
+## YAML config
+
+YAML config может хранить не секретные runtime defaults:
+
+```yaml
+host: 127.0.0.1
+port: 8765
+mode: mcp
+workspace_root: /srv/local-shell-mcp/workspace
+auth_mode: oauth
+public_base_url: https://your-public-host.example.com
+```
+
+Запуск:
+
+```bash
+local-shell-mcp --config /path/to/config.yaml
+```
+
+Environment variables с prefix `LOCAL_SHELL_MCP_` перекрывают YAML values.
+
+## Ответственность за host toolchain
+
+Binary включает Python application, но не все developer tools. MCP tools вызывают программы, доступные на host.
+
+Установите необходимое для ваших задач:
+
+| Capability | Host packages to consider |
+|---|---|
+| Search and shell ergonomics | `ripgrep`, `tree`, `jq`, `curl`, `wget`; Linux releases уже включают static tmux helper |
+| Git workflows | `git`, `gh`, OpenSSH client, credential helpers |
+| Python projects | Python, pip, venv, project-specific compilers and headers |
+| Node projects | Node.js, npm, pnpm, yarn |
+| Rust/Go/Java/C++ | Cargo/rustc, Go, JDK, Maven/Gradle, compilers, CMake, Ninja |
+| Browser automation | Playwright browser binaries and OS dependencies |
+| Document conversion | LibreOffice, Pandoc, Poppler utilities |
+
+Если не хотите поддерживать этот host toolchain, используйте Docker Compose.
+
+## Долгоживущий сервис
+
+Для persistent public deployment запускайте binary под process supervisor вашей ОС. Соблюдайте следующие правила:
+
+- Dedicated low-privilege OS account.
+- Dedicated workspace directory.
+- Sensitive values хранить вне world-readable files.
+- Автоматически restart при failure.
+- Проверять `/healthz` после каждого restart.
+- Сохранять logs для troubleshooting.
+
+## Updates
+
+1. Скачайте новый release archive для платформы.
+2. При желании verify checksums.
+3. Замените executable.
+4. Restart process manager.
+5. Проверьте `/healthz`.
+6. Перед продолжением работы попросите client выполнить `environment_get`.
+
+## Безопасность
+
+Binary работает с привилегиями OS user. Для public deployment используйте dedicated low-privilege user, dedicated workspace и по возможности VM/container boundary.
+
+Не задавайте `LOCAL_SHELL_MCP_ALLOW_FULL_CONTAINER=true` для binary, работающего прямо на personal host. Этот параметр предназначен для disposable containers/VMs.

@@ -1,38 +1,62 @@
-# Client MCP generici
+<!-- i18n-source-sha256: 6e76d0746c53eeef3e770417742a44e122c6484afd0d91ddf6a4995387085c74 -->
+# MCP client generici
 
-Questa pagina descrive lo scenario “Client MCP generici” e mantiene la struttura Runtime/Client comune del sito.
+`local-shell-mcp` può essere usato da ChatGPT e da altri MCP client. Il client decide se collegarsi via HTTP o avviare il server tramite stdio.
 
-## Panoramica
+## MCP client HTTP
 
-Runtime definisce come viene eseguito il processo server e quale workspace controlla. Client definisce come si collega ChatGPT o un altro client MCP. Docker, l’estensione VS Code, i binari autonomi, le installazioni Python/pipx/sorgente e stdio sono opzioni Runtime; il connettore ChatGPT, il client MCP HTTP generico e il client MCP stdio sono connessioni Client.
+Usa HTTP mode quando il server è già in esecuzione:
 
-## Quando usarlo
-
-- Usa questa pagina quando il percorso Runtime o Client scelto corrisponde al titolo.
-- Mantieni coerenti radice del workspace, base URL pubblica, MCP endpoint, modalità di autenticazione e strumenti disponibili sull’host.
-- Per ChatGPT web/app, esponi un MCP endpoint HTTPS che termini con `/mcp`.
-- Per client MCP locali, usa HTTP localhost o `local-shell-mcp --mode stdio` in base al supporto del client.
-
-## Passaggi
-
-1. Scegli prima la pagina di installazione del Runtime.
-2. Avvia il Runtime e verifica `/healthz` quando usi la modalità HTTP.
-3. Poi scegli la pagina di connessione Client.
-4. Registra il MCP endpoint o il comando stdio nel Client.
-5. Chiama `environment_get` per verificare workspace e impostazioni effettive.
-
-```text
-Runtime: Docker / VS Code extension / binary / Python / stdio
-Client:  ChatGPT connector / generic HTTP MCP / generic stdio MCP
-Endpoint: https://your-host.example.com/mcp
+```bash
+LOCAL_SHELL_MCP_WORKSPACE_ROOT=/path/to/workspace local-shell-mcp --mode mcp
 ```
 
-## Verifica
+Endpoint locale:
 
-- `environment_get` conferma impostazioni Runtime e workspace.
-- `file_tree` conferma i file visibili.
-- `run_shell` conferma l’ambiente dei comandi.
+```text
+http://127.0.0.1:8765/mcp
+```
 
-## Note
+Endpoint di rete:
 
-Preferisci passaggi piccoli e verificabili: ispezionare, modificare, controllare il diff, testare, scansionare e fare commit. Anche le attività grandi dovrebbero essere divise in chiamate di strumenti auditabili.
+```text
+https://your-public-host.example.com/mcp
+```
+
+Usa OAuth per qualsiasi endpoint raggiungibile oltre un localhost fidato.
+
+## MCP client stdio
+
+Usa stdio mode quando il client avvia direttamente il processo server:
+
+```bash
+LOCAL_SHELL_MCP_WORKSPACE_ROOT=/path/to/workspace local-shell-mcp --mode stdio
+```
+
+Forma tipica della configurazione client:
+
+```json
+{
+  "mcpServers": {
+    "local-shell-mcp": {
+      "command": "local-shell-mcp",
+      "args": ["--mode", "stdio"],
+      "env": {
+        "LOCAL_SHELL_MCP_WORKSPACE_ROOT": "/path/to/workspace"
+      }
+    }
+  }
+}
+```
+
+Gli schema dei client variano. Alcuni chiamano questa sezione `mcpServers`, altri usano un nome diverso.
+
+## Prima verifica sicura
+
+Per un client appena collegato, inizia con:
+
+```text
+Call environment_get, then file_tree on the workspace root. Do not modify files yet.
+```
+
+Poi esegui un’attività limitata con regole esplicite per modifiche, test e Git.

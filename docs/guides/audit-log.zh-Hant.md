@@ -1,3 +1,4 @@
+<!-- i18n-source-sha256: 4aec137923c38de0ed4a1b760b5dbd6ce99090d508ce3fe838d35ad44b4ba4f1 -->
 # 審計日誌
 
 `local-shell-mcp` 會寫入結構化審計記錄，幫助還原已連接客戶端做過什麼。

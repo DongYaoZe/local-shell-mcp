@@ -1,3 +1,4 @@
+<!-- i18n-source-sha256: 6e76d0746c53eeef3e770417742a44e122c6484afd0d91ddf6a4995387085c74 -->
 # 通用 MCP 客戶端
 
 `local-shell-mcp` 可供 ChatGPT 使用，也可供其它 MCP 客戶端使用。客戶端決定是通過 HTTP 連接，還是通過 stdio 啓動服務。

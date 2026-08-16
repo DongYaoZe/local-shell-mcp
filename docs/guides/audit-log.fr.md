@@ -1,38 +1,55 @@
+<!-- i18n-source-sha256: 4aec137923c38de0ed4a1b760b5dbd6ce99090d508ce3fe838d35ad44b4ba4f1 -->
 # Journal d’audit
 
-Cette page décrit le scénario « Journal d’audit » et conserve la structure Runtime/Client commune du site.
+`local-shell-mcp` écrit des entrées d’audit structurées afin d’aider à reconstruire les actions effectuées par un client connecté.
 
-## Vue d’ensemble
-
-Runtime définit la manière dont le processus serveur s’exécute et l’espace de travail qu’il contrôle. Client définit la manière dont ChatGPT ou un autre client MCP se connecte. Docker, l’extension VS Code, les binaires autonomes, les installations Python/pipx/source et stdio sont des choix de Runtime ; le connecteur ChatGPT, le client MCP HTTP générique et le client MCP stdio sont des connexions Client.
-
-## Quand l’utiliser
-
-- Utilisez cette page lorsque le chemin Runtime ou Client choisi correspond à son titre.
-- Gardez cohérents la racine de l’espace de travail, la base URL publique, le MCP endpoint, le mode d’authentification et les outils disponibles sur l’hôte.
-- Pour ChatGPT web/app, exposez un MCP endpoint HTTPS se terminant par `/mcp`.
-- Pour les clients MCP locaux, utilisez HTTP localhost ou `local-shell-mcp --mode stdio` selon les capacités du client.
-
-## Étapes
-
-1. Choisissez d’abord la page d’installation du Runtime.
-2. Démarrez le Runtime et vérifiez `/healthz` lorsque le mode HTTP est utilisé.
-3. Choisissez ensuite la page de connexion Client.
-4. Enregistrez le MCP endpoint ou la commande stdio dans le Client.
-5. Appelez `environment_get` pour vérifier l’espace de travail et les paramètres effectifs.
+Chemin par défaut :
 
 ```text
-Runtime: Docker / VS Code extension / binary / Python / stdio
-Client:  ChatGPT connector / generic HTTP MCP / generic stdio MCP
-Endpoint: https://your-host.example.com/mcp
+/workspace/.local-shell-mcp/audit.jsonl
 ```
 
-## Vérification
+## Éléments enregistrés
 
-- `environment_get` confirme les paramètres du Runtime et l’espace de travail.
-- `file_tree` confirme les fichiers visibles.
-- `run_shell` confirme l’environnement de commande.
+Les entrées d’audit couvrent notamment :
 
-## Notes
+- Début/fin des tool calls.
+- Métadonnées d’exécution des commandes.
+- Timeouts et erreurs gérées.
+- Enregistrement des remote workers et activité des jobs.
+- Création et révocation des file links.
+- Événements liés à l’authentification lorsque cela s’applique.
 
-Privilégiez les étapes petites et vérifiables : inspecter, modifier, examiner le diff, tester, analyser et valider. Les tâches importantes doivent aussi être décomposées en appels d’outils auditables.
+Les arguments sensibles sont masqués lorsque le serveur sait les identifier.
+
+## Lecture du journal
+
+Utilisez l’outil MCP :
+
+```text
+audit_tail
+```
+
+Ou inspectez-le directement :
+
+```bash
+tail -n 100 /workspace/.local-shell-mcp/audit.jsonl
+```
+
+## Usage opérationnel
+
+Les journaux d’audit sont particulièrement utiles pour :
+
+- Examiner les commandes ayant modifié des fichiers.
+- Vérifier si un remote worker a été utilisé.
+- Déboguer des échecs inattendus.
+- Détecter une exposition accidentelle de file links.
+- Aider à la réponse à incident après une erreur de deployment public.
+
+## Rétention
+
+La taille du journal est bornée par `LOCAL_SHELL_MCP_MAX_AUDIT_LOG_BYTES`. Effectuez une rotation ou exportez-le vers un stockage externe si vous avez besoin d’une rétention longue.
+
+## Limites
+
+Les journaux d’audit ne constituent pas un sandbox. Ils améliorent la traçabilité, mais n’empêchent pas un modèle connecté d’agir dans les limites de son autorité configurée.

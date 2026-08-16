@@ -1,38 +1,23 @@
+<!-- i18n-source-sha256: 91695da5acbb82a8550b150249a9b97f17470140a72b27233e2470a93305e7fb -->
 # Automatisation du navigateur
 
-Cette page décrit le scénario « Automatisation du navigateur » et conserve la structure Runtime/Client commune du site.
+Les outils de navigateur utilisent Playwright pour inspecter les pages, capturer des preuves et exécuter des workflows de navigateur reproductibles. La tool surface publique est volontairement réduite.
 
-## Vue d’ensemble
+## Outils
 
-Runtime définit la manière dont le processus serveur s’exécute et l’espace de travail qu’il contrôle. Client définit la manière dont ChatGPT ou un autre client MCP se connecte. Docker, l’extension VS Code, les binaires autonomes, les installations Python/pipx/source et stdio sont des choix de Runtime ; le connecteur ChatGPT, le client MCP HTTP générique et le client MCP stdio sont des connexions Client.
+| Tool | Rôle |
+|---|---|
+| `browser_session` | Démarrer, lister, fermer ou nettoyer des sessions de navigateur persistantes ; réutiliser facultativement un profile ou un storage state. |
+| `browser_snapshot` | Lire un texte de page borné, les erreurs page/network et les éléments interactifs avec des refs courtes comme `e1` ; capturer facultativement une screenshot. |
+| `browser_act` | Exécuter des actions structurées navigation, click, fill, select, key, wait et multipages à partir de refs de snapshot ou de CSS selectors. |
+| `browser_run_script` | Exécuter un script Python Playwright complet lorsque les actions de haut niveau ne suffisent pas. |
 
-## Quand l’utiliser
+Tous les outils de navigateur acceptent un `machine` facultatif. Les dépendances du navigateur doivent déjà être installées sur le controller ou worker sélectionné ; l’installation se fait avec des commandes shell ordinaires telles que `python -m playwright install chromium`.
 
-- Utilisez cette page lorsque le chemin Runtime ou Client choisi correspond à son titre.
-- Gardez cohérents la racine de l’espace de travail, la base URL publique, le MCP endpoint, le mode d’authentification et les outils disponibles sur l’hôte.
-- Pour ChatGPT web/app, exposez un MCP endpoint HTTPS se terminant par `/mcp`.
-- Pour les clients MCP locaux, utilisez HTTP localhost ou `local-shell-mcp --mode stdio` selon les capacités du client.
+## Flux courants
 
-## Étapes
+Pour un travail interactif, appelez `browser_session(action="start", url=...)`, puis `browser_snapshot`. Le snapshot renvoie des références courtes telles que `e1` et `e2` ; transmettez-les directement à `browser_act`, par exemple `{"action": "click", "target": "e1"}` ou `{"action": "fill", "target": "e2", "value": "..."}`. Reprenez un snapshot après navigation, car les refs d’éléments représentent l’état de la page et ne sont pas des selectors permanents.
 
-1. Choisissez d’abord la page d’installation du Runtime.
-2. Démarrez le Runtime et vérifiez `/healthz` lorsque le mode HTTP est utilisé.
-3. Choisissez ensuite la page de connexion Client.
-4. Enregistrez le MCP endpoint ou la commande stdio dans le Client.
-5. Appelez `environment_get` pour vérifier l’espace de travail et les paramètres effectifs.
+Pour l’inspection ordinaire et les screenshots, préférez `browser_session` avec `browser_snapshot` ; le snapshot peut renvoyer un texte visible borné et enregistrer une screenshot. Utilisez `browser_run_script` pour l’évaluation JavaScript, la logique personnalisée de capture/PDF ou les interactions non représentées par `browser_act`.
 
-```text
-Runtime: Docker / VS Code extension / binary / Python / stdio
-Client:  ChatGPT connector / generic HTTP MCP / generic stdio MCP
-Endpoint: https://your-host.example.com/mcp
-```
-
-## Vérification
-
-- `environment_get` confirme les paramètres du Runtime et l’espace de travail.
-- `file_tree` confirme les fichiers visibles.
-- `run_shell` confirme l’environnement de commande.
-
-## Notes
-
-Privilégiez les étapes petites et vérifiables : inspecter, modifier, examiner le diff, tester, analyser et valider. Les tâches importantes doivent aussi être décomposées en appels d’outils auditables.
+Gardez les scripts bornés, définissez des timeouts explicites, enregistrez les artifacts dans le workspace et évitez de saisir des credentials sauf si l’environnement est dédié à la tâche.

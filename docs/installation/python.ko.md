@@ -1,38 +1,105 @@
-# Python / pipx / 소스
+<!-- i18n-source-sha256: 19347ba1d8d3f26f227506397f4093281319e6a2a59833ced1da286c1d46f21a -->
+# Python, pipx 및 source runtimes
 
-이 페이지는 “Python / pipx / 소스” 시나리오를 설명하며 문서 사이트의 공통 Runtime/Client 구조를 따릅니다.
+Python runtime은 개발, 디버깅 또는 Docker보다 Python package management가 쉬운 환경에 적합합니다. Docker 및 binary runtime과 동일한 server를 실행합니다.
 
-## 개요
+이 페이지는 세 가지 관련 경우를 다룹니다.
 
-Runtime은 서버 프로세스가 어떻게 실행되고 어떤 워크스페이스를 제어하는지 정합니다. Client는 ChatGPT 또는 다른 MCP 클라이언트가 어떻게 연결되는지 정합니다. Docker, VS Code 확장, 독립 실행 바이너리, Python/pipx/소스 설치, stdio는 Runtime 선택지입니다. ChatGPT 커넥터, 일반 HTTP MCP 클라이언트, stdio MCP 클라이언트는 Client 연결입니다.
+- `pipx install local-shell-mcp`: user-level executable install.
+- `pip install local-shell-mcp`: 기존 virtual environment에 install.
+- Editable source checkout: project 자체 개발 또는 디버깅.
 
-## 사용 시점
+## pipx install
 
-- 선택한 Runtime 또는 Client 경로가 이 페이지 제목과 일치할 때 사용합니다.
-- 워크스페이스 루트, 공개 base URL, MCP endpoint, 인증 모드, 호스트에서 사용할 수 있는 도구를 일관되게 유지합니다.
-- ChatGPT 웹/App에는 `/mcp`로 끝나는 HTTPS MCP endpoint를 노출합니다.
-- 로컬 MCP 클라이언트는 지원 범위에 따라 HTTP localhost 또는 `local-shell-mcp --mode stdio`를 사용합니다.
+일반 사용자에게 `pipx`는 가장 깔끔한 Python-based install입니다. command별 virtual environment를 제공하면서 executable을 `PATH`에 노출합니다.
 
-## 단계
-
-1. 먼저 Runtime 설치 페이지를 선택합니다.
-2. Runtime을 시작하고 HTTP 모드에서는 `/healthz`를 확인합니다.
-3. 그다음 Client 연결 페이지를 선택합니다.
-4. Client에 MCP endpoint 또는 stdio 명령을 등록합니다.
-5. `environment_get`를 호출해 실제 워크스페이스와 설정을 확인합니다.
-
-```text
-Runtime: Docker / VS Code extension / binary / Python / stdio
-Client:  ChatGPT connector / generic HTTP MCP / generic stdio MCP
-Endpoint: https://your-host.example.com/mcp
+```bash
+pipx install local-shell-mcp
+local-shell-mcp --help
 ```
 
-## 검증
+로컬 HTTP MCP server를 시작합니다.
 
-- `environment_get`는 Runtime 설정과 워크스페이스를 확인합니다.
-- `file_tree`는 보이는 파일을 확인합니다.
-- `run_shell`은 명령 실행 환경을 확인합니다.
+```bash
+mkdir -p ~/local-shell-mcp-workspace
+export LOCAL_SHELL_MCP_WORKSPACE_ROOT=~/local-shell-mcp-workspace
+local-shell-mcp --mode mcp
+```
 
-## 참고
+Health 확인:
 
-작고 검증 가능한 단계, 즉 확인, 편집, diff, 테스트, 스캔, 커밋을 우선합니다. 큰 작업도 감사 가능한 도구 호출로 나눕니다.
+```bash
+curl -i http://127.0.0.1:8765/healthz
+```
+
+## Virtual environment install
+
+Python environment를 직접 관리하는 경우 사용합니다.
+
+```bash
+python -m venv .venv
+. .venv/bin/activate
+pip install --upgrade pip
+pip install local-shell-mcp
+local-shell-mcp --mode mcp
+```
+
+process는 host에 설치된 tool을 사용합니다. Python package가 compiler, Git, browser system dependency 또는 project dependency를 대신 설치하지 않습니다.
+
+## Editable source checkout
+
+project 개발에는 다음을 사용합니다.
+
+```bash
+git clone https://github.com/fwerkor/local-shell-mcp.git
+cd local-shell-mcp
+python -m venv .venv
+. .venv/bin/activate
+pip install --upgrade pip
+pip install -e '.[dev,docs]'
+LOCAL_SHELL_MCP_WORKSPACE_ROOT=/tmp/local-shell-mcp-workspace local-shell-mcp --mode mcp
+```
+
+검사 실행:
+
+```bash
+ruff check .
+pytest -q
+mkdocs build --strict
+```
+
+## Browser setup
+
+Python package는 Playwright에 의존하지만 browser binary는 host에 별도 설치가 필요할 수 있습니다.
+
+```bash
+python -m playwright install chromium
+```
+
+일부 Linux host에는 추가 browser dependency도 필요합니다. Docker는 Playwright base image에서 시작하므로 대부분의 작업을 피할 수 있습니다.
+
+## Public HTTP MCP use
+
+ChatGPT 또는 다른 public HTTP MCP client에서 사용할 경우 다른 HTTP runtime과 같은 public-origin 및 OAuth 설정을 구성한 다음 local port를 reverse proxy 또는 tunnel로 공개합니다.
+
+공개 MCP endpoint:
+
+```text
+https://your-public-host.example.com/mcp
+```
+
+## Development modes
+
+| Mode | Command | 용도 |
+|---|---|---|
+| MCP HTTP | `local-shell-mcp --mode mcp` | HTTPS 뒤의 ChatGPT를 포함한 HTTP 기반 전체 MCP client |
+| REST-style HTTP | `local-shell-mcp --mode http` | 진단 또는 호환 endpoint; 주 ChatGPT 경로가 아님 |
+| stdio | `local-shell-mcp --mode stdio` | process를 시작하는 로컬 MCP client |
+
+`mode=both`는 예약되어 있으며 현재 단일 process mode로 사용하면 안 됩니다.
+
+## Host-runtime safety
+
+Python install은 VM/container에 넣지 않는 한 host user 권한으로 실행됩니다. workspace를 좁게 유지하고 full-container mode를 비활성화하며 workspace를 home directory로 지정하지 마십시오.
+
+신뢰할 수 없는 repository, package-manager 사용이 많은 task 또는 host integration보다 resetability가 중요한 workflow에는 Docker Compose를 사용하십시오.

@@ -1,3 +1,4 @@
+<!-- i18n-source-sha256: 4aec137923c38de0ed4a1b760b5dbd6ce99090d508ce3fe838d35ad44b4ba4f1 -->
 # 审计日志
 
 `local-shell-mcp` 会写入结构化审计记录，帮助还原已连接客户端做过什么。

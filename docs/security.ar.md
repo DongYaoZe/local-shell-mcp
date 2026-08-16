@@ -1,16 +1,8 @@
-<div dir="rtl" markdown>
-
+<!-- i18n-source-sha256: 1f30fc9935125c84fb0838d17ec894d78aaa6253fe3903356414aac716ba2adc -->
 # الأمان
 
-في النشر العام فعّل OAuth ولا تربط Docker socket أو جذر المضيف أو بيانات اعتماد طويلة الأمد.
+استخدم OAuth في عمليات النشر العامة. اجعل قيمتي `LOCAL_SHELL_MCP_OAUTH_ADMIN_PIN` و`LOCAL_SHELL_MCP_OAUTH_JWT_SECRET` قويتين وحافظ على سريتهما.
 
-Mandatory rules:
+تقتصر عمليات المسارات افتراضياً على مساحة العمل، كما تُحظر أجزاء المسارات الحساسة. يعطّل وضع Full-container القيود المضمنة الخاصة بمساحة العمل والمسارات، وهو مخصص فقط للحاويات أو الأجهزة الافتراضية القابلة للتخلص منها.
 
-1. Keep OAuth enabled for public deployments.
-2. Do not mount `/var/run/docker.sock`.
-3. Do not mount the host root filesystem.
-4. Do not expose unauthenticated MCP tools on the public internet.
-5. Treat file links and credential volumes as sensitive.
-6. Use disposable containers or VMs when granting broad authority.
-
-</div>
+روابط تنزيل الملفات المُنشأة هي عناوين bearer URL عامة. وتعتمد حمايتها على رموز عالية العشوائية ومدة صلاحية TTL وحدود اختيارية لعدد التنزيلات وحدود اختيارية للحجم وإمكانية الإلغاء.

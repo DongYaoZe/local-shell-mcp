@@ -1,38 +1,62 @@
-# Client MCP chung
+<!-- i18n-source-sha256: 6e76d0746c53eeef3e770417742a44e122c6484afd0d91ddf6a4995387085c74 -->
+# MCP client dùng chung
 
-Trang này mô tả kịch bản “Client MCP chung” và giữ cấu trúc Runtime/Client chung của trang tài liệu.
+`local-shell-mcp` có thể được dùng bởi ChatGPT và các MCP client khác. Client quyết định kết nối qua HTTP hay tự khởi chạy server qua stdio.
 
-## Tổng quan
+## MCP client HTTP
 
-Runtime xác định tiến trình server chạy như thế nào và điều khiển workspace nào. Client xác định ChatGPT hoặc client MCP khác kết nối như thế nào. Docker, tiện ích VS Code, tệp nhị phân độc lập, cài đặt Python/pipx/mã nguồn và stdio là lựa chọn Runtime; trình kết nối ChatGPT, client MCP HTTP chung và client MCP stdio là kết nối Client.
+Dùng HTTP mode khi server đã chạy:
 
-## Khi nào dùng
-
-- Dùng trang này khi đường dẫn Runtime hoặc Client đã chọn khớp với tiêu đề.
-- Giữ nhất quán workspace root, public base URL, MCP endpoint, chế độ xác thực và các công cụ host khả dụng.
-- Với ChatGPT web/app, hãy công bố MCP endpoint HTTPS kết thúc bằng `/mcp`.
-- Với client MCP cục bộ, dùng HTTP localhost hoặc `local-shell-mcp --mode stdio` tùy khả năng hỗ trợ của client.
-
-## Các bước
-
-1. Trước tiên chọn trang cài đặt Runtime.
-2. Khởi động Runtime và kiểm tra `/healthz` khi dùng chế độ HTTP.
-3. Sau đó chọn trang kết nối Client.
-4. Đăng ký MCP endpoint hoặc lệnh stdio trong Client.
-5. Gọi `environment_get` để kiểm tra workspace và cấu hình thực tế.
-
-```text
-Runtime: Docker / VS Code extension / binary / Python / stdio
-Client:  ChatGPT connector / generic HTTP MCP / generic stdio MCP
-Endpoint: https://your-host.example.com/mcp
+```bash
+LOCAL_SHELL_MCP_WORKSPACE_ROOT=/path/to/workspace local-shell-mcp --mode mcp
 ```
 
-## Xác minh
+Endpoint cục bộ:
 
-- `environment_get` xác nhận cấu hình Runtime và workspace.
-- `file_tree` xác nhận các tệp nhìn thấy được.
-- `run_shell` xác nhận môi trường lệnh.
+```text
+http://127.0.0.1:8765/mcp
+```
 
-## Ghi chú
+Endpoint mạng:
 
-Ưu tiên các bước nhỏ và có thể xác minh: kiểm tra, chỉnh sửa, diff, test, scan và commit. Tác vụ lớn cũng nên được chia thành các lời gọi công cụ có thể audit.
+```text
+https://your-public-host.example.com/mcp
+```
+
+Dùng OAuth cho mọi endpoint có thể truy cập ngoài localhost đáng tin cậy.
+
+## MCP client stdio
+
+Dùng stdio mode khi client tự khởi chạy tiến trình server:
+
+```bash
+LOCAL_SHELL_MCP_WORKSPACE_ROOT=/path/to/workspace local-shell-mcp --mode stdio
+```
+
+Dạng cấu hình client điển hình:
+
+```json
+{
+  "mcpServers": {
+    "local-shell-mcp": {
+      "command": "local-shell-mcp",
+      "args": ["--mode", "stdio"],
+      "env": {
+        "LOCAL_SHELL_MCP_WORKSPACE_ROOT": "/path/to/workspace"
+      }
+    }
+  }
+}
+```
+
+Schema của client khác nhau. Một số gọi phần này là `mcpServers`; số khác dùng tên khác.
+
+## Kiểm tra an toàn đầu tiên
+
+Với client mới kết nối, bắt đầu bằng:
+
+```text
+Call environment_get, then file_tree on the workspace root. Do not modify files yet.
+```
+
+Sau đó chạy một tác vụ có giới hạn với quy tắc chỉnh sửa, kiểm thử và Git rõ ràng.

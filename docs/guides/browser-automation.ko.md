@@ -1,38 +1,23 @@
+<!-- i18n-source-sha256: 91695da5acbb82a8550b150249a9b97f17470140a72b27233e2470a93305e7fb -->
 # 브라우저 자동화
 
-이 페이지는 “브라우저 자동화” 시나리오를 설명하며 문서 사이트의 공통 Runtime/Client 구조를 따릅니다.
+브라우저 도구는 Playwright를 사용해 페이지를 검사하고, 증거를 캡처하며, 재현 가능한 브라우저 워크플로를 실행합니다. 공개 tool surface는 의도적으로 작게 유지됩니다.
 
-## 개요
+## 도구
 
-Runtime은 서버 프로세스가 어떻게 실행되고 어떤 워크스페이스를 제어하는지 정합니다. Client는 ChatGPT 또는 다른 MCP 클라이언트가 어떻게 연결되는지 정합니다. Docker, VS Code 확장, 독립 실행 바이너리, Python/pipx/소스 설치, stdio는 Runtime 선택지입니다. ChatGPT 커넥터, 일반 HTTP MCP 클라이언트, stdio MCP 클라이언트는 Client 연결입니다.
+| Tool | 용도 |
+|---|---|
+| `browser_session` | 지속 브라우저 세션을 시작, 목록 조회, 종료 또는 정리하며 선택적으로 profile이나 storage state를 재사용합니다. |
+| `browser_snapshot` | 범위가 제한된 페이지 텍스트, page/network error, `e1` 같은 짧은 ref가 있는 대화형 요소를 읽고 선택적으로 screenshot을 캡처합니다. |
+| `browser_act` | snapshot ref 또는 CSS selector를 사용해 navigation, click, fill, select, key, wait 및 multi-page action을 구조화하여 실행합니다. |
+| `browser_run_script` | 고수준 action set으로 충분하지 않을 때 완전한 Python Playwright script를 실행합니다. |
 
-## 사용 시점
+모든 브라우저 도구는 선택적 `machine`을 받습니다. 브라우저 의존성은 선택한 controller 또는 worker에 미리 설치되어 있어야 하며, 설치는 `python -m playwright install chromium` 같은 일반 shell command로 수행합니다.
 
-- 선택한 Runtime 또는 Client 경로가 이 페이지 제목과 일치할 때 사용합니다.
-- 워크스페이스 루트, 공개 base URL, MCP endpoint, 인증 모드, 호스트에서 사용할 수 있는 도구를 일관되게 유지합니다.
-- ChatGPT 웹/App에는 `/mcp`로 끝나는 HTTPS MCP endpoint를 노출합니다.
-- 로컬 MCP 클라이언트는 지원 범위에 따라 HTTP localhost 또는 `local-shell-mcp --mode stdio`를 사용합니다.
+## 일반 흐름
 
-## 단계
+대화형 작업에서는 `browser_session(action="start", url=...)`를 호출한 다음 `browser_snapshot`을 사용합니다. Snapshot은 `e1`, `e2` 같은 짧은 ref를 반환하므로 `{"action": "click", "target": "e1"}` 또는 `{"action": "fill", "target": "e2", "value": "..."}`처럼 그대로 `browser_act`에 전달합니다. Element ref는 영구 selector가 아니라 page-state reference이므로 navigation 후에는 다시 snapshot을 생성하십시오.
 
-1. 먼저 Runtime 설치 페이지를 선택합니다.
-2. Runtime을 시작하고 HTTP 모드에서는 `/healthz`를 확인합니다.
-3. 그다음 Client 연결 페이지를 선택합니다.
-4. Client에 MCP endpoint 또는 stdio 명령을 등록합니다.
-5. `environment_get`를 호출해 실제 워크스페이스와 설정을 확인합니다.
+일반적인 검사와 screenshot에는 `browser_session` + `browser_snapshot`을 우선 사용하십시오. Snapshot은 범위가 제한된 visible text를 반환하고 screenshot을 저장할 수 있습니다. JavaScript evaluation, 사용자 정의 capture/PDF logic 또는 `browser_act`로 표현되지 않는 상호작용에는 `browser_run_script`를 사용합니다.
 
-```text
-Runtime: Docker / VS Code extension / binary / Python / stdio
-Client:  ChatGPT connector / generic HTTP MCP / generic stdio MCP
-Endpoint: https://your-host.example.com/mcp
-```
-
-## 검증
-
-- `environment_get`는 Runtime 설정과 워크스페이스를 확인합니다.
-- `file_tree`는 보이는 파일을 확인합니다.
-- `run_shell`은 명령 실행 환경을 확인합니다.
-
-## 참고
-
-작고 검증 가능한 단계, 즉 확인, 편집, diff, 테스트, 스캔, 커밋을 우선합니다. 큰 작업도 감사 가능한 도구 호출로 나눕니다.
+Script의 범위를 제한하고 명시적 timeout을 설정하며 artifact를 workspace 아래에 저장하십시오. 환경이 해당 작업 전용이 아니라면 credential 입력을 피하십시오.

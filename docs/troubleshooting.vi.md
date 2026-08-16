@@ -1,18 +1,18 @@
-# Khắc phục sự cố
+<!-- i18n-source-sha256: ed71ed496e65545264c76f97a154e8e0758faf58be0ba74c24c82f3b860ff4f2 -->
+# Xử lý sự cố
 
-Check server health:
+Kiểm tra trạng thái dịch vụ:
 
 ```bash
-docker compose ps
-docker compose logs --tail=200 local-shell-mcp
 curl -i http://127.0.0.1:8765/healthz
 ```
 
-Common checks:
+Kiểm tra log:
 
-- Public HTTPS URL is reachable.
-- MCP endpoint ends with `/mcp`.
-- OAuth values match the current deployment.
-- Reverse proxy supports streaming requests.
-- Remote worker invite has not expired.
-- Workspace permissions allow writes to `/workspace/.local-shell-mcp`.
+```bash
+docker compose logs --tail=100 local-shell-mcp
+```
+
+Nếu ChatGPT không thể kết nối, hãy xác nhận `LOCAL_SHELL_MCP_PUBLIC_BASE_URL` khớp chính xác với HTTPS origin công khai và `/mcp`, metadata OAuth cùng `/healthz` đều có thể truy cập qua tunnel hoặc reverse proxy.
+
+Nếu remote worker không xuất hiện, hãy xác nhận chế độ remote đã bật, lời mời chưa hết hạn và máy từ xa có thể gửi các yêu cầu HTTPS đi ra tới máy chủ điều khiển.

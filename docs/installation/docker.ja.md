@@ -1,38 +1,184 @@
-# Docker Compose
+<!-- i18n-source-sha256: 56d5f11100a1906c167afd36354f29742515a26289c62a03f044f3852ce2eaed -->
+# Docker Compose runtime
 
-このページでは「Docker Compose」の場面を説明し、サイト全体で共通の Runtime/Client 構造に従います。
+Docker Compose は多くの user に推奨される runtime です。モデルに制御された Linux workspace、再現可能な toolchain、persistent credentials、browser automation support、簡単な upgrade path を提供します。
 
-## 概要
+これは runtime の選択です。ChatGPT、generic HTTP MCP client に接続することも、local testing のみに使うこともできます。
 
-Runtime はサーバープロセスの起動方法と制御するワークスペースを決めます。Client は ChatGPT または別の MCP クライアントの接続方法を決めます。Docker、VS Code 拡張、スタンドアロンバイナリ、Python/pipx/ソースインストール、stdio は Runtime の選択肢です。ChatGPT コネクタ、汎用 HTTP MCP クライアント、stdio MCP クライアントは Client 接続です。
+## Docker image に含まれるもの
 
-## 利用する場面
+Image は Playwright Python image をベースにし、広い development toolchain を install しています。目的は、AI coding agent が project ごとに runtime image を再 build せず、多様な repository を扱えるようにすることです。
 
-- 選択した Runtime または Client の経路がこのページのタイトルに一致する場合に使用します。
-- ワークスペースルート、公開 base URL、MCP endpoint、認証モード、ホストで利用できるツールをそろえます。
-- ChatGPT の Web/App では `/mcp` で終わる HTTPS MCP endpoint を公開します。
-- ローカル MCP クライアントでは、対応状況に応じて HTTP localhost または `local-shell-mcp --mode stdio` を使用します。
+含まれる category：
 
-## 手順
+| Category | 例 |
+|---|---|
+| Shell と inspection | Bash, curl, wget, jq, ripgrep, tree, tmux, patch, file |
+| Git と credentials | Git, GitHub CLI, OpenSSH client, credential persistence volume |
+| C/C++ build | build-essential, clang, cmake, ninja, autoconf, automake, gdb, lldb |
+| Python | Python, pip, venv, pipx, package development dependencies |
+| JavaScript/TypeScript | Node.js, npm, yarn, pnpm, TypeScript, ts-node |
+| その他の言語 | Go, Rust, Java, Ruby, PHP, Perl, Lua, R |
+| Browser automation | Playwright browsers and browser dependencies |
+| Document tooling | LibreOffice, Pandoc, Poppler utilities, OCR tooling |
 
-1. まず Runtime のインストールページを選びます。
-2. Runtime を起動し、HTTP モードでは `/healthz` を確認します。
-3. 次に Client 接続ページを選びます。
-4. Client に MCP endpoint または stdio コマンドを登録します。
-5. `environment_get` を呼び出して実際のワークスペースと設定を確認します。
+正確な image content は convenience layer であり stable API ではありません。Project-specific dependencies は workspace または project build scripts に置いてください。
 
-```text
-Runtime: Docker / VS Code extension / binary / Python / stdio
-Client:  ChatGPT connector / generic HTTP MCP / generic stdio MCP
-Endpoint: https://your-host.example.com/mcp
+## 基本 local run
+
+```bash
+git clone https://github.com/fwerkor/local-shell-mcp.git
+cd local-shell-mcp
+cp .env.example .env
+mkdir -p workspaces/default
+docker compose up -d
+curl -i http://127.0.0.1:8765/healthz
 ```
 
-## 検証
+Default Compose file は service を localhost に bind します：
 
-- `environment_get` は Runtime 設定とワークスペースを確認します。
-- `file_tree` は見えているファイルを確認します。
-- `run_shell` はコマンド実行環境を確認します。
+```text
+127.0.0.1:8765 -> container:8765
+```
 
-## 注記
+これは local testing、および同じ host 上の reverse proxy に適しています。
 
-小さく検証可能な手順を優先します。確認、編集、diff、テスト、スキャン、コミットの順に進めます。大きな作業も監査可能なツール呼び出しに分解します。
+## Workspace layout
+
+Default Compose runtime は次を mount します：
+
+| Host path / volume | Container path | Purpose |
+|---|---|---|
+| `./workspaces/default` | `/workspace` | Tools から見える controlled workspace |
+| `local-shell-mcp-credentials` volume | `/persist/credentials` | Persistent Git/GitHub/SSH/GPG-style credential state |
+
+Trust boundary ごとに 1 workspace directory を使ってください。便利だからという理由で home directory 全体を mount しないでください。
+
+## 必須の public settings
+
+ChatGPT または public HTTP MCP client 用に `.env` を設定します：
+
+```env
+LOCAL_SHELL_MCP_PUBLIC_BASE_URL=https://your-public-host.example.com
+LOCAL_SHELL_MCP_AUTH_MODE=oauth
+LOCAL_SHELL_MCP_OAUTH_ADMIN_PIN=change-me-long-random-pin
+LOCAL_SHELL_MCP_OAUTH_JWT_SECRET=change-me-64-hex-random-secret
+```
+
+JWT secret は次のような command で生成できます：
+
+```bash
+openssl rand -hex 32
+```
+
+Public MCP URL：
+
+```text
+https://your-public-host.example.com/mcp
+```
+
+## Cloudflare Tunnel sidecar
+
+Compose file には `tunnel` profile の optional `cloudflared` service が含まれます。Tunnel を MCP server と並べて実行します。
+
+`.env` を設定します：
+
+```env
+CLOUDFLARE_TUNNEL_TOKEN=<token from Cloudflare Tunnel>
+LOCAL_SHELL_MCP_PUBLIC_BASE_URL=https://your-public-host.example.com
+LOCAL_SHELL_MCP_AUTH_MODE=oauth
+LOCAL_SHELL_MCP_OAUTH_ADMIN_PIN=<strong pin>
+LOCAL_SHELL_MCP_OAUTH_JWT_SECRET=<strong random secret>
+```
+
+両方の service を開始します：
+
+```bash
+docker compose --profile tunnel up -d
+```
+
+Cloudflare Zero Trust では public hostname を次へ route します：
+
+```text
+http://local-shell-mcp:8765
+```
+
+これは Cloudflare Tunnel であり Cloudflare Access ではありません。ChatGPT 用 OAuth は引き続き `local-shell-mcp` が処理します。
+公開 port が localhost に制限されるため、Compose service は forwarded headers を信頼します。これにより OAuth PIN rate limiting で public caller address を保持できます。Container port を直接公開する場合は `LOCAL_SHELL_MCP_FORWARDED_ALLOW_IPS=*` を trusted reverse proxy の明示的 address に置き換えてください。
+
+## Tunnel sidecar なしの reverse proxy
+
+既に Caddy、Nginx、Traefik、Nginx Proxy Manager を使っているなら通常の Compose service を維持し、HTTPS を次へ forward します：
+
+```text
+http://127.0.0.1:8765
+```
+
+Proxy は path を削らず次の routes を forward する必要があります：
+
+| Route | Purpose |
+|---|---|
+| `/mcp` | MCP streamable HTTP endpoint |
+| `/healthz`, `/readyz` | Health checks |
+| `/.well-known/oauth-protected-resource` | OAuth resource metadata |
+| `/.well-known/oauth-authorization-server` | OAuth authorization-server metadata |
+| `/oauth/register` | Dynamic client registration |
+| `/oauth/authorize` | Browser authorization page |
+| `/oauth/token` | Token exchange |
+| `/downloads/<token>` | Optional generated file downloads |
+| `/join/<token>`, `/remote/*` | Optional remote-worker bootstrap / polling |
+
+Proxy behavior の要件は [network connectivity](../clients/connectivity.md) を参照してください。
+
+## Full-container mode
+
+`LOCAL_SHELL_MCP_ALLOW_FULL_CONTAINER=false` は filesystem operation を workspace 内に制限します。より安全な default です。
+
+Container を意図的に disposable とし、model が container filesystem 全体を操作する想定の場合のみ `true` にします。有効化すると built-in command/path denylist restrictions が解除されます。
+
+```env
+LOCAL_SHELL_MCP_ALLOW_FULL_CONTAINER=true
+```
+
+Laptop 上で直接動く VS Code extension や binary のような host-launched runtime では full-container mode を有効にしないでください。
+
+## Credentials
+
+Docker runtime は一般的な developer credentials を dedicated volume に永続化できます。GitHub CLI login、Git HTTPS credential helpers、`.netrc`、SSH config、GPG state に便利です。
+
+Credential volume は sensitive として扱ってください。Repository-scoped deploy key、fine-grained token、short-lived credential を優先し、model が自由に読める workspace に broad personal credential を置かないでください。
+
+SSH agent socket を mount して SSH-agent forwarding もできますが、container から active agent への trust を拡張します。Exposure を理解している場合のみ使用してください。
+
+## 更新
+
+```bash
+docker compose pull
+docker compose up -d
+curl -i http://127.0.0.1:8765/healthz
+```
+
+Tunnel sidecar を使う場合：
+
+```bash
+docker compose --profile tunnel pull
+docker compose --profile tunnel up -d
+curl -i http://127.0.0.1:8765/healthz
+```
+
+Upgrade 後は client にまず read-only check を依頼します：
+
+```text
+local-shell-mcp を使用してください。environment_get を呼び、workspace root に対して file_list を実行してください。ファイルは変更しないでください。
+```
+
+## Troubleshooting
+
+| 症状 | 確認項目 |
+|---|---|
+| `/healthz` が local で失敗 | `docker compose ps`, `docker compose logs --tail=200 local-shell-mcp` |
+| ChatGPT が tools を discover できない | Public URL は `/mcp` で終わり、`LOCAL_SHELL_MCP_PUBLIC_BASE_URL` には `/mcp` を含めない |
+| OAuth page が失敗 | Public OAuth deployment では admin PIN と JWT secret を設定 |
+| Tools から files が見えない | 意図した host directory が `/workspace` に mount されているか確認 |
+| Browser tools が失敗 | Playwright image が current か確認し、target browser に `run_shell` を試す |
+| Git auth が消えた | Credential volume と、再作成した container が同じ volume を使っているか確認 |

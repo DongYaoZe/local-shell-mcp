@@ -1,38 +1,184 @@
-# Docker Compose
+<!-- i18n-source-sha256: 56d5f11100a1906c167afd36354f29742515a26289c62a03f044f3852ce2eaed -->
+# Runtime Docker Compose
 
-Halaman ini menjelaskan skenario “Docker Compose” dan mengikuti struktur Runtime/Client yang sama di situs.
+Docker Compose adalah runtime yang direkomendasikan untuk sebagian besar pengguna. Ia memberi model workspace Linux terkontrol, toolchain reproducible, persistent credentials, dukungan browser automation, dan jalur upgrade yang mudah.
 
-## Ringkasan
+Ini adalah pilihan runtime. Dapat dihubungkan ke ChatGPT, generic HTTP MCP client, atau tetap lokal untuk testing.
 
-Runtime menentukan bagaimana proses server berjalan dan workspace mana yang dikendalikan. Client menentukan bagaimana ChatGPT atau client MCP lain terhubung. Docker, ekstensi VS Code, biner mandiri, instalasi Python/pipx/sumber, dan stdio adalah pilihan Runtime; konektor ChatGPT, client MCP HTTP generik, dan client MCP stdio adalah koneksi Client.
+## Isi Docker image
 
-## Kapan digunakan
+Image berbasis Playwright Python image dan memasang development toolchain yang luas. Tujuannya agar AI coding agent dapat menangani banyak repository tanpa meminta rebuild runtime untuk setiap project.
 
-- Gunakan halaman ini ketika jalur Runtime atau Client yang dipilih cocok dengan judulnya.
-- Jaga agar root workspace, base URL publik, MCP endpoint, mode autentikasi, dan alat host yang tersedia tetap konsisten.
-- Untuk ChatGPT web/app, ekspos MCP endpoint HTTPS yang berakhir dengan `/mcp`.
-- Untuk client MCP lokal, gunakan HTTP localhost atau `local-shell-mcp --mode stdio` sesuai dukungan client.
+Category yang termasuk:
 
-## Langkah
+| Category | Contoh |
+|---|---|
+| Shell dan inspection | Bash, curl, wget, jq, ripgrep, tree, tmux, patch, file |
+| Git dan credentials | Git, GitHub CLI, OpenSSH client, credential persistence volume |
+| C/C++ build | build-essential, clang, cmake, ninja, autoconf, automake, gdb, lldb |
+| Python | Python, pip, venv, pipx, package development dependencies |
+| JavaScript/TypeScript | Node.js, npm, yarn, pnpm, TypeScript, ts-node |
+| Bahasa lain | Go, Rust, Java, Ruby, PHP, Perl, Lua, R |
+| Browser automation | Playwright browsers and browser dependencies |
+| Document tooling | LibreOffice, Pandoc, Poppler utilities, OCR tooling |
 
-1. Pilih halaman instalasi Runtime terlebih dahulu.
-2. Mulai Runtime dan periksa `/healthz` saat menggunakan mode HTTP.
-3. Pilih halaman koneksi Client berikutnya.
-4. Daftarkan MCP endpoint atau perintah stdio di Client.
-5. Panggil `environment_get` untuk memeriksa workspace dan pengaturan efektif.
+Exact image content adalah convenience layer, bukan stable API. Project-specific dependencies tetap harus berada di workspace atau project build scripts.
 
-```text
-Runtime: Docker / VS Code extension / binary / Python / stdio
-Client:  ChatGPT connector / generic HTTP MCP / generic stdio MCP
-Endpoint: https://your-host.example.com/mcp
+## Basic local run
+
+```bash
+git clone https://github.com/fwerkor/local-shell-mcp.git
+cd local-shell-mcp
+cp .env.example .env
+mkdir -p workspaces/default
+docker compose up -d
+curl -i http://127.0.0.1:8765/healthz
 ```
 
-## Verifikasi
+Default Compose file mengikat service ke localhost:
 
-- `environment_get` mengonfirmasi pengaturan Runtime dan workspace.
-- `file_tree` mengonfirmasi file yang terlihat.
-- `run_shell` mengonfirmasi lingkungan perintah.
+```text
+127.0.0.1:8765 -> container:8765
+```
 
-## Catatan
+Ini sesuai untuk local testing dan reverse proxy yang berjalan pada host yang sama.
 
-Utamakan langkah kecil yang dapat diverifikasi: inspeksi, edit, diff, test, scan, dan commit. Tugas besar juga harus dipecah menjadi panggilan alat yang dapat diaudit.
+## Workspace layout
+
+Default Compose runtime melakukan mount:
+
+| Host path atau volume | Container path | Purpose |
+|---|---|---|
+| `./workspaces/default` | `/workspace` | Controlled workspace yang terlihat oleh tools |
+| `local-shell-mcp-credentials` volume | `/persist/credentials` | Persistent Git/GitHub/SSH/GPG-style credential state |
+
+Gunakan satu workspace directory per trust boundary. Jangan mount seluruh home directory hanya demi kenyamanan.
+
+## Required public settings
+
+Untuk ChatGPT atau public HTTP MCP client lain, konfigurasikan `.env`:
+
+```env
+LOCAL_SHELL_MCP_PUBLIC_BASE_URL=https://your-public-host.example.com
+LOCAL_SHELL_MCP_AUTH_MODE=oauth
+LOCAL_SHELL_MCP_OAUTH_ADMIN_PIN=change-me-long-random-pin
+LOCAL_SHELL_MCP_OAUTH_JWT_SECRET=change-me-64-hex-random-secret
+```
+
+Generate JWT secret dengan command seperti:
+
+```bash
+openssl rand -hex 32
+```
+
+Public MCP URL:
+
+```text
+https://your-public-host.example.com/mcp
+```
+
+## Cloudflare Tunnel sidecar
+
+Compose file menyertakan optional `cloudflared` service di balik profile `tunnel`. Ini menjalankan tunnel di samping MCP server.
+
+Konfigurasikan `.env`:
+
+```env
+CLOUDFLARE_TUNNEL_TOKEN=<token from Cloudflare Tunnel>
+LOCAL_SHELL_MCP_PUBLIC_BASE_URL=https://your-public-host.example.com
+LOCAL_SHELL_MCP_AUTH_MODE=oauth
+LOCAL_SHELL_MCP_OAUTH_ADMIN_PIN=<strong pin>
+LOCAL_SHELL_MCP_OAUTH_JWT_SECRET=<strong random secret>
+```
+
+Mulai kedua service:
+
+```bash
+docker compose --profile tunnel up -d
+```
+
+Di Cloudflare Zero Trust, route public hostname ke:
+
+```text
+http://local-shell-mcp:8765
+```
+
+Ini Cloudflare Tunnel, bukan Cloudflare Access. `local-shell-mcp` tetap menangani OAuth sendiri untuk ChatGPT.
+Compose service mempercayai forwarded headers karena published port dibatasi ke localhost; ini mempertahankan public caller address untuk OAuth PIN rate limiting. Jika container port diekspos langsung, ganti `LOCAL_SHELL_MCP_FORWARDED_ALLOW_IPS=*` dengan alamat eksplisit trusted reverse proxies.
+
+## Reverse proxy tanpa tunnel sidecar
+
+Jika sudah memakai Caddy, Nginx, Traefik, atau Nginx Proxy Manager, pertahankan normal Compose service dan forward HTTPS ke:
+
+```text
+http://127.0.0.1:8765
+```
+
+Proxy harus forward routes berikut tanpa menghapus path:
+
+| Route | Purpose |
+|---|---|
+| `/mcp` | MCP streamable HTTP endpoint |
+| `/healthz`, `/readyz` | Health checks |
+| `/.well-known/oauth-protected-resource` | OAuth resource metadata |
+| `/.well-known/oauth-authorization-server` | OAuth authorization-server metadata |
+| `/oauth/register` | Dynamic client registration |
+| `/oauth/authorize` | Browser authorization page |
+| `/oauth/token` | Token exchange |
+| `/downloads/<token>` | Optional generated file downloads |
+| `/join/<token>`, `/remote/*` | Optional remote-worker bootstrap / polling |
+
+Lihat [network connectivity](../clients/connectivity.md) untuk kebutuhan perilaku proxy.
+
+## Full-container mode
+
+`LOCAL_SHELL_MCP_ALLOW_FULL_CONTAINER=false` membatasi filesystem operations ke workspace. Ini default yang lebih aman.
+
+Set `true` hanya ketika container sengaja disposable dan model diharapkan mengoperasikan seluruh container filesystem. Saat aktif, built-in command/path denylist restrictions dihapus.
+
+```env
+LOCAL_SHELL_MCP_ALLOW_FULL_CONTAINER=true
+```
+
+Jangan aktifkan full-container mode pada host-launched runtime seperti VS Code extension atau binary yang berjalan langsung di laptop.
+
+## Credentials
+
+Docker runtime dapat menyimpan common developer credentials dalam dedicated volume. Berguna untuk GitHub CLI login, Git HTTPS credential helpers, `.netrc`, SSH config, dan GPG state.
+
+Perlakukan credential volume sebagai sensitive. Utamakan repository-scoped deploy keys, fine-grained tokens, atau short-lived credentials. Jangan letakkan broad personal credentials dalam workspace yang dapat dibaca bebas oleh model.
+
+SSH-agent forwarding dimungkinkan dengan mount SSH agent socket, tetapi memperluas trust dari container ke active agent. Gunakan hanya jika memahami exposure.
+
+## Pembaruan
+
+```bash
+docker compose pull
+docker compose up -d
+curl -i http://127.0.0.1:8765/healthz
+```
+
+Dengan tunnel sidecar:
+
+```bash
+docker compose --profile tunnel pull
+docker compose --profile tunnel up -d
+curl -i http://127.0.0.1:8765/healthz
+```
+
+Setelah upgrade, minta client menjalankan read-only check terlebih dahulu:
+
+```text
+Gunakan local-shell-mcp. Panggil environment_get dan jalankan file_list pada root workspace. Jangan ubah file.
+```
+
+## Troubleshooting
+
+| Gejala | Periksa |
+|---|---|
+| `/healthz` gagal secara lokal | `docker compose ps`, `docker compose logs --tail=200 local-shell-mcp` |
+| ChatGPT tidak discover tools | Public URL harus berakhir `/mcp`; `LOCAL_SHELL_MCP_PUBLIC_BASE_URL` tidak boleh memuat `/mcp` |
+| OAuth page gagal | Admin PIN dan JWT secret harus ditetapkan untuk public OAuth deployments |
+| Tools tidak melihat file | Pastikan host directory yang dimaksud mounted ke `/workspace` |
+| Browser tools gagal | Pastikan Playwright image current; coba `run_shell` untuk target browser |
+| Git auth hilang | Periksa credential volume dan apakah recreated container memakai volume yang sama |
