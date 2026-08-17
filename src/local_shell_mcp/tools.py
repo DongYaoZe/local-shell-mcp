@@ -56,6 +56,7 @@ from .jobs import (
     tail_job,
 )
 from .live_channel import (
+    LIVE_RESOURCE_COMPAT_URIS,
     LIVE_RESOURCE_MIME,
     LIVE_RESOURCE_TEMPLATE_URI,
     LIVE_RESOURCE_URI,
@@ -3290,6 +3291,12 @@ def _register_live_workspace_tools(
     )
     def versioned_live_workspace_resource() -> str:
         return _live_workspace_html()
+
+    for compatibility_uri in LIVE_RESOURCE_COMPAT_URIS:
+        mcp.resource(
+            compatibility_uri,
+            **resource_options,
+        )(live_workspace_resource)
 
     @mcp.resource(
         LIVE_RESOURCE_TEMPLATE_URI,

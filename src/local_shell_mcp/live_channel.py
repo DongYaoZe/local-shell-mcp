@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import secrets
 import threading
 import time
@@ -23,6 +24,9 @@ from .session_runtime import (
 )
 
 _LIVE_RESOURCE_PATH = Path(__file__).resolve().parent / "ui_static" / "live-workspace.html"
+_LIVE_RESOURCE_ALIASES_PATH = (
+    Path(__file__).resolve().parent / "ui_static" / "live-workspace-aliases.json"
+)
 LIVE_RESOURCE_URI = "ui://local-shell-mcp/live-workspace.html"
 LIVE_RESOURCE_TEMPLATE_URI = "ui://local-shell-mcp/live-workspace-{version}.html"
 
@@ -36,6 +40,34 @@ def _versioned_live_resource_uri() -> str:
 
 
 LIVE_RESOURCE_VERSIONED_URI = _versioned_live_resource_uri()
+
+
+def _compat_live_resource_uris() -> tuple[str, ...]:
+    try:
+        versions = json.loads(_LIVE_RESOURCE_ALIASES_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return ()
+    if not isinstance(versions, list):
+        return ()
+
+    current = LIVE_RESOURCE_VERSIONED_URI
+    seen: set[str] = set()
+    uris: list[str] = []
+    for value in versions[:64]:
+        if not isinstance(value, str):
+            continue
+        version = value.strip().lower()
+        if len(version) != 16 or any(char not in "0123456789abcdef" for char in version):
+            continue
+        uri = LIVE_RESOURCE_TEMPLATE_URI.format(version=version)
+        if uri == current or uri in seen:
+            continue
+        seen.add(uri)
+        uris.append(uri)
+    return tuple(uris)
+
+
+LIVE_RESOURCE_COMPAT_URIS = _compat_live_resource_uris()
 LIVE_RESOURCE_MIME = "text/html;profile=mcp-app"
 LIVE_API_PREFIX = "/api/live"
 MCP_SESSION_AFFINITY_HEADER = "x-local-shell-mcp-session-affinity"
