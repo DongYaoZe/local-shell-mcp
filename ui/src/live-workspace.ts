@@ -1591,6 +1591,7 @@ async function loadSnapshot(generation: number): Promise<boolean> {
   connectionMessage = "Live"
   updateChrome()
   renderCurrentTab()
+  void enterPreferredDisplayModeAfterPaint(generation)
   return true
 }
 
@@ -1957,6 +1958,19 @@ async function configureFromToolResult(result: unknown): Promise<void> {
   })
 }
 
+function waitForWorkspacePaint(): Promise<void> {
+  return new Promise((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+  })
+}
+
+async function enterPreferredDisplayModeAfterPaint(generation: number): Promise<void> {
+  if (isDshHost) return
+  await waitForWorkspacePaint()
+  if (shuttingDown || !config || generation !== pollGeneration || !connected) return
+  await enterPreferredDisplayMode()
+}
+
 async function enterPreferredDisplayMode(): Promise<void> {
   if (isDshHost) {
     displayMode = "fullscreen"
@@ -2101,7 +2115,6 @@ void (async () => {
     if (shuttingDown) return
     bridgeReady = true
     applyHostContext(app.getHostContext())
-    await enterPreferredDisplayMode()
     if (shuttingDown) return
     const initialResult = await waitForInitialToolResult(300)
     if (shuttingDown) return

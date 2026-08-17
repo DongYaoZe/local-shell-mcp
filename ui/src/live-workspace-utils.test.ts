@@ -71,6 +71,22 @@ describe("live workspace utilities", () => {
     expect(toggleWorkspaceDisplayMode("fullscreen")).toBe("pip")
   })
 
+  test("Live Workspace stays PiP/fullscreen-only and expands only after the live snapshot renders", async () => {
+    const source = await Bun.file(new URL("./live-workspace.ts", import.meta.url)).text()
+    expect(source).toContain('{ availableDisplayModes: ["pip", "fullscreen"] }')
+    expect(source).not.toContain('availableDisplayModes: ["inline"')
+
+    const snapshotStart = source.indexOf("async function loadSnapshot")
+    const snapshotEnd = source.indexOf("async function pollEvents", snapshotStart)
+    const snapshotSource = source.slice(snapshotStart, snapshotEnd)
+    expect(snapshotSource.indexOf("renderCurrentTab()")).toBeLessThan(snapshotSource.indexOf("void enterPreferredDisplayModeAfterPaint(generation)"))
+
+    const startupStart = source.indexOf("await app.connect()")
+    const startupEnd = source.indexOf("passiveRefreshTimer = window.setInterval", startupStart)
+    const chatGptStartup = source.slice(startupStart, startupEnd)
+    expect(chatGptStartup).not.toContain("await enterPreferredDisplayMode()")
+  })
+
   test("reconnect backoff grows but remains bounded", () => {
     expect(reconnectDelayMs(0)).toBe(500)
     expect(reconnectDelayMs(1)).toBe(1000)
