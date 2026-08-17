@@ -8,9 +8,13 @@ const repoRoot = path.resolve(extensionRoot, "..");
 const pkg = require(path.join(extensionRoot, "package.json"));
 const out = path.join(repoRoot, "dist", `local-shell-mcp-${pkg.version}.vsix`);
 const vsce = require.resolve("@vscode/vsce/vsce");
+const args = [vsce, "package", "--no-dependencies", "--out", out];
+if (process.argv.includes("--pre-release")) {
+  args.push("--pre-release");
+}
 
 fs.mkdirSync(path.dirname(out), { recursive: true });
-execFileSync(process.execPath, [vsce, "package", "--no-dependencies", "--out", out], {
+execFileSync(process.execPath, args, {
   cwd: extensionRoot,
   stdio: "inherit",
 });

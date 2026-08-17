@@ -8,6 +8,7 @@ import yaml
 REPO = Path(__file__).resolve().parents[1]
 RELEASE = REPO / ".github" / "workflows" / "release.yml"
 DOCKERFILE = REPO / "Dockerfile"
+VSCODE_PACKAGE_SCRIPT = REPO / "vscode-extension" / "scripts" / "package-vsix.cjs"
 EXPECTED_BINARY_ARTIFACTS = {
     "linux-x86_64",
     "linux-aarch64",
@@ -32,8 +33,19 @@ def step_script(job: dict, name: str) -> str:
 
 
 def main() -> int:
-    workflow = yaml.safe_load(RELEASE.read_text(encoding="utf-8"))
+    release_text = RELEASE.read_text(encoding="utf-8")
+    workflow = yaml.safe_load(release_text)
     jobs = workflow.get("jobs", {})
+
+    if "push_latest:" in release_text or "inputs.push_latest" in release_text:
+        print("Release workflow must derive stable latest tags from the prerelease flag, not a separate push_latest input.")
+        return 1
+
+    validate_job = jobs.get("validate-release", {})
+    docker_tag_script = step_script(validate_job, "Prepare Docker release tags")
+    if 'PRERELEASE' not in docker_tag_script or "if not prerelease:" not in docker_tag_script:
+        print("Docker latest tags must be emitted only for stable releases.")
+        return 1
 
     dockerfile = DOCKERFILE.read_text(encoding="utf-8")
     if "COPY requirements-agent.txt pyproject.toml hatch_build.py README.md LICENSE /app/" not in dockerfile:
@@ -118,13 +130,31 @@ def main() -> int:
     if "npm publish" not in npm_publish_script or npm_job.get("environment") != "npm":
         print("Release workflow must publish the npm launcher from the protected npm environment.")
         return 1
+    if "--tag next" not in npm_publish_script or "--tag latest" not in npm_publish_script:
+        print("npm prereleases must use a non-latest dist-tag while stable releases update latest.")
+        return 1
 
     pypi_job = jobs.get("publish-pypi", {})
     if pypi_job.get("environment") != "pypi":
         print("Release workflow must publish Python artifacts from the protected pypi environment.")
         return 1
+    if "!inputs.prerelease" not in str(pypi_job.get("if") or ""):
+        print("PyPI publication must be limited to stable releases so prereleases cannot replace the default install.")
+        return 1
     if step_script(pypi_job, "Exclude raw Linux wheels unsupported by PyPI"):
         print("PyPI publishing must not discard validated manylinux wheels.")
+        return 1
+
+    vscode_job = jobs.get("build-vscode-extension", {})
+    vscode_package_script = step_script(vscode_job, "Package VSIX")
+    package_script_text = VSCODE_PACKAGE_SCRIPT.read_text(encoding="utf-8")
+    if "--pre-release" not in vscode_package_script or 'args.push("--pre-release")' not in package_script_text:
+        print("VSIX prereleases must be packaged with the Marketplace/Open VSX prerelease marker.")
+        return 1
+
+    vscode_publish_job = jobs.get("publish-vscode-marketplace", {})
+    if "--pre-release" not in step_script(vscode_publish_job, "Publish extension"):
+        print("VS Code Marketplace prereleases must publish through the prerelease channel.")
         return 1
 
     smoke_script = step_script(binary_job, "Smoke test embedded OpenTUI runtime")
