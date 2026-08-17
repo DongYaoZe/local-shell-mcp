@@ -21,6 +21,7 @@ import local_shell_mcp.tools as tools_module
 from local_shell_mcp.auth import Principal
 from local_shell_mcp.live_channel import (
     LIVE_EVENT_LIMIT,
+    LIVE_RESOURCE_COMPAT_URIS,
     LIVE_RESOURCE_MIME,
     LIVE_RESOURCE_TEMPLATE_URI,
     LIVE_RESOURCE_URI,
@@ -66,6 +67,8 @@ def test_live_workspace_resource_uri_stays_stable_with_versioned_alias():
     digest = hashlib.sha256(asset.read_bytes()).hexdigest()[:16]
     assert LIVE_RESOURCE_URI == "ui://local-shell-mcp/live-workspace.html"
     assert f"ui://local-shell-mcp/live-workspace-{digest}.html" == LIVE_RESOURCE_VERSIONED_URI
+    assert LIVE_RESOURCE_VERSIONED_URI not in LIVE_RESOURCE_COMPAT_URIS
+    assert "ui://local-shell-mcp/live-workspace-508d16533a186095.html" in LIVE_RESOURCE_COMPAT_URIS
 
 
 @pytest.mark.asyncio
@@ -1111,6 +1114,7 @@ async def test_mcp_app_resource_and_render_result_hide_live_token(tmp_path, monk
     resources = {str(resource.uri): resource for resource in await mcp.list_resources()}
     resource = resources[LIVE_RESOURCE_URI]
     assert LIVE_RESOURCE_VERSIONED_URI in resources
+    assert "ui://local-shell-mcp/live-workspace-508d16533a186095.html" in resources
     assert resource.mimeType == LIVE_RESOURCE_MIME
     assert resource.meta["ui"]["domain"] == "https://lsm.example.test"
     assert resource.meta["ui"]["csp"]["connectDomains"] == [
@@ -1160,6 +1164,7 @@ async def test_mcp_app_resource_and_render_result_hide_live_token(tmp_path, monk
     for uri in (
         LIVE_RESOURCE_URI,
         LIVE_RESOURCE_VERSIONED_URI,
+        LIVE_RESOURCE_COMPAT_URIS[0],
         "ui://local-shell-mcp/live-workspace-previous-cache-key.html",
     ):
         contents = list(await mcp.read_resource(uri))
