@@ -1593,7 +1593,7 @@ function mergeEvents(incoming: LiveEvent[]): void {
   if (activeTab === "activity") renderActivity()
 }
 
-function resetActivityForSessionBoundary(): void {
+function resetActivityForChannelBoundary(): void {
   events = []
   activityExpandedEventKey = ""
   activityAuditDetails.clear()
@@ -1603,10 +1603,7 @@ function resetActivityForSessionBoundary(): void {
 function applyLogicalSessionId(value: string | null | undefined): boolean {
   const nextSessionId = String(value ?? "")
   const changed = Boolean(config && config.sessionId !== nextSessionId)
-  if (changed) {
-    continuationClaimId = ""
-    resetActivityForSessionBoundary()
-  }
+  if (changed) continuationClaimId = ""
   if (config) config.sessionId = nextSessionId
   return changed
 }
@@ -1813,9 +1810,11 @@ function activateLiveConfig(nextConfig: LiveConfig): void {
   const sessionChanged = !config || config.sessionId !== nextConfig.sessionId
   const targetChanged = !config || config.machine !== nextConfig.machine || config.cwd !== nextConfig.cwd
   if (sessionChanged) continuationClaimId = ""
+  if (channelChanged) {
+    resetActivityForChannelBoundary()
+    cursor = 0
+  }
   if (channelChanged || sessionChanged) {
-    resetActivityForSessionBoundary()
-    if (channelChanged) cursor = 0
     connected = false
     plan = null
     logicalSession = null

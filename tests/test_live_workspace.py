@@ -370,7 +370,7 @@ def test_live_workspace_repeated_same_session_binding_is_idempotent():
     assert list(channel.events) == events
 
 
-def test_live_workspace_session_rebind_drops_prior_operational_events():
+def test_live_workspace_session_rebind_preserves_prior_workspace_activity():
     manager = LiveChannelManager()
     channel, _ = manager.open(
         session_key="mcp:model",
@@ -396,8 +396,8 @@ def test_live_workspace_session_rebind_drops_prior_operational_events():
     assert rebound is channel
     assert channel.seq > old_seq
     assert channel.logical_session_id == "s_second"
-    assert [event["type"] for event in channel.events] == ["session.attached"]
-    assert all(event["data"].get("call_id") != "old-call" for event in channel.events)
+    assert any(event["type"] == "session.attached" for event in channel.events)
+    assert any(event["data"].get("call_id") == "old-call" for event in channel.events)
     manager.publish_for_session(
         "mcp:model",
         "tool.completed",
@@ -405,7 +405,37 @@ def test_live_workspace_session_rebind_drops_prior_operational_events():
     )
     visible = manager.events_since(channel, 0)
     assert any(event["data"].get("call_id") == "new-call" for event in visible)
-    assert all(event["data"].get("call_id") != "old-call" for event in visible)
+    assert any(event["data"].get("call_id") == "old-call" for event in visible)
+
+
+def test_live_workspace_finish_then_next_turn_preserves_workspace_activity():
+    manager = LiveChannelManager()
+    channel, _ = manager.open(
+        session_key="mcp:model",
+        subject="user",
+        scopes=tuple(ALL_OAUTH_SCOPES),
+        logical_session_id="s_first",
+    )
+    manager.publish_for_session(
+        "mcp:model",
+        "tool.completed",
+        data={"call_id": "first-turn", "tool": "run_shell"},
+    )
+
+    assert manager.detach_logical_session("s_first") == [channel]
+    assert channel.logical_session_id is None
+    assert any(event["data"].get("call_id") == "first-turn" for event in channel.events)
+
+    assert manager.bind_logical_session("mcp:model", "s_second", "user") is channel
+    manager.publish_for_session(
+        "mcp:model",
+        "tool.completed",
+        data={"call_id": "second-turn", "tool": "file_read"},
+    )
+
+    visible = manager.events_since(channel, 0)
+    assert any(event["data"].get("call_id") == "first-turn" for event in visible)
+    assert any(event["data"].get("call_id") == "second-turn" for event in visible)
 
 
 def test_live_workspace_switch_does_not_rebind_channel_shared_by_another_transport():
@@ -854,7 +884,7 @@ async def test_live_workspace_expiry_publish_and_wait_paths():
 
 
 @pytest.mark.parametrize("endpoint", ["/api/live/snapshot", "/api/live/events?after=0&timeout=1"])
-def test_live_event_response_keeps_batch_atomic_with_session_binding(
+def test_live_event_response_keeps_batch_atomic_with_preserved_workspace_history(
     tmp_path, monkeypatch, endpoint
 ):
     _configure(tmp_path, monkeypatch, auth="none")
@@ -901,7 +931,7 @@ def test_live_event_response_keeps_batch_atomic_with_session_binding(
     state = data["channel"] if endpoint.endswith("snapshot") else data
     assert state["session_id"] == second["session_id"]
     markers = [event["data"].get("marker") for event in data["events"]]
-    assert "old" not in markers
+    assert "old" in markers
     assert "new" in markers
 
 
