@@ -87,7 +87,13 @@ def main() -> int:
     if "matrix.tui_binary" in package_script:
         print("Release archives must not include the OpenTUI sidecar executable.")
         return 1
-    if 'raw_name="local-shell-mcp-${{ matrix.artifact }}"' not in package_script:
+    if 'package_name="local-shell-mcp-${{ matrix.artifact }}"' not in package_script:
+        print("Release binaries must use stable platform-specific package names.")
+        return 1
+    if 'package_dir="package/${package_name}"' not in package_script:
+        print("Release archive staging must stay outside the published release directory.")
+        return 1
+    if 'raw_name="${package_name}"' not in package_script:
         print("Release binaries must publish raw platform executables for the npm launcher.")
         return 1
 
@@ -100,7 +106,10 @@ def main() -> int:
 
     github_release_job = jobs.get("github-release", {})
     checksum_script = step_script(github_release_job, "Generate SHA256 checksums")
-    if "sha256sum * > SHA256SUMS" not in checksum_script:
+    if "find . -maxdepth 1 -type f" not in checksum_script:
+        print("GitHub release checksums must only enumerate regular release files.")
+        return 1
+    if 'sha256sum -- "${files[@]}" > SHA256SUMS' not in checksum_script:
         print("GitHub releases must publish SHA256SUMS for npm launcher verification.")
         return 1
 

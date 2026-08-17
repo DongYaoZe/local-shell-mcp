@@ -291,10 +291,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p release/local-shell-mcp-${{ matrix.artifact }}
-          cp dist/${{ matrix.binary }} release/local-shell-mcp-${{ matrix.artifact }}/
-          cp README.md LICENSE release/local-shell-mcp-${{ matrix.artifact }}/
-          cat > release/local-shell-mcp-${{ matrix.artifact }}/QUICKSTART.txt <<'EOF'
+          package_name="local-shell-mcp-${{ matrix.artifact }}"
+          package_dir="package/${package_name}"
+          mkdir -p "${package_dir}" release
+          cp "dist/${{ matrix.binary }}" "${package_dir}/"
+          cp README.md LICENSE "${package_dir}/"
+          cat > "${package_dir}/QUICKSTART.txt" <<'EOF'
           Start local-shell-mcp without Docker:
 
             ./local-shell-mcp --mode mcp
@@ -313,17 +315,16 @@ jobs:
             Generate and export LOCAL_SHELL_MCP_OAUTH_ADMIN_PIN as at least 8 random characters.
             Generate and export LOCAL_SHELL_MCP_OAUTH_JWT_SECRET as at least 32 random bytes.
           EOF
-          raw_name="local-shell-mcp-${{ matrix.artifact }}"
-          if [[ "${{ matrix.binary }}" == *.exe ]]; then
+          raw_name="${package_name}"
+          if [[ "${RUNNER_OS}" == "Windows" ]]; then
             raw_name="${raw_name}.exe"
           fi
           cp "dist/${{ matrix.binary }}" "release/${raw_name}"
 
-          cd release
           if [[ "${{ matrix.archive }}" == "zip" ]]; then
-            7z a local-shell-mcp-${{ matrix.artifact }}.zip local-shell-mcp-${{ matrix.artifact }} >/dev/null
+            (cd package && 7z a "../release/${package_name}.zip" "${package_name}" >/dev/null)
           else
-            tar -czf local-shell-mcp-${{ matrix.artifact }}.tar.gz local-shell-mcp-${{ matrix.artifact }}
+            tar -C package -czf "release/${package_name}.tar.gz" "${package_name}"
           fi
 
 
@@ -514,7 +515,12 @@ jobs:
         run: |
           set -euo pipefail
           cd dist
-          sha256sum * > SHA256SUMS
+          mapfile -d '' files < <(find . -maxdepth 1 -type f ! -name SHA256SUMS -printf '%P\0' | sort -z)
+          if (( ${#files[@]} == 0 )); then
+            echo "No release files found for checksum generation" >&2
+            exit 1
+          fi
+          sha256sum -- "${files[@]}" > SHA256SUMS
 
       - name: Create release notes
         run: |
