@@ -365,12 +365,12 @@ select:hover, input:hover, textarea:hover { border-color: var(--ls-border-strong
 .goal-actions .button { min-height: 25px; padding: 0 8px; font-size: 9px; }
 .goal-actions .button.danger { color: var(--ls-danger); border-color: color-mix(in srgb, var(--ls-danger) 35%, var(--ls-border)); }
 
-.task-monitor-view { display: grid; grid-template-rows: auto auto minmax(0, 1fr); gap: 8px; }
+.task-monitor-view { display: grid; grid-template-rows: auto minmax(0, 1fr); gap: 8px; }
 .task-monitor-toolbar { margin-bottom: 0; }
 .task-monitor-toolbar h2 { font-size: 17px; }
 .task-monitor-toolbar p { font-size: 12px; font-family: var(--ls-mono); }
-.task-monitor-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
-.monitor-card { position: relative; min-width: 0; min-height: 96px; display: flex; flex-direction: column; gap: 5px; padding: 9px 10px; border: 1px solid var(--ls-border); border-radius: 9px; background: color-mix(in srgb, var(--ls-panel) 88%, transparent); overflow: hidden; }
+.task-monitor-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
+.monitor-card { position: relative; min-width: 0; min-height: 82px; display: flex; flex-direction: column; gap: 5px; padding: 8px 9px; border: 1px solid var(--ls-border); border-radius: 9px; background: color-mix(in srgb, var(--ls-panel) 88%, transparent); overflow: hidden; }
 .monitor-card::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 2px; background: var(--ls-border-strong); }
 .operation-monitor-card::before { background: var(--ls-info); }
 .plan-monitor-card::before, .auto-monitor-card.active::before, .auto-monitor-card.countdown::before { background: var(--ls-accent); }
@@ -406,19 +406,24 @@ select:hover, input:hover, textarea:hover { border-color: var(--ls-border-strong
 
 .detailed-plan-card { margin-bottom: 0; }
 .plan-progress-summary { display: grid; grid-template-columns: minmax(120px, 1fr) auto; align-items: center; gap: 10px; padding: 0 11px 9px; color: var(--ls-text-3); font-size: 10px; }
-.task-monitor-body { min-height: 0; display: grid; grid-template-columns: minmax(300px, .9fr) minmax(420px, 1.35fr); gap: 8px; overflow: hidden; }
-.task-context-column { min-height: 0; display: flex; flex-direction: column; gap: 8px; overflow: auto; padding-right: 2px; }
-.task-context-column > * { flex: 0 0 auto; }
+.task-monitor-body { min-height: 0; min-width: 0; display: grid; grid-template-columns: clamp(360px, 31vw, 520px) minmax(0, 1fr); gap: 8px; overflow: hidden; }
+.task-overview-column { min-height: 0; min-width: 0; display: flex; flex-direction: column; gap: 8px; overflow-y: auto; overflow-x: hidden; padding-right: 2px; }
+.task-context-column { min-height: 0; display: flex; flex-direction: column; gap: 8px; overflow: visible; }
+.task-context-column > *, .task-overview-column > * { flex: 0 0 auto; }
 .task-context-column > .activity-focus { margin-bottom: 0; }
-.session-activity-panel { min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.session-activity-panel { min-height: 0; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
 .session-activity-panel .panel-head { flex: 0 0 auto; }
-.session-timeline { flex: 1 1 auto; min-height: 0; max-height: none; overflow: auto; }
-.session-timeline, .task-context-column {
+.session-timeline { flex: 1 1 auto; min-height: 0; max-height: none; overflow-x: hidden; overflow-y: scroll; }
+.session-timeline, .task-overview-column {
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
   touch-action: pan-y;
   -webkit-overflow-scrolling: touch;
 }
+.session-timeline::-webkit-scrollbar, .task-overview-column::-webkit-scrollbar { width: 9px; }
+.session-timeline::-webkit-scrollbar-track, .task-overview-column::-webkit-scrollbar-track { background: transparent; }
+.session-timeline::-webkit-scrollbar-thumb, .task-overview-column::-webkit-scrollbar-thumb { background: var(--ls-border-strong); border: 2px solid transparent; border-radius: 999px; background-clip: padding-box; }
+.session-timeline::-webkit-scrollbar-thumb:hover, .task-overview-column::-webkit-scrollbar-thumb:hover { background: var(--ls-text-3); border: 2px solid transparent; background-clip: padding-box; }
 .task-monitor-view .timeline-copy strong { font-size: 12px; }
 .task-monitor-view .timeline-copy p { font-size: 10.5px; }
 
@@ -434,11 +439,19 @@ select:hover, input:hover, textarea:hover { border-color: var(--ls-border-strong
 .remote-grid, .audit-table { flex: 1 1 auto; min-height: 0; max-height: none; overflow: auto; }
 
 @media (max-width: 1040px) {
-  .task-monitor-grid { grid-template-columns: 1fr 1fr; }
+  .task-monitor-body { grid-template-columns: minmax(320px, .78fr) minmax(0, 1.22fr); }
   .task-monitor-toolbar { align-items: center; flex-direction: row; }
   .checkpoint-grid { grid-template-columns: 1fr 1fr; }
   .checkpoint-grid > div:nth-child(2) { border-right: 0; }
   .checkpoint-grid > div:nth-child(3) { grid-column: 1 / -1; border-top: 1px solid var(--ls-border); }
+}
+
+@media (max-width: 760px) {
+  .task-monitor-body { grid-template-columns: 1fr; grid-template-rows: minmax(116px, .34fr) minmax(170px, 1fr); }
+  .task-overview-column { gap: 10px; padding-right: 0; }
+  .task-monitor-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .monitor-card { min-height: 54px; padding: 6px 8px; }
+  .monitor-secondary { display: none; }
 }
 
 @media (max-width: 620px) {
@@ -447,9 +460,17 @@ select:hover, input:hover, textarea:hover { border-color: var(--ls-border-strong
   .checkpoint-grid > div { border-right: 0; border-top: 1px solid var(--ls-border); }
   .checkpoint-grid > div:first-child { border-top: 0; }
   .checkpoint-grid > div:nth-child(3) { grid-column: auto; }
-  .monitor-card { min-height: 82px; padding: 7px 8px; }
-  .monitor-secondary { display: none; }
+  .monitor-card { min-height: 52px; }
   .plan-progress-summary { grid-template-columns: 1fr; gap: 5px; }
-  .task-monitor-body { grid-template-columns: 1fr; grid-template-rows: minmax(0, .9fr) minmax(0, 1.1fr); }
-  .task-context-column { padding-right: 0; }
+  .task-monitor-body { grid-template-rows: minmax(110px, .32fr) minmax(160px, 1fr); }
+}
+
+@media (max-height: 620px) {
+  .task-monitor-view { gap: 6px; }
+  .task-monitor-toolbar { min-height: 34px; }
+  .task-monitor-toolbar p { display: none; }
+  .monitor-card { min-height: 50px; padding-block: 5px; }
+  .monitor-secondary { display: none; }
+  .task-context-column { gap: 6px; }
+  .task-monitor-body { gap: 6px; }
 }

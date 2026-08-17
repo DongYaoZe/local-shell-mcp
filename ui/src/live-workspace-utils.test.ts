@@ -37,6 +37,15 @@ describe("live workspace utilities", () => {
     expect(restoreReverseFeedScrollTop(clamped, 250, 300)).toBe(0)
   })
 
+  test("Activity owns wheel scrolling inside embedded workspace panes", async () => {
+    const source = await Bun.file(new URL("./live-workspace.ts", import.meta.url)).text()
+    expect(source).toContain('root.addEventListener("wheel", onRootWheel, { passive: false })')
+    expect(source).toContain('target.closest<HTMLElement>(".session-timeline")')
+    expect(source).toContain('target.closest<HTMLElement>(".task-overview-column")')
+    expect(source).toContain("event.preventDefault()")
+    expect(source).toContain("event.stopPropagation()")
+  })
+
   test("Live Workspace teardown does not recursively call its rendering tool", async () => {
     const source = await Bun.file(new URL("./live-workspace.ts", import.meta.url)).text()
     expect(source).toContain("app.onteardown = async")
