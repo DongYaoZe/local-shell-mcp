@@ -76,6 +76,7 @@ LIVE_EVENT_LIMIT = 2_000
 LIVE_EVENT_BATCH = 300
 LIVE_LONG_POLL_S = 25.0
 LIVE_RECOVERY_CLAIM_TTL_S = 60.0
+LIVE_APP_REATTACH_CLAIM_TTL_S = 2 * 60.0
 _SESSION_KEYS: weakref.WeakKeyDictionary[Any, str] = weakref.WeakKeyDictionary()
 _SESSION_KEYS_LOCK = threading.Lock()
 
@@ -89,6 +90,8 @@ class LiveChannel:
     token_value: str = field(repr=False)
     created_at: float
     expires_at: float
+    machine: str = "local"
+    cwd: str = "."
     seq: int = 0
     events: deque[dict[str, Any]] = field(
         default_factory=lambda: deque(maxlen=LIVE_EVENT_LIMIT)
@@ -127,6 +130,7 @@ class LiveChannelManager:
         self._logical_session_channels: dict[str, str] = {}
         self._recovered_live_ids: dict[str, str] = {}
         self._recovery_claims: dict[str, dict[str, float]] = {}
+        self._app_reattach_claims: dict[str, dict[str, float]] = {}
         self._credentials: dict[str, dict[str, Any]] = {}
 
     @staticmethod
@@ -241,6 +245,19 @@ class LiveChannelManager:
         self._recovery_claims = {
             subject: claims for subject, claims in self._recovery_claims.items() if claims
         }
+        self._app_reattach_claims = {
+            subject: {
+                live_id: deadline
+                for live_id, deadline in claims.items()
+                if deadline > current and live_id in self._channels
+            }
+            for subject, claims in self._app_reattach_claims.items()
+        }
+        self._app_reattach_claims = {
+            subject: claims
+            for subject, claims in self._app_reattach_claims.items()
+            if claims
+        }
 
     def open(
         self,
@@ -252,6 +269,8 @@ class LiveChannelManager:
         live_id: str | None = None,
         logical_session_id: str | None = None,
         app_reattach: bool = False,
+        machine: str | None = None,
+        cwd: str | None = None,
     ) -> tuple[LiveChannel, str]:
         now = time.time()
         expires_at = now + LIVE_TOKEN_TTL_S
@@ -266,6 +285,7 @@ class LiveChannelManager:
                 else None
             )
             requested_live_id = live_id
+            recovered_empty_app = False
             resolved_live_id = self._recovered_live_ids.get(live_id or "", live_id or "")
             channel = self._channels.get(resolved_live_id or "")
             if app_reattach and channel is not None and channel.logical_session_id:
@@ -305,6 +325,20 @@ class LiveChannelManager:
                 if live_id:
                     raise PermissionError("Live workspace belongs to a different principal")
                 channel = None
+            if channel is None and app_reattach and not live_id and not logical_session_id:
+                claims = self._app_reattach_claims.get(subject, {})
+                candidates = [
+                    self._channels[claim_live_id]
+                    for claim_live_id, deadline in claims.items()
+                    if deadline > now and claim_live_id in self._channels
+                ]
+                if len(candidates) == 1:
+                    channel = candidates[0]
+                    recovered_empty_app = True
+                elif len(candidates) > 1:
+                    raise ValueError(
+                        "Live workspace reattach is ambiguous; provide live_id or session_id"
+                    )
             if channel is None:
                 token = secrets.token_urlsafe(32)
                 digest = self._digest(token)
@@ -316,6 +350,8 @@ class LiveChannelManager:
                     token_value=token,
                     created_at=now,
                     expires_at=expires_at,
+                    machine=machine or "local",
+                    cwd=cwd or ".",
                     logical_session_id=logical_session_id,
                 )
                 self._channels[channel.live_id] = channel
@@ -349,11 +385,19 @@ class LiveChannelManager:
                     expires_at=expires_at,
                     primary=True,
                 )
+            if not recovered_empty_app:
+                if machine:
+                    channel.machine = machine
+                if cwd:
+                    channel.cwd = cwd
             self._session_channels[session_key] = channel.live_id
             if app_reattach:
                 self._app_session_keys.add(session_key)
             else:
                 self._app_session_keys.discard(session_key)
+                self._app_reattach_claims.setdefault(subject, {})[channel.live_id] = (
+                    now + LIVE_APP_REATTACH_CLAIM_TTL_S
+                )
             if logical_session_id:
                 self._set_logical_session_locked(channel, logical_session_id)
                 if not app_reattach:

@@ -291,6 +291,60 @@ def test_app_reattach_does_not_shorten_shared_channel_expiry():
     assert manager.authenticate(token) is channel
 
 
+def test_empty_app_reattach_recovers_unique_recent_explicit_workspace():
+    manager = LiveChannelManager()
+    channel, model_token = manager.open(
+        session_key="mcp:model",
+        subject="user",
+        scopes=tuple(ALL_OAUTH_SCOPES),
+        logical_session_id="s_task",
+        machine="local",
+        cwd="/workspace/project",
+    )
+
+    attached, app_token = manager.open(
+        session_key="mcp:remounted-app",
+        subject="user",
+        scopes=("shell:read",),
+        app_reattach=True,
+        machine="local",
+        cwd=".",
+    )
+
+    assert attached is channel
+    assert attached.logical_session_id == "s_task"
+    assert attached.machine == "local"
+    assert attached.cwd == "/workspace/project"
+    assert manager.active_for_session("mcp:remounted-app") is channel
+    assert app_token != model_token
+    assert manager.authenticate(app_token) is channel
+
+
+def test_empty_app_reattach_refuses_ambiguous_recent_workspaces():
+    manager = LiveChannelManager()
+    first, _ = manager.open(
+        session_key="mcp:model-a",
+        subject="user",
+        scopes=tuple(ALL_OAUTH_SCOPES),
+        logical_session_id="s_first",
+    )
+    second, _ = manager.open(
+        session_key="mcp:model-b",
+        subject="user",
+        scopes=tuple(ALL_OAUTH_SCOPES),
+        logical_session_id="s_second",
+    )
+    assert first is not second
+
+    with pytest.raises(ValueError, match="reattach is ambiguous"):
+        manager.open(
+            session_key="mcp:remounted-app",
+            subject="user",
+            scopes=("shell:read",),
+            app_reattach=True,
+        )
+
+
 def test_live_workspace_can_reattach_a_second_mcp_session_by_live_id():
     manager = LiveChannelManager()
     channel, first_token = manager.open(
@@ -1200,6 +1254,40 @@ async def test_mcp_app_resource_and_render_result_hide_live_token(tmp_path, monk
         contents = list(await mcp.read_resource(uri))
         assert contents[0].mime_type == LIVE_RESOURCE_MIME
         assert "local-shell-mcp-live-workspace" in str(contents[0].content)
+
+
+@pytest.mark.asyncio
+async def test_empty_app_remount_recovers_recent_workspace_tool_result(
+    tmp_path, monkeypatch
+):
+    _configure(tmp_path, monkeypatch, auth="none")
+    current_key = {"value": "mcp:model"}
+    monkeypatch.setattr(tools_module, "mcp_session_key", lambda _mcp: current_key["value"])
+    mcp = build_mcp()
+
+    _, started = await mcp.call_tool(
+        "session_manage",
+        {"action": "start", "objective": "Survive ChatGPT app remount"},
+    )
+    session_id = started["data"]["session_id"]
+    run_id = started["data"]["active_run"]["run_id"]
+    opened = await mcp.call_tool(
+        "workspace_open",
+        {"cwd": "/workspace/project", "session_run_id": run_id},
+    )
+    old_live_id = opened.structuredContent["live_id"]
+    assert opened.structuredContent["session_id"] == session_id
+
+    current_key["value"] = "mcp:remounted-app"
+    reconnected = await mcp.call_tool(
+        "live_workspace_reconnect",
+        {"machine": "local", "cwd": "."},
+    )
+
+    assert isinstance(reconnected, CallToolResult)
+    assert reconnected.structuredContent["live_id"] == old_live_id
+    assert reconnected.structuredContent["session_id"] == session_id
+    assert reconnected.structuredContent["cwd"] == "/workspace/project"
 
 
 @pytest.mark.asyncio
