@@ -28,7 +28,6 @@ import {
   toggleWorkspaceDisplayMode,
   parentPath,
   reconnectDelayMs,
-  renderDiffHtml,
   restoreReverseFeedScrollTop,
   toolResultFromOpenAiGlobals,
   truncateContext,
@@ -202,9 +201,6 @@ let fileEditContent = ""
 let fileEditSha = ""
 
 let workloadMachine = "local"
-let diffMachine = "local"
-let diffCwd = "."
-let gitSnapshot: { machine?: string; cwd: string; status: JsonRecord; diff: JsonRecord } | null = null
 let auditEntries: JsonRecord[] = []
 let remoteSnapshot: JsonRecord | null = null
 
@@ -213,7 +209,6 @@ function icon(name: string): string {
     activity: '<path d="M4 12h3l2-6 4 12 2-6h5"/>',
     terminal: '<path d="m5 7 4 4-4 4M11 15h7"/>',
     files: '<path d="M4 5h6l2 2h8v12H4z"/>',
-    diff: '<path d="M7 4v16M4 7h6M14 8h6M17 5v6M14 17h6"/>',
     jobs: '<path d="M4 7h16v11H4zM8 7V4h8v3M8 12h8"/>',
     remotes: '<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/>',
     audit: '<path d="M5 3h14v18H5zM8 8h8M8 12h8M8 16h5"/>',
@@ -242,7 +237,7 @@ function shell(): void {
         </div>
       </header>
       <nav class="tabs" aria-label="Workspace views">
-        ${tabButton("activity", "Activity")}${tabButton("terminal", "Terminal")}${tabButton("files", "Files")}${tabButton("diff", "Diff")}${tabButton("jobs", "Jobs")}${tabButton("remotes", "Remotes")}${tabButton("audit", "Audit")}
+        ${tabButton("activity", "Activity")}${tabButton("terminal", "Terminal")}${tabButton("files", "Files")}${tabButton("jobs", "Jobs")}${tabButton("remotes", "Remotes")}${tabButton("audit", "Audit")}
       </nav>
       <main class="workspace-main" data-role="main"><div class="loading"><span></span>${escapeHtml(connectionMessage)}</div></main>
       <div class="toast-stack" data-role="toasts" aria-live="polite"></div>
@@ -509,12 +504,6 @@ async function handleAction(action: string, target: HTMLElement): Promise<void> 
       await switchTab("files")
       if (selectedFile && fileEntries.some((entry) => entry.path === selectedFile)) await selectFile(selectedFile)
     }
-    else if (action === "activity-open-diff") {
-      diffMachine = target.dataset.machine || "local"
-      diffCwd = target.dataset.cwd || config?.cwd || "."
-      gitSnapshot = null
-      await switchTab("diff")
-    }
     else if (action === "activity-open-remotes") await switchTab("remotes")
     else if (action === "activity-open-audit") await switchTab("audit")
     else if (action === "terminal-new") await newTerminal()
@@ -531,8 +520,6 @@ async function handleAction(action: string, target: HTMLElement): Promise<void> 
     else if (action === "file-cancel-edit") { fileEditing = false; renderFiles() }
     else if (action === "file-context") await shareSelectedFile(false)
     else if (action === "file-ask") await shareSelectedFile(true)
-    else if (action === "diff-context") await shareDiff(false)
-    else if (action === "diff-ask") await shareDiff(true)
     else if (action === "remote-invite") await createRemoteInvite()
     else if (action === "remote-rename") await renameRemote(target.dataset.machine || "")
     else if (action === "remote-revoke") await revokeRemote(target.dataset.machine || "")
@@ -640,7 +627,6 @@ function renderCurrentTab(): void {
   if (activeTab === "activity") renderActivity()
   else if (activeTab === "terminal") renderTerminal()
   else if (activeTab === "files") renderFiles()
-  else if (activeTab === "diff") renderDiff()
   else if (activeTab === "jobs") renderJobs()
   else if (activeTab === "remotes") renderRemotes()
   else renderAudit()
@@ -768,9 +754,6 @@ function activityRow(event: LiveEvent): string {
     const path = Array.isArray(rawPath) ? String(rawPath[0] || "") : String(rawPath || "")
     action = `data-action="activity-open-files" data-tool="${escapeHtml(String(event.data.tool || ""))}" data-path="${escapeHtml(path)}" data-machine="${escapeHtml(String(event.data.machine || "local"))}"`
     actionLabel = "Open files"
-  } else if (destination === "diff") {
-    action = `data-action="activity-open-diff" data-machine="${escapeHtml(String(event.data.machine || "local"))}" data-cwd="${escapeHtml(String(event.data.cwd || config?.cwd || "."))}"`
-    actionLabel = "View diff"
   } else if (destination === "remotes") {
     action = `data-action="activity-open-remotes"`
     actionLabel = "Open remotes"
@@ -1163,35 +1146,6 @@ async function shareSelectedFile(ask: boolean): Promise<void> {
   if (ask) await sendHostMessage({ role: "user", content: [{ type: "text", text: `Inspect the selected file ${requestPath} in Live Workspace. Explain anything important and suggest or make the next appropriate change.` }] })
 }
 
-function renderDiff(): void {
-  const status = gitSnapshot ? String(gitSnapshot.status.stdout || gitSnapshot.status.stderr || "") : ""
-  const diff = gitSnapshot ? String(gitSnapshot.diff.stdout || gitSnapshot.diff.stderr || "") : ""
-  mainNode().innerHTML = `
-    <section class="view diff-view"><div class="view-toolbar"><div><h2>Working tree diff</h2><p>${escapeHtml(gitSnapshot?.machine || diffMachine)}:${escapeHtml(gitSnapshot?.cwd || diffCwd)} · unstaged and staged changes</p></div><div class="toolbar-actions">${isDshHost ? "" : '<button class="button" data-action="diff-context">Send context</button>'}<button class="button" data-action="diff-ask">${icon("chat")}Ask for review</button><button class="button" data-action="refresh">${icon("refresh")}Refresh</button></div></div>
-      <div class="diff-layout"><section class="panel status-panel"><div class="panel-head"><strong>Git status</strong><span>${escapeHtml(gitSnapshot?.cwd || diffCwd)}</span></div><pre>${escapeHtml(status || "Clean")}</pre></section><section class="panel diff-panel"><div class="panel-head"><strong>Changes</strong><span>${diff ? `${diff.split("\n").length} lines` : "clean"}</span></div><div class="diff-code">${gitSnapshot ? renderDiffHtml(diff) : '<div class="loading small"><span></span>Loading diff…</div>'}</div></section></div>
-    </section>`
-}
-
-async function refreshDiff(): Promise<void> {
-  if (!config) return
-  const requestLiveId = config.liveId
-  const requestMachine = diffMachine
-  const requestCwd = diffCwd
-  const snapshot = await api<{ machine?: string; cwd: string; status: JsonRecord; diff: JsonRecord }>(`/api/live/git?machine=${encodeURIComponent(requestMachine)}&cwd=${encodeURIComponent(requestCwd)}`)
-  if (!config || config.liveId !== requestLiveId || diffMachine !== requestMachine || diffCwd !== requestCwd) return
-  gitSnapshot = snapshot
-  if (activeTab === "diff") renderDiff()
-}
-
-async function shareDiff(ask: boolean): Promise<void> {
-  if (!gitSnapshot) await refreshDiff()
-  const status = String(gitSnapshot?.status.stdout || "")
-  const diff = truncateContext(String(gitSnapshot?.diff.stdout || ""), 28_000)
-  await updateHostModelContext({ content: [{ type: "text", text: `Live Workspace git status (${gitSnapshot?.machine || diffMachine}):\n${status}\n\nDiff:\n${diff}` }], structuredContent: { git: { machine: gitSnapshot?.machine || diffMachine, cwd: gitSnapshot?.cwd || diffCwd, status } } })
-  notify("Diff added to model context", "success")
-  if (ask) await sendHostMessage({ role: "user", content: [{ type: "text", text: "Review the current Live Workspace git diff. Identify correctness risks, regressions, missing tests, and concrete improvements. Make fixes when appropriate." }] })
-}
-
 function renderJobs(): void {
   const jobs = dashboard?.jobs || []
   const sessions = dashboard?.sessions || []
@@ -1300,9 +1254,6 @@ function resetTerminalTarget(machine: string): void {
 
 function resetWorkspaceTarget(machine: string, cwd: string): void {
   workloadMachine = machine
-  diffMachine = machine
-  diffCwd = cwd
-  gitSnapshot = null
   dashboard = null
   activityDiscoveryInitialized = false
   knownActiveJobs.clear()
@@ -1316,7 +1267,6 @@ function resetWorkspaceTarget(machine: string, cwd: string): void {
 function replaceMachineSelection(machine: string, replacement: string, replacementCwd?: string): void {
   if (config?.machine === machine) {
     config = { ...config, machine: replacement, cwd: replacementCwd ?? config.cwd }
-    gitSnapshot = null
     dashboard = null
   }
   if (fileMachine === machine) {
@@ -1326,11 +1276,6 @@ function replaceMachineSelection(machine: string, replacement: string, replaceme
     resetTerminalTarget(replacement)
   }
   if (workloadMachine === machine) workloadMachine = replacement
-  if (diffMachine === machine) {
-    diffMachine = replacement
-    if (replacementCwd) diffCwd = replacementCwd
-    gitSnapshot = null
-  }
 }
 
 async function renameRemote(machine: string): Promise<void> {
@@ -1434,12 +1379,6 @@ async function refreshAllCore(): Promise<void> {
       dashboard = null
       selectionChanged = true
     }
-    if (!available.has(diffMachine)) {
-      diffMachine = preferred
-      diffCwd = config.machine === preferred ? config.cwd : "."
-      gitSnapshot = null
-      selectionChanged = true
-    }
     if (selectionChanged) renderCurrentTab()
     const dashboardMachine = workloadMachine
     const dash = await api<Dashboard>(`/api/ui/dashboard?machine=${encodeURIComponent(dashboardMachine || "local")}`)
@@ -1462,7 +1401,6 @@ async function refreshAllCore(): Promise<void> {
   if (selectionChanged) {
     if (activeTab === "files") await refreshFiles()
     else if (activeTab === "terminal") await refreshTerminals()
-    else if (activeTab === "diff") await refreshDiff()
     else if (activeTab === "jobs") { renderJobs(); wireJobRows() }
   }
 }
@@ -1472,7 +1410,6 @@ async function refreshCurrent(force: boolean): Promise<void> {
   if (force || Date.now() - lastPassiveRefresh > 4_000) await refreshAllCore()
   if (activeTab === "terminal") await refreshTerminals()
   else if (activeTab === "files") await refreshFiles()
-  else if (activeTab === "diff") await refreshDiff()
   else if (activeTab === "jobs") await refreshJobs()
   else if (activeTab === "remotes") await refreshRemotes()
   else if (activeTab === "audit") await refreshAudit()

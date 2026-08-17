@@ -15,7 +15,6 @@ import {
   joinPath,
   mergeActivityEvents,
   parentPath,
-  renderDiffHtml,
   restoreReverseFeedScrollTop,
   toggleWorkspaceDisplayMode,
   reconnectDelayMs,
@@ -51,6 +50,10 @@ describe("live workspace utilities", () => {
     const css = await Bun.file(new URL("./live-workspace.css", import.meta.url)).text()
     expect(source).not.toContain('<section class="status-strip">')
     expect(source).not.toContain('class="task-monitor-grid"')
+    expect(source).not.toContain('tabButton("diff", "Diff")')
+    expect(source).not.toContain("function renderDiff()")
+    expect(css).not.toContain(".diff-view")
+    expect(css).not.toContain(".diff-layout")
     expect(source).toContain('class="task-monitor-body ${overview ? "has-overview" : ""}"')
     expect(css).toContain(".task-monitor-body.has-overview { grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr); }")
     expect(css).toContain(".task-overview-column { max-height: 108px;")
@@ -256,6 +259,7 @@ describe("live workspace utilities", () => {
     const job: LiveEvent = { seq: 7, ts: 1, type: "tool.completed", actor: "agent", data: { tool: "job_start", name: "tests" } }
     const shellStarted: LiveEvent = { seq: 8, ts: 1, type: "tool.started", actor: "agent", data: { tool: "shell_start", call_id: "shell-1" } }
     const shellReady: LiveEvent = { seq: 9, ts: 1, type: "tool.completed", actor: "agent", data: { tool: "shell_start", call_id: "shell-1", session_id: "session-1" } }
+    const patch: LiveEvent = { seq: 10, ts: 1, type: "tool.completed", actor: "agent", data: { tool: "file_patch", call_id: "patch-1", cwd: "/workspace" } }
 
     expect(isOperationalActivityEvent(opened)).toBeFalse()
     expect(isOperationalActivityEvent(bootstrap)).toBeFalse()
@@ -269,6 +273,7 @@ describe("live workspace utilities", () => {
     expect(activityDestination(job)).toBe("jobs")
     expect(activityDestination(shellStarted)).toBe("detail")
     expect(activityDestination(shellReady)).toBe("terminal")
+    expect(activityDestination(patch)).toBe("detail")
   })
 
   test("activity keeps historical pre-v4 tool names usable", () => {
@@ -332,15 +337,6 @@ describe("live workspace utilities", () => {
     expect(merged[0]).toEqual(durableStarted)
     expect(merged[1]).toEqual(durableTool)
     expect(merged[2]).toEqual(humanDiff)
-  })
-
-  test("diff renderer escapes content and classifies lines", () => {
-    const html = renderDiffHtml("@@ -1 +1 @@\n-old <tag>\n+new & value")
-    expect(html).toContain("diff-line hunk")
-    expect(html).toContain("diff-line removed")
-    expect(html).toContain("diff-line added")
-    expect(html).toContain("&lt;tag&gt;")
-    expect(html).toContain("&amp; value")
   })
 
   test("large model context is bounded", () => {

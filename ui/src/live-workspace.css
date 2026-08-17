@@ -203,16 +203,6 @@ select:hover, input:hover, textarea:hover { border-color: var(--ls-border-strong
 .editor-actions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; min-height: 42px; padding: 5px 8px; border-top: 1px solid var(--ls-border); }
 .editor-actions span { margin-right: auto; color: var(--ls-text-3); font-size: 9px; }
 
-.diff-layout { display: grid; grid-template-columns: minmax(180px, .42fr) minmax(430px, 1.58fr); gap: 9px; min-height: 420px; }
-.status-panel pre { margin: 0; padding: 10px; color: var(--ls-text-2); font: 9.5px/1.55 var(--ls-mono); white-space: pre-wrap; }
-.diff-code { max-height: min(68vh, 760px); overflow: auto; background: color-mix(in srgb, var(--ls-bg) 85%, transparent); font: 9.8px/1.48 var(--ls-mono); }
-.diff-line { min-height: 15px; padding: 0 9px; white-space: pre; }
-.diff-line.added { background: var(--ls-success-soft); color: color-mix(in srgb, var(--ls-success) 80%, var(--ls-text)); }
-.diff-line.removed { background: var(--ls-danger-soft); color: color-mix(in srgb, var(--ls-danger) 80%, var(--ls-text)); }
-.diff-line.hunk { margin: 4px 0; background: var(--ls-info-soft); color: var(--ls-info); }
-.diff-line.meta { color: var(--ls-accent-strong); }
-.diff-line.context { color: var(--ls-text-2); }
-
 .jobs-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
 .object-list { max-height: min(66vh, 700px); overflow: auto; }
 .object-row { width: 100%; min-height: 53px; display: grid; grid-template-columns: 10px minmax(0,1fr) auto; align-items: center; gap: 8px; padding: 7px 10px; border: 0; border-bottom: 1px solid var(--ls-border); background: transparent; color: inherit; text-align: left; }
@@ -281,12 +271,11 @@ select:hover, input:hover, textarea:hover { border-color: var(--ls-border-strong
   .metric-row { grid-template-columns: 1fr 1fr; }
   .view-toolbar { align-items: flex-start; flex-direction: column; }
   .toolbar-actions { flex-wrap: wrap; }
-  .files-grid, .diff-layout, .jobs-grid { grid-template-columns: 1fr; }
+  .files-grid, .jobs-grid { grid-template-columns: 1fr; }
   .file-list-panel { min-height: 230px; }
   .file-list { max-height: 260px; }
   .preview-panel { min-height: 340px; }
   .file-preview { height: 420px; }
-  .diff-code { max-height: 500px; }
   .terminal-toolbar { flex-direction: column; }
   .toolbar-left { width: 100%; flex-wrap: wrap; }
   .terminal-card { height: 520px; }
@@ -388,14 +377,13 @@ select:hover, input:hover, textarea:hover { border-color: var(--ls-border-strong
 .task-monitor-view .timeline-copy strong { font-size: 12px; }
 .task-monitor-view .timeline-copy p { font-size: 10.5px; }
 
-.terminal-view, .files-view, .diff-view, .jobs-view, .remotes-view, .audit-view { display: flex; flex-direction: column; min-height: 0; }
-.terminal-view > .view-toolbar, .files-view > .view-toolbar, .diff-view > .view-toolbar, .jobs-view > .view-toolbar, .remotes-view > .view-toolbar, .audit-view > .view-toolbar { flex: 0 0 auto; margin-bottom: 8px; }
+.terminal-view, .files-view, .jobs-view, .remotes-view, .audit-view { display: flex; flex-direction: column; min-height: 0; }
+.terminal-view > .view-toolbar, .files-view > .view-toolbar, .jobs-view > .view-toolbar, .remotes-view > .view-toolbar, .audit-view > .view-toolbar { flex: 0 0 auto; margin-bottom: 8px; }
 .terminal-card { flex: 1 1 auto; min-height: 0; height: auto; }
-.files-grid, .diff-layout, .jobs-grid { flex: 1 1 auto; min-height: 0; height: auto; }
-.file-list-panel, .preview-panel, .status-panel, .diff-panel, .jobs-grid > .panel { min-height: 0; height: 100%; }
-.file-list-panel, .preview-panel, .diff-panel, .jobs-grid > .panel { display: flex; flex-direction: column; }
-.file-list, .file-preview, .diff-code, .object-list { flex: 1 1 auto; min-height: 0; height: auto; max-height: none; overflow: auto; }
-.status-panel { overflow: auto; }
+.files-grid, .jobs-grid { flex: 1 1 auto; min-height: 0; height: auto; }
+.file-list-panel, .preview-panel, .jobs-grid > .panel { min-height: 0; height: 100%; }
+.file-list-panel, .preview-panel, .jobs-grid > .panel { display: flex; flex-direction: column; }
+.file-list, .file-preview, .object-list { flex: 1 1 auto; min-height: 0; height: auto; max-height: none; overflow: auto; }
 .remote-panel, .audit-panel { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 .remote-grid, .audit-table { flex: 1 1 auto; min-height: 0; max-height: none; overflow: auto; }
 

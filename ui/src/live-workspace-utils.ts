@@ -317,7 +317,7 @@ export function activityIntent(event: LiveEvent): string {
   return tool.replaceAll("_", " ")
 }
 
-export type ActivityDestination = "terminal" | "jobs" | "files" | "diff" | "remotes" | "audit" | "detail" | null
+export type ActivityDestination = "terminal" | "jobs" | "files" | "remotes" | "audit" | "detail" | null
 
 export function activityDestination(event: LiveEvent): ActivityDestination {
   const tool = String(event.data.tool || "")
@@ -326,7 +326,7 @@ export function activityDestination(event: LiveEvent): ActivityDestination {
   }
   if (["job_start", "job_list", "job_tail", "job_stop", "job_retry", "remote_transfer"].includes(tool)) return "jobs"
   if (["file_read", "file_write", "file_edit", "file_delete", "file_list", "file_glob", "file_grep", "file_tree", "read_file", "write_file", "edit_file", "delete_file_or_dir", "list_files", "glob_search", "grep_search", "tree_view", "search"].includes(tool)) return "files"
-  if (["file_patch", "apply_patch"].includes(tool)) return "diff"
+  if (["file_patch", "apply_patch"].includes(tool)) return event.data.call_id ? "detail" : null
   if (tool === "remote_manage") return "remotes"
   if (tool === "audit_tail") return "audit"
   if (["run_shell", "run_python", "run_shell_tool", "run_python_tool"].includes(tool)) return "detail"
@@ -393,17 +393,6 @@ export function eventTone(event: LiveEvent): "success" | "danger" | "warning" | 
   return "muted"
 }
 
-export function renderDiffHtml(diff: string): string {
-  if (!diff.trim()) return '<div class="empty-state">Working tree is clean.</div>'
-  return diff.split("\n").map((line) => {
-    let kind = "context"
-    if (line.startsWith("diff --git") || line.startsWith("index ")) kind = "meta"
-    else if (line.startsWith("@@")) kind = "hunk"
-    else if (line.startsWith("+") && !line.startsWith("+++")) kind = "added"
-    else if (line.startsWith("-") && !line.startsWith("---")) kind = "removed"
-    return `<div class="diff-line ${kind}"><span>${escapeHtml(line || " ")}</span></div>`
-  }).join("")
-}
 
 export function truncateContext(value: string, maxChars = 24_000): string {
   if (value.length <= maxChars) return value
