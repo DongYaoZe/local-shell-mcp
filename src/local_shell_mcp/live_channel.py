@@ -186,10 +186,9 @@ class LiveChannelManager:
             and self._logical_session_channels.get(previous_session_id) == channel.live_id
         ):
             self._logical_session_channels.pop(previous_session_id, None)
-        # Live-channel events are task-local. Keep the sequence monotonic so
-        # long-poll cursors remain valid, but never carry operational/human
-        # events across a Logical Session attachment boundary.
-        channel.events.clear()
+        # A LiveChannel represents the lifetime of one rendered workspace, not
+        # one Logical Session. Keep its bounded activity history when the task
+        # binding changes so a new user turn can continue the same feed.
         channel.binding_generation += 1
         channel.logical_session_id = logical_session_id
         self._logical_session_channels[logical_session_id] = channel.live_id
@@ -524,7 +523,6 @@ class LiveChannelManager:
                 if channel.logical_session_id != logical_session_id:
                     continue
                 channel.logical_session_id = None
-                channel.events.clear()
                 channel.binding_generation += 1
                 detached.append(channel)
                 self._publish_locked(

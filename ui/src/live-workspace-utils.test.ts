@@ -69,6 +69,12 @@ describe("live workspace utilities", () => {
     expect(css).toContain(".timeline-purpose { color: var(--ls-text-2); font-family: var(--ls-font); font-weight: 500; }")
   })
 
+  test("remote machine cards keep their intrinsic height inside the full-height grid", async () => {
+    const styles = await Bun.file(new URL("./live-workspace.css", import.meta.url)).text()
+    const remoteGridRule = styles.match(/\.remote-grid\s*\{([^}]*)\}/)?.[1] ?? ""
+    expect(remoteGridRule).toContain("align-content: start")
+  })
+
   test("Live Workspace teardown does not recursively call its rendering tool", async () => {
     const source = await Bun.file(new URL("./live-workspace.ts", import.meta.url)).text()
     expect(source).toContain("app.onteardown = async")
@@ -76,13 +82,22 @@ describe("live workspace utilities", () => {
     expect(source).not.toContain('name: "workspace_open"')
   })
 
-  test("Live Workspace clears live-only activity when the Logical Session changes", async () => {
+  test("Live Workspace preserves activity when the Logical Session changes", async () => {
     const source = await Bun.file(new URL("./live-workspace.ts", import.meta.url)).text()
-    expect(source).toContain("function resetActivityForSessionBoundary(): void")
+    expect(source).toContain("function resetActivityForChannelBoundary(): void")
     expect(source).toContain('continuationClaimId = ""')
-    expect(source).toContain("resetActivityForSessionBoundary()")
     expect(source).toContain("applyLogicalSessionId(payload.session_id)")
     expect(source).toContain("const sessionChanged = !config || config.sessionId !== nextConfig.sessionId")
+
+    const applyStart = source.indexOf("function applyLogicalSessionId")
+    const applyEnd = source.indexOf("async function loadSnapshot", applyStart)
+    expect(source.slice(applyStart, applyEnd)).not.toContain("resetActivityForChannelBoundary()")
+
+    const activateStart = source.indexOf("function activateLiveConfig")
+    const activateEnd = source.indexOf("const credentialRefreshes", activateStart)
+    const activateSource = source.slice(activateStart, activateEnd)
+    expect(activateSource).toContain("if (channelChanged) {\n    resetActivityForChannelBoundary()")
+    expect(activateSource).not.toContain("if (channelChanged || sessionChanged) {\n    resetActivityForChannelBoundary()")
   })
 
   test("continuation claims reuse a client claim id across transient claim failures", async () => {

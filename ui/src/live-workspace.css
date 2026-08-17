@@ -220,7 +220,7 @@ select:hover, input:hover, textarea:hover { border-color: var(--ls-border-strong
 .object-meta span { color: var(--ls-text-2); font-size: 9.5px; }
 .object-meta small { color: var(--ls-text-3); font-size: 8.5px; }
 
-.remote-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; padding: 9px; }
+.remote-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); align-content: start; gap: 8px; padding: 9px; }
 .remote-card { min-width: 0; border: 1px solid var(--ls-border); border-radius: 8px; background: color-mix(in srgb, var(--ls-bg) 60%, transparent); }
 .remote-head { display: flex; align-items: center; gap: 8px; padding: 9px; border-bottom: 1px solid var(--ls-border); }
 .remote-head > div { min-width: 0; display: flex; align-items: center; gap: 6px; }
