@@ -46,6 +46,18 @@ describe("live workspace utilities", () => {
     expect(source).toContain("event.stopPropagation()")
   })
 
+  test("Activity keeps compact chrome and gives the timeline priority", async () => {
+    const source = await Bun.file(new URL("./live-workspace.ts", import.meta.url)).text()
+    const css = await Bun.file(new URL("./live-workspace.css", import.meta.url)).text()
+    expect(source).not.toContain('<section class="status-strip">')
+    expect(source).not.toContain('class="task-monitor-grid"')
+    expect(source).toContain('class="task-monitor-body ${overview ? "has-overview" : ""}"')
+    expect(css).toContain(".task-monitor-body.has-overview { grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr); }")
+    expect(css).toContain(".task-overview-column { max-height: 108px;")
+    expect(css).toContain("@media (max-height: 460px)")
+    expect(css).toContain(".task-overview-column { display: none; }")
+  })
+
   test("Live Workspace teardown does not recursively call its rendering tool", async () => {
     const source = await Bun.file(new URL("./live-workspace.ts", import.meta.url)).text()
     expect(source).toContain("app.onteardown = async")

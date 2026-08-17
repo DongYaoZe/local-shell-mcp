@@ -241,11 +241,6 @@ function shell(): void {
           <button class="icon-button" data-action="expand" title="Fullscreen">${icon("expand")}</button>
         </div>
       </header>
-      <section class="status-strip">
-        <div class="current-operation"><span class="pulse" data-role="op-pulse"></span><div><small>Current</small><strong data-role="current-op">No active tool call</strong><span data-role="current-detail">Waiting for activity</span></div></div>
-        <div class="status-stat compact-stat"><small>Machines</small><strong data-role="machine-count">—</strong></div>
-        <div class="status-stat compact-stat"><small>Workload</small><strong data-role="workload-count">—</strong></div>
-      </section>
       <nav class="tabs" aria-label="Workspace views">
         ${tabButton("activity", "Activity")}${tabButton("terminal", "Terminal")}${tabButton("files", "Files")}${tabButton("diff", "Diff")}${tabButton("jobs", "Jobs")}${tabButton("remotes", "Remotes")}${tabButton("audit", "Audit")}
       </nav>
@@ -380,10 +375,17 @@ function updateChrome(): void {
   qs<HTMLElement>("[data-role=connection-dot]")?.classList.toggle("connected", connected)
   const connectionLabel = qs<HTMLElement>("[data-role=connection-label]")
   if (connectionLabel) connectionLabel.textContent = connectionMessage
+  const running = currentRunningEvent()
+  const activeJob = dashboard?.jobs?.[0]
+  const activeSession = dashboard?.sessions?.[0]
+  let workspaceStatus = latestCompletedSummary()
+  if (running) workspaceStatus = activityIntent(running)
+  else if (activeJob) workspaceStatus = `Background: ${String(activeJob.name || activeJob.job_id || "job")}`
+  else if (activeSession) workspaceStatus = `Terminal: ${String(activeSession.name || activeSession.session_id || "session")}`
   const subtitle = qs<HTMLElement>("[data-role=subtitle]")
   if (subtitle) subtitle.textContent = config?.sessionId
-    ? `local-shell-mcp · session ${config.sessionId}`
-    : "local-shell-mcp · no logical session attached"
+    ? `session ${config.sessionId} · ${workspaceStatus}`
+    : `standard workspace · ${workspaceStatus}`
   root.querySelectorAll<HTMLButtonElement>("[data-tab]").forEach((button) => {
     button.classList.toggle("active", button.dataset.tab === activeTab)
   })
@@ -408,33 +410,6 @@ function updateChrome(): void {
       expandButton.setAttribute("aria-label", expandButton.title)
     }
   }
-
-  const running = currentRunningEvent()
-  const activeJob = dashboard?.jobs?.[0]
-  const activeSession = dashboard?.sessions?.[0]
-  const current = qs<HTMLElement>("[data-role=current-op]")
-  const detail = qs<HTMLElement>("[data-role=current-detail]")
-  const pulse = qs<HTMLElement>("[data-role=op-pulse]")
-  if (current) {
-    if (running) current.textContent = activityIntent(running)
-    else if (activeJob) current.textContent = `Background: ${String(activeJob.name || activeJob.job_id || "job")}`
-    else if (activeSession) current.textContent = `Terminal: ${String(activeSession.name || activeSession.session_id || "session")}`
-    else current.textContent = "Idle"
-  }
-  if (detail) {
-    if (running) detail.textContent = eventDetail(running) || "In progress"
-    else if (activeJob) detail.textContent = String(activeJob.command || activeJob.status || "running")
-    else if (activeSession) detail.textContent = String(activeSession.cwd || activeSession.backend || "ready")
-    else detail.textContent = latestCompletedSummary()
-  }
-  pulse?.classList.toggle("active", Boolean(running || activeJob))
-
-  const machineCount = qs<HTMLElement>("[data-role=machine-count]")
-  const online = machines.filter((item) => item.status === "online" || item.name === "local").length
-  if (machineCount) machineCount.textContent = `${machines.length || 1} · ${online || 1} online`
-  const workload = (dashboard?.jobs?.length || 0) + (dashboard?.session_count || dashboard?.sessions?.length || 0)
-  const workloadCount = qs<HTMLElement>("[data-role=workload-count]")
-  if (workloadCount) workloadCount.textContent = workload ? `${workload} active` : "0"
 
 }
 
@@ -701,39 +676,13 @@ function renderActivity(): void {
   // restore roughly 100 tool rows; the larger slice also leaves room for
   // live-only and semantic Session/Plan events.
   const recent = [...visible].reverse().slice(0, 200)
-  const running = currentRunningEvent()
-  const progress = planProgress()
-  const sessionStatus = logicalSession?.status || (config?.sessionId ? "active" : "unattached")
+  const overview = [sessionProgressPanel(), planCard()].filter(Boolean).join("")
   mainNode().innerHTML = `
     <section class="view activity-view task-monitor-view">
-      <div class="view-toolbar task-monitor-toolbar"><div><h2>Live task monitor</h2><p>${config?.sessionId ? `Logical Session ${escapeHtml(config.sessionId)}` : "No Logical Session attached yet"}</p></div><div class="toolbar-actions"><button class="button" data-action="activity-ask">${icon("chat")}Ask</button><button class="button" data-action="refresh">${icon("refresh")}Refresh</button></div></div>
-      <div class="task-monitor-body">
-        <aside class="task-overview-column" aria-label="Task overview">
-          <div class="task-monitor-grid">
-            <section class="monitor-card session-monitor-card">
-              <div class="monitor-card-head"><span>Session</span><strong class="status-pill ${escapeHtml(sessionStatus)}">${escapeHtml(sessionStatus)}</strong></div>
-              <strong class="monitor-primary">${escapeHtml(logicalSession?.label || logicalSession?.objective || (config?.sessionId ? "Active logical task" : "Standard workspace"))}</strong>
-              <span class="monitor-secondary">${logicalSession?.active_run?.run_id ? `Run ${escapeHtml(logicalSession.active_run.run_id)}` : config?.sessionId ? "Waiting for active run" : "No extra user action required"}</span>
-            </section>
-            <section class="monitor-card operation-monitor-card">
-              <div class="monitor-card-head"><span>Latest operation</span><strong class="live-dot-label"><i class="live-dot ${running ? "busy" : ""}"></i>${running ? "Running" : connected ? "Live" : "Offline"}</strong></div>
-              <strong class="monitor-primary">${escapeHtml(running ? activityIntent(running) : latestCompletedSummary())}</strong>
-              <span class="monitor-secondary">${escapeHtml(running ? eventDetail(running) || "Tool call in progress" : recent[0] ? eventTitle(recent[0]) : "Waiting for activity")}</span>
-            </section>
-            <section class="monitor-card plan-monitor-card">
-              <div class="monitor-card-head"><span>Plan progress</span><strong>${plan ? `${progress.percent}%` : "Standard"}</strong></div>
-              ${plan ? `<div class="progress-track"><span style="width:${progress.percent}%"></span></div><strong class="monitor-primary">${progress.completed}/${progress.total} steps complete</strong><span class="monitor-secondary">${escapeHtml(progress.active?.text || (plan.status === "completed" ? "Plan completed" : plan.status === "blocked" ? "Plan paused" : "No active step"))}</span>` : '<strong class="monitor-primary">No active plan</strong><span class="monitor-secondary">Session tracking remains active without Goal mode.</span>'}
-            </section>
-            ${autoContinueCard()}
-          </div>
-          <div class="task-context-column">
-            ${sessionProgressPanel()}
-            ${planCard()}
-            ${activityFocusCards()}
-          </div>
-        </aside>
+      <div class="task-monitor-body ${overview ? "has-overview" : ""}">
+        ${overview ? `<aside class="task-overview-column" aria-label="Task overview">${overview}</aside>` : ""}
         <section class="panel activity-panel session-activity-panel">
-          <div class="panel-head"><div><strong>Logical Session activity</strong><small>Durable, live execution feed</small></div><span>${recent.length} recent</span></div>
+          <div class="panel-head activity-panel-head"><strong>Activity</strong><div class="activity-panel-actions"><span>${recent.length}</span><button class="button" data-action="activity-ask">${icon("chat")}Ask</button><button class="button" data-action="refresh">${icon("refresh")}Refresh</button></div></div>
           <div class="timeline session-timeline">${recent.length ? recent.map(activityRow).join("") : '<div class="empty-state">No execution activity yet. The current task will appear here automatically.</div>'}</div>
         </section>
       </div>
@@ -756,50 +705,35 @@ function sessionProgressPanel(): string {
   const findings = progress.findings || []
   const blockers = progress.blockers || []
   if (!progress.summary && !progress.next && !findings.length && !blockers.length) return ""
+  const checkpointItems = [
+    progress.summary ? `<div><small>Current</small><strong>${escapeHtml(progress.summary)}</strong></div>` : "",
+    progress.next ? `<div><small>Next</small><strong>${escapeHtml(progress.next)}</strong></div>` : "",
+    blockers.length ? `<div class="has-blocker"><small>Blockers</small><strong>${escapeHtml(blockers.join(" · "))}</strong></div>` : "",
+  ].filter(Boolean).join("")
   return `
     <section class="panel session-progress-panel">
-      <div class="panel-head"><div><strong>Session checkpoint</strong><small>Semantic progress reported by the active agent</small></div>${progress.updated_at ? `<span>${escapeHtml(formatClock(progress.updated_at))}</span>` : ""}</div>
-      <div class="checkpoint-grid">
-        <div><small>Current</small><strong>${escapeHtml(progress.summary || "No summary yet")}</strong></div>
-        <div><small>Next</small><strong>${escapeHtml(progress.next || "No next action reported")}</strong></div>
-        <div class="${blockers.length ? "has-blocker" : ""}"><small>Blockers</small><strong>${escapeHtml(blockers.length ? blockers.join(" · ") : "None")}</strong></div>
-      </div>
-      ${findings.length ? `<div class="checkpoint-findings"><small>Findings</small>${findings.slice(0, 6).map((item) => `<span>${escapeHtml(item)}</span>`).join("")}</div>` : ""}
+      <div class="panel-head"><strong>Checkpoint</strong>${progress.updated_at ? `<span>${escapeHtml(formatClock(progress.updated_at))}</span>` : ""}</div>
+      ${checkpointItems ? `<div class="checkpoint-grid">${checkpointItems}</div>` : ""}
+      ${findings.length ? `<div class="checkpoint-findings"><small>Findings</small>${findings.slice(0, 3).map((item) => `<span>${escapeHtml(item)}</span>`).join("")}</div>` : ""}
     </section>`
 }
 
-function autoContinueCard(): string {
-  if (!plan) {
-    return `<section class="monitor-card auto-monitor-card" data-role="auto-continue-card"><div class="monitor-card-head"><span>Auto continue</span><strong>Off</strong></div><strong class="monitor-primary">Plan mode inactive</strong><span class="monitor-secondary">No continuation timer is needed.</span></section>`
-  }
-  if (plan.status === "blocked") {
-    return `<section class="monitor-card auto-monitor-card paused" data-role="auto-continue-card"><div class="monitor-card-head"><span>Auto continue</span><strong>Paused</strong></div><strong class="monitor-primary">Waiting for you</strong><span class="monitor-secondary">Automatic continuation is disabled while the plan is paused.</span><button class="button compact-monitor-action" data-action="plan-resume">Resume</button></section>`
-  }
-  if (plan.auto_continue_exhausted) {
-    return `<section class="monitor-card auto-monitor-card paused" data-role="auto-continue-card"><div class="monitor-card-head"><span>Auto continue</span><strong>Stopped</strong></div><strong class="monitor-primary">${plan.continuation_count}/${plan.max_continuations} attempts used</strong><span class="monitor-secondary">The automatic continuation cap has been reached.</span></section>`
-  }
-  if (plan.continuation_pending) {
-    return `<section class="monitor-card auto-monitor-card active" data-role="auto-continue-card"><div class="monitor-card-head"><span>Auto continue</span><strong>Triggering</strong></div><strong class="monitor-primary">Continuation requested</strong><span class="monitor-secondary">Handing the same Logical Session to the next agent run.</span></section>`
-  }
-  if (Number(plan.in_flight_calls || 0) > 0) {
-    return `<section class="monitor-card auto-monitor-card" data-role="auto-continue-card"><div class="monitor-card-head"><span>Auto continue</span><strong>Waiting</strong></div><strong class="monitor-primary">Tool call in progress</strong><span class="monitor-secondary">The idle timer does not trigger while work is still running.</span></section>`
-  }
+function planAutoStatus(): string {
+  if (!plan) return ""
+  if (plan.status === "blocked") return "Auto paused"
+  if (plan.auto_continue_exhausted) return `Auto stopped · ${plan.continuation_count}/${plan.max_continuations}`
+  if (plan.continuation_pending) return "Auto continuing"
+  if (Number(plan.in_flight_calls || 0) > 0) return `Auto armed · ${plan.continuation_count}/${plan.max_continuations}`
   const countdown = continuationCountdownState(plan)
-  if (!countdown.visible) {
-    const untilVisible = Math.max(0, (5 * 60) - countdown.idleSeconds)
-    return `<section class="monitor-card auto-monitor-card" data-role="auto-continue-card"><div class="monitor-card-head"><span>Auto continue</span><strong>Armed</strong></div><strong class="monitor-primary">${plan.continuation_count}/${plan.max_continuations} continuations</strong><span class="monitor-secondary">Countdown appears after 5 min idle${countdown.idleSeconds > 0 ? ` · ${formatCountdown(untilVisible)} until visible` : ""}.</span></section>`
-  }
-  return `<section class="monitor-card auto-monitor-card countdown" data-role="auto-continue-card"><div class="monitor-card-head"><span>Auto continue</span><strong>Countdown</strong></div><strong class="countdown-time">${escapeHtml(formatCountdown(countdown.remainingSeconds))}</strong><div class="countdown-track"><span style="width:${Math.round(countdown.progress * 100)}%"></span></div><span class="monitor-secondary">until automatic continuation · attempt ${plan.continuation_count + 1}/${plan.max_continuations}</span><button class="button compact-monitor-action" data-action="plan-cancel-countdown">Cancel countdown</button></section>`
+  return countdown.visible
+    ? `${formatCountdown(countdown.remainingSeconds)} · auto ${plan.continuation_count + 1}/${plan.max_continuations}`
+    : `Auto ${plan.continuation_count}/${plan.max_continuations}`
 }
 
-function refreshAutoContinueCard(): void {
+function refreshPlanAutoStatus(): void {
   if (activeTab !== "activity") return
-  const node = qs<HTMLElement>('[data-role="auto-continue-card"]')
-  if (!node) return
-  const replacement = document.createElement("div")
-  replacement.innerHTML = autoContinueCard()
-  const next = replacement.firstElementChild
-  if (next) node.replaceWith(next)
+  const node = qs<HTMLElement>('[data-role="plan-auto-status"]')
+  if (node) node.textContent = planAutoStatus()
 }
 
 function planCard(): string {
@@ -812,24 +746,8 @@ function planCard(): string {
       <div class="plan-progress-summary"><div class="progress-track"><span style="width:${progress.percent}%"></span></div><span>${progress.completed}/${progress.total} complete · ${progress.percent}%</span></div>
       ${plan.note ? `<p class="goal-note">${escapeHtml(plan.note)}</p>` : ""}
       <div class="plan-steps">${plan.steps.map((step) => `<div class="plan-step ${escapeHtml(step.status)}"><span class="plan-step-mark">${step.status === "completed" ? "✓" : step.status === "skipped" ? "–" : step.status === "active" ? "→" : "○"}</span><div><strong>${escapeHtml(step.text)}</strong>${step.note ? `<small>${escapeHtml(step.note)}</small>` : ""}</div></div>`).join("")}</div>
-      <footer><span>Auto continue ${plan.continuation_count}/${plan.max_continuations}</span><div class="goal-actions">${plan.status === "blocked" ? '<button class="button" data-action="plan-resume">Resume</button>' : '<button class="button" data-action="plan-pause">Pause</button>'}<button class="button danger" data-action="plan-cancel">Cancel plan</button></div></footer>
+      <footer><span data-role="plan-auto-status">${escapeHtml(planAutoStatus())}</span><div class="goal-actions">${plan.status === "blocked" ? '<button class="button" data-action="plan-resume">Resume</button>' : '<button class="button" data-action="plan-pause">Pause</button>'}<button class="button danger" data-action="plan-cancel">Cancel plan</button></div></footer>
     </section>`
-}
-
-function activityFocusCards(): string {
-  const jobs = dashboard?.jobs || []
-  const sessions = dashboard?.sessions || []
-  if (!jobs.length && !sessions.length) return ""
-  const cards: string[] = []
-  for (const job of jobs.slice(0, 2)) {
-    const sessionId = String(job.session_id || "")
-    const action = sessionId ? "activity-open-terminal" : "activity-open-jobs"
-    cards.push(`<button class="focus-card job" data-action="${action}" data-session="${escapeHtml(sessionId)}" data-machine="${escapeHtml(String(job.machine || workloadMachine || "local"))}"><small>Background job</small><strong>${escapeHtml(String(job.name || job.job_id || "job"))}</strong><span>${escapeHtml(String(job.status || "running"))} · ${sessionId ? "View output" : "Open jobs"}</span></button>`)
-  }
-  for (const session of sessions.slice(0, Math.max(0, 3 - cards.length))) {
-    cards.push(`<button class="focus-card terminal" data-action="activity-open-terminal" data-session="${escapeHtml(String(session.session_id || ""))}" data-machine="${escapeHtml(String(session.machine || workloadMachine || "local"))}"><small>Persistent terminal</small><strong>${escapeHtml(String(session.name || session.session_id || "terminal"))}</strong><span>Open terminal</span></button>`)
-  }
-  return `<div class="activity-focus">${cards.join("")}</div>`
 }
 
 function activityRow(event: LiveEvent): string {
@@ -2173,7 +2091,7 @@ planContinuationTimer = window.setInterval(() => {
 
 countdownRenderTimer = window.setInterval(() => {
   if (shuttingDown || !config || activeTab !== "activity") return
-  refreshAutoContinueCard()
+  refreshPlanAutoStatus()
   const countdown = continuationCountdownState(plan)
   if (countdown.visible && countdown.remainingSeconds <= 0) void checkPlanContinuation()
 }, 1_000)
