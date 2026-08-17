@@ -87,6 +87,7 @@ async def test_request_body_limit_counts_chunked_payloads(tmp_path, monkeypatch)
 @pytest.mark.asyncio
 async def test_mcp_metadata_for_chatgpt_developer_mode(tmp_path, monkeypatch):
     monkeypatch.setenv("LOCAL_SHELL_MCP_WORKSPACE_ROOT", str(tmp_path))
+    monkeypatch.setenv("LOCAL_SHELL_MCP_AUTH_MODE", "oauth")
     monkeypatch.setenv("LOCAL_SHELL_MCP_PUBLIC_BASE_URL", "https://local-shell-mcp.example.com")
     get_settings.cache_clear()
 
@@ -120,6 +121,21 @@ async def test_mcp_metadata_for_chatgpt_developer_mode(tmp_path, monkeypatch):
     assert structured["data"]["settings"]["default_timeout_s"] == 10
     assert structured["data"]["settings"]["max_timeout_s"] == 120
 
+
+@pytest.mark.asyncio
+async def test_mcp_metadata_uses_noauth_when_auth_is_disabled(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOCAL_SHELL_MCP_WORKSPACE_ROOT", str(tmp_path))
+    monkeypatch.setenv("LOCAL_SHELL_MCP_AUTH_MODE", "none")
+    monkeypatch.setenv("LOCAL_SHELL_MCP_REMOTE_ENABLED", "false")
+    get_settings.cache_clear()
+
+    tools = {tool.name: tool for tool in await build_mcp().list_tools()}
+
+    assert tools
+    assert all(
+        tool.meta["securitySchemes"] == [{"type": "noauth"}]
+        for tool in tools.values()
+    )
 
 
 @pytest.mark.asyncio

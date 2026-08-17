@@ -9,6 +9,7 @@ import time
 import uuid
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, cast
 from urllib.parse import urlparse
@@ -115,6 +116,10 @@ from .transfer_ops import (
     transfer_unpack_archive,
 )
 from .version import version_info as get_version_info
+
+_CURRENT_LOGICAL_SESSION_ID: ContextVar[str | None] = ContextVar(
+    "local_shell_mcp_current_logical_session_id", default=None
+)
 
 
 class TextEdit(BaseModel):
@@ -270,7 +275,7 @@ async def _run_python(code: str, cwd: str = ".", timeout_s: int = 60) -> dict:
     path = temp_dir() / f"script-{uuid.uuid4().hex}.py"
     path.parent.mkdir(parents=True, exist_ok=True)
     await asyncio.to_thread(path.write_text, code, encoding="utf-8")
-    python = quote_shell_argument(get_settings().python_bin)
+    python = quote_shell_executable(get_settings().python_bin)
     result = await run_shell(
         f"{python} {quote_shell_argument(str(path))}",
         cwd=cwd,
@@ -341,11 +346,16 @@ NON_CANCELLABLE_TOOL_NAMES = frozenset(
 REMOTE_MACHINE_ARGUMENTS = frozenset({"machine", "source_machine", "destination_machine"})
 
 
+NOAUTH_SECURITY_SCHEMES = [{"type": "noauth"}]
+
+
 def _security_meta(schemes: list[dict[str, Any]]) -> dict[str, Any]:
     return {"securitySchemes": schemes}
 
 
 def _oauth_meta(scopes: list[str]) -> dict[str, Any]:
+    if get_settings().auth_mode == "none":
+        return _security_meta([*NOAUTH_SECURITY_SCHEMES])
     return _security_meta([_oauth_security_scheme(scopes)])
 
 
@@ -789,6 +799,24 @@ async def _renew_session_tool_lease(
             return
 
 
+def _logical_session_key(
+    transport_key: str,
+    *,
+    session_run_id: str | None = None,
+    action: str | None = None,
+    session_id: str | None = None,
+) -> str:
+    """Route durable logical Sessions independently of multiplexed transports."""
+    if session_run_id:
+        return f"{transport_key}:run:{session_run_id}"
+    normalized_action = str(action or "").strip().lower()
+    if normalized_action == "start":
+        return f"{transport_key}:start:{uuid.uuid4().hex}"
+    if normalized_action == "resume" and session_id:
+        return f"{transport_key}:resume:{session_id}"
+    return transport_key
+
+
 def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
     for tool in mcp._tool_manager._tools.values():  # noqa: SLF001
         original = tool.fn
@@ -839,6 +867,12 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
             call_id = uuid.uuid4().hex
             started_at = time.monotonic()
             live_session_key = mcp_session_key(mcp)
+            logical_session_key = _logical_session_key(
+                live_session_key,
+                session_run_id=(str(session_run_id) if session_run_id is not None else None),
+                action=call_arguments.get("action"),
+                session_id=call_arguments.get("session_id"),
+            )
             live_manager = get_live_channel_manager()
             logical_manager = get_session_runtime_manager()
             principal_subject = _current_principal_subject()
@@ -846,17 +880,26 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
             logical_lease = None
             normalized_tool_action = str(call_arguments.get("action") or "").strip().lower()
             session_get_tracks_activity = False
+            session_get_run_id: str | None = None
             if __tool_name == "session_manage" and normalized_tool_action == "get":
-                current_session_id = await asyncio.to_thread(
-                    logical_manager.current_session_id,
-                    live_session_key,
-                    subject=principal_subject,
-                )
                 requested_session_id = str(call_arguments.get("session_id") or "").strip()
-                session_get_tracks_activity = bool(
-                    current_session_id
-                    and (not requested_session_id or requested_session_id == current_session_id)
-                )
+                if requested_session_id:
+                    requested_state = await asyncio.to_thread(
+                        logical_manager.get,
+                        requested_session_id,
+                        subject=principal_subject,
+                    )
+                    active_run = requested_state.get("active_run")
+                    if isinstance(active_run, dict) and active_run.get("run_id"):
+                        session_get_run_id = str(active_run["run_id"])
+                        session_get_tracks_activity = True
+                else:
+                    current_session_id = await asyncio.to_thread(
+                        logical_manager.current_session_id,
+                        live_session_key,
+                        subject=principal_subject,
+                    )
+                    session_get_tracks_activity = bool(current_session_id)
             if (
                 __tool_name not in {"session_manage", "live_workspace_reconnect"}
                 or session_get_tracks_activity
@@ -868,10 +911,18 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
                 try:
                     logical_lease = await asyncio.to_thread(
                         logical_manager.begin_tool_call,
-                        live_session_key,
+                        (
+                            _logical_session_key(
+                                live_session_key,
+                                session_run_id=session_get_run_id,
+                            )
+                            if session_get_run_id
+                            else logical_session_key
+                        ),
                         call_id,
                         expected_run_id=(
-                            str(session_run_id) if session_run_id is not None else None
+                            session_get_run_id
+                            or (str(session_run_id) if session_run_id is not None else None)
                         ),
                         subject=principal_subject,
                         require_run_token=require_run_token,
@@ -988,6 +1039,11 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
                         stage="setup",
                     )
                 raise
+            logical_context_token = _CURRENT_LOGICAL_SESSION_ID.set(
+                str(logical_lease["session_id"])
+                if logical_lease and logical_lease.get("session_id")
+                else None
+            )
             try:
                 with audit_call_context(call_id) as call_state:
                     if local_access_error is not None:
@@ -1128,6 +1184,7 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
                 logical_activity_finished = True
                 raise
             finally:
+                _CURRENT_LOGICAL_SESSION_ID.reset(logical_context_token)
                 if lease_heartbeat_task is not None:
                     lease_heartbeat_task.cancel()
                     with suppress(asyncio.CancelledError, Exception):
@@ -2978,11 +3035,17 @@ def _register_maintenance_tools(mcp: FastMCP, read_only_tool: ToolAnnotations) -
     ) -> ToolResult:
         """Manage a durable logical task session independent of machine and cwd. Start one before substantive tool-driven work; report semantic progress at meaningful checkpoints; resume by session_id to hand work to a new GPT/MCP run. resume with takeover=true always creates a new agent run and supersedes the old one. Use the returned active_run.run_id as session_run_id for report/finish/cancel and subsequent tools. Actions: start, resume, get, report, list, finish, cancel, delete. start may include label/objective; report accepts summary/findings/next/blockers/objective/label. delete permanently removes a detached or terminal Session and frees retained history capacity."""
         session_key = mcp_session_key(mcp)
+        logical_session_key = _logical_session_key(
+            session_key,
+            session_run_id=session_run_id,
+            action=action,
+            session_id=session_id,
+        )
         subject = _current_principal_subject()
         result = await _tool_call(
             asyncio.to_thread,
             get_session_runtime_manager().manage,
-            session_key,
+            logical_session_key,
             subject,
             action=action,
             session_id=session_id,
@@ -3039,7 +3102,11 @@ def _register_maintenance_tools(mcp: FastMCP, read_only_tool: ToolAnnotations) -
         return await _tool_call(
             asyncio.to_thread,
             get_session_runtime_manager().manage_plan,
-            mcp_session_key(mcp),
+            _logical_session_key(
+                mcp_session_key(mcp),
+                session_run_id=session_run_id,
+                action=action,
+            ),
             action=action,
             session_run_id=session_run_id,
             require_run_token=True,
@@ -3335,12 +3402,13 @@ def _register_live_workspace_tools(
         )
         session_key = mcp_session_key(mcp)
         session_manager = get_session_runtime_manager()
-        logical_session_id = await asyncio.to_thread(
+        transport_session_id = await asyncio.to_thread(
             session_manager.current_session_id,
             session_key,
             subject=subject,
         )
-        if logical_session_id is None and session_id:
+        logical_session_id = _CURRENT_LOGICAL_SESSION_ID.get() or transport_session_id
+        if session_id:
             try:
                 await asyncio.to_thread(session_manager.get, session_id, subject=subject)
             except ValueError as exc:
@@ -3349,6 +3417,7 @@ def _register_live_workspace_tools(
                 # A suspended app can miss the detach/delete event. Treat only a
                 # missing Session as stale; ownership errors still propagate.
                 get_live_channel_manager().detach_logical_session(session_id)
+                logical_session_id = None
             else:
                 logical_session_id = session_id
         channel, live_token = get_live_channel_manager().open(

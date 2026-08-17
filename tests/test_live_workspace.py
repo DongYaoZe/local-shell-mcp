@@ -1178,7 +1178,7 @@ async def test_mcp_app_resource_and_render_result_hide_live_token(tmp_path, monk
     assert render_tool.meta["openai/outputTemplate"] == LIVE_RESOURCE_VERSIONED_URI
     assert render_tool.meta["openai/widgetAccessible"] is True
     assert "live_id" not in render_tool.inputSchema["properties"]
-    assert render_tool.meta["securitySchemes"][0]["scopes"] == list(ALL_OAUTH_SCOPES)
+    assert render_tool.meta["securitySchemes"] == [{"type": "noauth"}]
     assert render_tool.outputSchema["title"] == "LiveChannelResult"
     assert "session_run_id" in render_tool.inputSchema["properties"]
     assert "session_run_id" in render_tool.inputSchema["required"]
@@ -1724,7 +1724,7 @@ async def test_mcp_run_lease_blocks_stale_same_transport_agent(tmp_path, monkeyp
     second_run_id = resumed["data"]["active_run"]["run_id"]
     assert second_run_id != first_run_id
 
-    with pytest.raises(Exception, match="superseded"):
+    with pytest.raises(Exception, match="superseded|does not identify a current logical session run"):
         await mcp.call_tool(
             "file_write",
             {

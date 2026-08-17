@@ -811,6 +811,18 @@ class SessionRuntimeManager:
         normalized_action = str(action).strip().lower()
         with self._lock:
             self._ensure_loaded_locked()
+            if (
+                session_run_id is not None
+                and normalized_action not in {"start", "resume", "list", "delete"}
+            ):
+                attachment = self._attachments.get(session_key)
+                if attachment is None or attachment[1] != session_run_id:
+                    self._recover_attachment_by_run_id_locked(
+                        session_key,
+                        session_run_id,
+                        subject=subject,
+                        refresh_shared=not _state_locks_held,
+                    )
             if not _state_locks_held and normalized_action not in {"get", "list"}:
                 attachment = self._attachments.get(session_key)
                 lock_ids: list[str] = []
@@ -1616,6 +1628,16 @@ class SessionRuntimeManager:
             self._ensure_loaded_locked()
             normalized_action = action.strip().lower()
             attachment = self._attachments.get(session_key)
+            if session_run_id is not None and (
+                attachment is None or attachment[1] != session_run_id
+            ):
+                self._recover_attachment_by_run_id_locked(
+                    session_key,
+                    session_run_id,
+                    subject=self._authenticated_subject(),
+                    refresh_shared=not _state_lock_held,
+                )
+                attachment = self._attachments.get(session_key)
             if (
                 not _state_lock_held
                 and normalized_action != "get"

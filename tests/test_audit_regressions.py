@@ -365,7 +365,7 @@ async def test_python_and_playwright_tools_honor_configured_interpreter_and_clea
 
     monkeypatch.setattr(tools_module, "run_shell", fake_run)
     await tools_module._run_python("print('x')")
-    assert commands[-1].startswith("'/opt/custom python' ")
+    assert commands[-1].startswith(f"{tools_module.quote_shell_executable('/opt/custom python')} ")
 
     stale = tmp_path / "screenshots" / "page.png"
     stale.parent.mkdir()
@@ -377,6 +377,39 @@ async def test_python_and_playwright_tools_honor_configured_interpreter_and_clea
     assert commands[-1].startswith("'/opt/custom python' ")
     assert result["capture_path"] is None
     assert not stale.exists()
+
+
+@pytest.mark.asyncio
+async def test_run_python_uses_powershell_call_operator_for_configured_executable(
+    tmp_path, monkeypatch
+):
+    _configure_workspace(tmp_path, monkeypatch)
+    monkeypatch.setenv("LOCAL_SHELL_MCP_SHELL_EXECUTABLE", "powershell.exe")
+    monkeypatch.setenv(
+        "LOCAL_SHELL_MCP_PYTHON_BIN", r"C:\Program Files\Python\python.exe"
+    )
+    get_settings.cache_clear()
+    commands = []
+
+    async def fake_run(command, **kwargs):
+        del kwargs
+        commands.append(command)
+        return CommandResult(
+            ok=True,
+            exit_code=0,
+            timed_out=False,
+            duration_ms=1,
+            cwd=".",
+            command=command,
+            stdout="ok",
+            stderr="",
+            truncated=False,
+        )
+
+    monkeypatch.setattr(tools_module, "run_shell", fake_run)
+    await tools_module._run_python("print('ok')")
+
+    assert commands[-1].startswith("& 'C:\\Program Files\\Python\\python.exe' ")
 
 
 def test_rest_validation_and_readiness(tmp_path, monkeypatch):

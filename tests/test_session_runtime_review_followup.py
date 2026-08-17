@@ -12,6 +12,7 @@ from local_shell_mcp.session_runtime import (
     AgentRun,
     SessionRuntimeManager,
 )
+from local_shell_mcp.tools import _logical_session_key
 
 
 def test_resume_persistence_failure_restores_both_sessions(tmp_path, monkeypatch):
@@ -115,6 +116,92 @@ def test_existing_attachment_is_rejected_after_principal_change(tmp_path, monkey
         manager.manage_plan("mcp:a", action="get")
     assert manager.current_session_id("mcp:a") is None
 
+
+
+def test_multiplexed_transport_routes_logical_sessions_by_run_id(tmp_path):
+    manager = SessionRuntimeManager(tmp_path / ".state")
+    transport_key = "mcp-session:shared-tunnel"
+
+    first_start_key = _logical_session_key(transport_key, action="start")
+    second_start_key = _logical_session_key(transport_key, action="start")
+    assert first_start_key != second_start_key
+    assert first_start_key != transport_key
+    assert second_start_key != transport_key
+
+    first = manager.manage(first_start_key, "user", action="start", objective="First")
+    second = manager.manage(second_start_key, "user", action="start", objective="Second")
+    first_id = first["session_id"]
+    second_id = second["session_id"]
+    first_run = first["active_run"]["run_id"]
+    second_run = second["active_run"]["run_id"]
+
+    assert manager.get(first_id)["active_run"]["run_id"] == first_run
+    assert manager.get(second_id)["active_run"]["run_id"] == second_run
+
+    first_key = _logical_session_key(transport_key, session_run_id=first_run)
+    second_key = _logical_session_key(transport_key, session_run_id=second_run)
+    assert first_key != second_key
+
+    manager.manage(
+        first_key,
+        "user",
+        action="report",
+        session_run_id=first_run,
+        summary="first report",
+    )
+    manager.manage(
+        second_key,
+        "user",
+        action="report",
+        session_run_id=second_run,
+        summary="second report",
+    )
+    manager.manage_plan(
+        first_key,
+        action="start",
+        session_run_id=first_run,
+        require_run_token=True,
+        objective="First plan",
+        steps=[{"id": "first", "text": "First"}],
+    )
+    manager.manage_plan(
+        second_key,
+        action="start",
+        session_run_id=second_run,
+        require_run_token=True,
+        objective="Second plan",
+        steps=[{"id": "second", "text": "Second"}],
+    )
+
+    first_lease = manager.begin_tool_call(
+        first_key,
+        "call-first",
+        expected_run_id=first_run,
+        subject="user",
+        require_run_token=True,
+        data={"tool": "file_read"},
+    )
+    second_lease = manager.begin_tool_call(
+        second_key,
+        "call-second",
+        expected_run_id=second_run,
+        subject="user",
+        require_run_token=True,
+        data={"tool": "file_read"},
+    )
+    assert first_lease is not None and first_lease["session_id"] == first_id
+    assert second_lease is not None and second_lease["session_id"] == second_id
+    manager.finish_tool_call(first_lease, "tool.completed")
+    manager.finish_tool_call(second_lease, "tool.completed")
+
+    assert manager.get(first_id)["progress"]["summary"] == "first report"
+    assert manager.get(second_id)["progress"]["summary"] == "second report"
+    assert manager.manage_plan(
+        first_key, action="get", session_run_id=first_run
+    )["plan"]["objective"] == "First plan"
+    assert manager.manage_plan(
+        second_key, action="get", session_run_id=second_run
+    )["plan"]["objective"] == "Second plan"
 
 
 def test_cross_principal_transport_reuse_does_not_detach_previous_run(tmp_path):
