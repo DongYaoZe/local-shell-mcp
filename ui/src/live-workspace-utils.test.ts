@@ -46,6 +46,12 @@ describe("live workspace utilities", () => {
     expect(source).toContain("event.stopPropagation()")
   })
 
+  test("remote machine cards keep their intrinsic height inside the full-height grid", async () => {
+    const styles = await Bun.file(new URL("./live-workspace.css", import.meta.url)).text()
+    const remoteGridRule = styles.match(/\.remote-grid\s*\{([^}]*)\}/)?.[1] ?? ""
+    expect(remoteGridRule).toContain("align-content: start")
+  })
+
   test("Live Workspace teardown does not recursively call its rendering tool", async () => {
     const source = await Bun.file(new URL("./live-workspace.ts", import.meta.url)).text()
     expect(source).toContain("app.onteardown = async")
