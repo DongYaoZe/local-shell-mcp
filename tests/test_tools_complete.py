@@ -451,6 +451,21 @@ def test_tool_helpers_audit_serialization_timeout_and_tail(tmp_path, monkeypatch
         "explanation": "explanation",
     }
     assert tools._audit_tool_purpose("x", " ", None) == {}
+    assert tools._live_event_arguments(
+        "run_shell",
+        {
+            "cwd": "/workspace",
+            "purpose": "Run the focused tests",
+            "explanation": "Validate the Activity metadata change before pushing",
+            "command": "pytest -q",
+        },
+    ) == {
+        "tool": "run_shell",
+        "cwd": "/workspace",
+        "purpose": "Run the focused tests",
+        "explanation": "Validate the Activity metadata change before pushing",
+        "command": "pytest -q",
+    }
     with pytest.raises(ValueError, match="purpose"):
         tools._audit_tool_purpose("x", "x" * 501)
     with pytest.raises(ValueError, match="explanation"):

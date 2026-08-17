@@ -240,13 +240,19 @@ describe("live workspace utilities", () => {
       ts: 1,
       type: "tool.completed",
       actor: "agent",
-      data: { tool: "run_shell", cwd: "/workspace", duration_ms: 1420 },
+      data: {
+        tool: "run_shell",
+        explanation: "Verify the compact Activity presentation",
+        purpose: "Run focused validation",
+        cwd: "/workspace",
+        duration_ms: 1420,
+      },
     }
     expect(eventTitle(event)).toBe("run_shell completed")
-    expect(activityIntent(event)).toBe("Running command")
+    expect(activityIntent(event)).toBe("Run focused validation")
     expect(activityDestination(event)).toBe("detail")
-    expect(eventDetail(event)).toContain("/workspace")
-    expect(eventDetail(event)).toContain("1.4 s")
+    const detail = eventDetail(event)
+    expect(detail).toBe("Explanation: Verify the compact Activity presentation · Purpose: Run focused validation · /workspace · 1.4 s")
   })
 
   test("activity hides workspace bootstrap noise and routes useful operations", () => {

@@ -364,6 +364,10 @@ export function eventTitle(event: LiveEvent): string {
 export function eventDetail(event: LiveEvent): string {
   const data = event.data
   const pieces: string[] = []
+  const explanation = typeof data.explanation === "string" ? data.explanation.trim() : ""
+  const purpose = typeof data.purpose === "string" ? data.purpose.trim() : ""
+  if (explanation) pieces.push(`Explanation: ${explanation}`)
+  if (purpose) pieces.push(`Purpose: ${purpose}`)
   for (const key of ["machine", "path", "cwd", "session_id", "job_id"] as const) {
     const value = data[key]
     if (value !== undefined && value !== null && value !== "") pieces.push(String(value))
