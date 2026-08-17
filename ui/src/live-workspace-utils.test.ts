@@ -239,15 +239,17 @@ describe("live workspace utilities", () => {
     const bootstrap: LiveEvent = { seq: 2, ts: 1, type: "tool.completed", actor: "agent", data: { tool: "workspace_open" } }
     const reconnect: LiveEvent = { seq: 3, ts: 1, type: "tool.completed", actor: "agent", data: { tool: "live_workspace_reconnect" } }
     const terminalInput: LiveEvent = { seq: 4, ts: 1, type: "human.action", actor: "human", data: { action: "terminal.input", bytes: 1 } }
-    const edit: LiveEvent = { seq: 5, ts: 1, type: "tool.completed", actor: "agent", data: { tool: "file_edit", path: "/workspace/src/app.ts" } }
-    const job: LiveEvent = { seq: 6, ts: 1, type: "tool.completed", actor: "agent", data: { tool: "job_start", name: "tests" } }
-    const shellStarted: LiveEvent = { seq: 7, ts: 1, type: "tool.started", actor: "agent", data: { tool: "shell_start", call_id: "shell-1" } }
-    const shellReady: LiveEvent = { seq: 8, ts: 1, type: "tool.completed", actor: "agent", data: { tool: "shell_start", call_id: "shell-1", session_id: "session-1" } }
+    const sessionAttached: LiveEvent = { seq: 5, ts: 1, type: "session.attached", actor: "agent", data: { session_id: "session-1" } }
+    const edit: LiveEvent = { seq: 6, ts: 1, type: "tool.completed", actor: "agent", data: { tool: "file_edit", path: "/workspace/src/app.ts" } }
+    const job: LiveEvent = { seq: 7, ts: 1, type: "tool.completed", actor: "agent", data: { tool: "job_start", name: "tests" } }
+    const shellStarted: LiveEvent = { seq: 8, ts: 1, type: "tool.started", actor: "agent", data: { tool: "shell_start", call_id: "shell-1" } }
+    const shellReady: LiveEvent = { seq: 9, ts: 1, type: "tool.completed", actor: "agent", data: { tool: "shell_start", call_id: "shell-1", session_id: "session-1" } }
 
     expect(isOperationalActivityEvent(opened)).toBeFalse()
     expect(isOperationalActivityEvent(bootstrap)).toBeFalse()
     expect(isOperationalActivityEvent(reconnect)).toBeFalse()
     expect(isOperationalActivityEvent(terminalInput)).toBeFalse()
+    expect(isOperationalActivityEvent(sessionAttached)).toBeFalse()
     expect(isOperationalActivityEvent(edit)).toBeTrue()
     expect(activityIntent(edit)).toBe("Editing app.ts")
     expect(activityDestination(edit)).toBe("files")

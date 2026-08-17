@@ -283,7 +283,7 @@ export function activityEventKey(event: LiveEvent): string {
 }
 
 export function isOperationalActivityEvent(event: LiveEvent): boolean {
-  if (event.type === "channel.opened") return false
+  if (event.type === "channel.opened" || event.type === "session.attached") return false
   if (event.type === "human.action" && event.data.action === "terminal.input") return false
   return !["workspace_open", "open_live_workspace", "live_workspace_reconnect"].includes(String(event.data.tool || ""))
 }
