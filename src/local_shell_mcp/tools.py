@@ -270,7 +270,7 @@ async def _run_python(code: str, cwd: str = ".", timeout_s: int = 60) -> dict:
     path = temp_dir() / f"script-{uuid.uuid4().hex}.py"
     path.parent.mkdir(parents=True, exist_ok=True)
     await asyncio.to_thread(path.write_text, code, encoding="utf-8")
-    python = quote_shell_argument(get_settings().python_bin)
+    python = quote_shell_executable(get_settings().python_bin)
     result = await run_shell(
         f"{python} {quote_shell_argument(str(path))}",
         cwd=cwd,
@@ -292,6 +292,7 @@ def _oauth_security_scheme(scopes: list[str] | tuple[str, ...]) -> dict[str, Any
     return {"type": "oauth2", "scopes": list(ALL_OAUTH_SCOPES)}
 
 
+NOAUTH_SECURITY_SCHEMES = [{"type": "noauth"}]
 PUBLIC_TOOL_TIMEOUT_S = PUBLIC_TOOL_WATCHDOG_TIMEOUT_S
 MCP_INSTRUCTIONS = (
     "When a task may benefit from an installed Agent Skill, call skill_list first "
@@ -346,6 +347,8 @@ def _security_meta(schemes: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def _oauth_meta(scopes: list[str]) -> dict[str, Any]:
+    if get_settings().auth_mode == "none":
+        return _security_meta([*NOAUTH_SECURITY_SCHEMES])
     return _security_meta([_oauth_security_scheme(scopes)])
 
 
@@ -789,6 +792,47 @@ async def _renew_session_tool_lease(
             return
 
 
+def _logical_session_routing_key(
+    base_session_key: str,
+    *,
+    tool_name: str,
+    session_run_id: str | None,
+    action: str | None = None,
+    session_id: str | None = None,
+) -> str:
+    """Route logical Sessions safely when one stdio MCP session is multiplexed.
+
+    HTTP transports already provide an affinity or MCP session id. Headerless stdio
+    transports do not, and a tunnel process may reuse one MCP session object for
+    multiple ChatGPT conversations. Once a durable run id exists it becomes the
+    authoritative routing capability. Session starts use a one-shot routing key,
+    while resume/get calls with a session id route by that durable session id, so
+    they cannot detach a different logical Session sharing the same transport key.
+    """
+    # Headerless MCP sessions are represented by a process-local mcp-session key.
+    # OpenAI's stdio tunnel can multiplex several ChatGPT conversations through
+    # one such underlying session object. The legacy "direct" key is kept on its
+    # existing single-client semantics for internal/direct callers.
+    multiplexed = base_session_key.startswith("mcp-session:")
+    if not multiplexed:
+        return base_session_key
+    if session_run_id:
+        return f"{base_session_key}:run:{session_run_id}"
+
+    normalized_tool = str(tool_name or "").strip().lower()
+    normalized_action = str(action or "").strip().lower()
+    if normalized_tool == "session_manage":
+        if normalized_action == "start":
+            return f"{base_session_key}:start:{uuid.uuid4().hex}"
+        if normalized_action in {"resume", "get"} and session_id:
+            return f"{base_session_key}:session:{session_id}"
+        if normalized_action == "get":
+            return f"{base_session_key}:unbound-get:{uuid.uuid4().hex}"
+    if normalized_tool == "plan_manage":
+        return f"{base_session_key}:unbound-plan:{uuid.uuid4().hex}"
+    return base_session_key
+
+
 def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
     for tool in mcp._tool_manager._tools.values():  # noqa: SLF001
         original = tool.fn
@@ -839,6 +883,15 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
             call_id = uuid.uuid4().hex
             started_at = time.monotonic()
             live_session_key = mcp_session_key(mcp)
+            logical_session_key = _logical_session_routing_key(
+                live_session_key,
+                tool_name=__tool_name,
+                session_run_id=(
+                    str(session_run_id) if session_run_id is not None else None
+                ),
+                action=call_arguments.get("action"),
+                session_id=call_arguments.get("session_id"),
+            )
             live_manager = get_live_channel_manager()
             logical_manager = get_session_runtime_manager()
             principal_subject = _current_principal_subject()
@@ -849,7 +902,7 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
             if __tool_name == "session_manage" and normalized_tool_action == "get":
                 current_session_id = await asyncio.to_thread(
                     logical_manager.current_session_id,
-                    live_session_key,
+                    logical_session_key,
                     subject=principal_subject,
                 )
                 requested_session_id = str(call_arguments.get("session_id") or "").strip()
@@ -868,7 +921,7 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
                 try:
                     logical_lease = await asyncio.to_thread(
                         logical_manager.begin_tool_call,
-                        live_session_key,
+                        logical_session_key,
                         call_id,
                         expected_run_id=(
                             str(session_run_id) if session_run_id is not None else None
@@ -2977,7 +3030,14 @@ def _register_maintenance_tools(mcp: FastMCP, read_only_tool: ToolAnnotations) -
         takeover: bool = False,
     ) -> ToolResult:
         """Manage a durable logical task session independent of machine and cwd. Start one before substantive tool-driven work; report semantic progress at meaningful checkpoints; resume by session_id to hand work to a new GPT/MCP run. resume with takeover=true always creates a new agent run and supersedes the old one. Use the returned active_run.run_id as session_run_id for report/finish/cancel and subsequent tools. Actions: start, resume, get, report, list, finish, cancel, delete. start may include label/objective; report accepts summary/findings/next/blockers/objective/label. delete permanently removes a detached or terminal Session and frees retained history capacity."""
-        session_key = mcp_session_key(mcp)
+        live_session_key = mcp_session_key(mcp)
+        session_key = _logical_session_routing_key(
+            live_session_key,
+            tool_name="session_manage",
+            session_run_id=session_run_id,
+            action=action,
+            session_id=session_id,
+        )
         subject = _current_principal_subject()
         result = await _tool_call(
             asyncio.to_thread,
@@ -3004,7 +3064,7 @@ def _register_maintenance_tools(mcp: FastMCP, read_only_tool: ToolAnnotations) -
                 "resume",
             }:
                 get_live_channel_manager().bind_logical_session(
-                    session_key,
+                    live_session_key,
                     str(data["session_id"]),
                     subject,
                     exclusive_model_owner=True,
@@ -3039,7 +3099,12 @@ def _register_maintenance_tools(mcp: FastMCP, read_only_tool: ToolAnnotations) -
         return await _tool_call(
             asyncio.to_thread,
             get_session_runtime_manager().manage_plan,
-            mcp_session_key(mcp),
+            _logical_session_routing_key(
+                mcp_session_key(mcp),
+                tool_name="plan_manage",
+                session_run_id=session_run_id,
+                action=action,
+            ),
             action=action,
             session_run_id=session_run_id,
             require_run_token=True,
