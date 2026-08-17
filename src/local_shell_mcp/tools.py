@@ -510,7 +510,6 @@ _LIVE_ARGUMENT_KEYS = (
     "name",
     "action",
     "purpose",
-    "explanation",
 )
 
 

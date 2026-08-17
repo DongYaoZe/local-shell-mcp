@@ -59,6 +59,10 @@ describe("live workspace utilities", () => {
     expect(css).toContain(".task-overview-column { max-height: 108px;")
     expect(css).toContain("@media (max-height: 460px)")
     expect(css).toContain(".task-overview-column { display: none; }")
+    expect(source).toContain('class="timeline-purpose"')
+    expect(source).not.toContain("Explanation:")
+    expect(source).not.toContain("Purpose:")
+    expect(css).toContain(".timeline-purpose { color: var(--ls-text-2); font-family: var(--ls-font); font-weight: 500; }")
   })
 
   test("Live Workspace teardown does not recursively call its rendering tool", async () => {
@@ -252,7 +256,7 @@ describe("live workspace utilities", () => {
     expect(activityIntent(event)).toBe("Run focused validation")
     expect(activityDestination(event)).toBe("detail")
     const detail = eventDetail(event)
-    expect(detail).toBe("Explanation: Verify the compact Activity presentation · Purpose: Run focused validation · /workspace · 1.4 s")
+    expect(detail).toBe("/workspace · 1.4 s")
   })
 
   test("activity hides workspace bootstrap noise and routes useful operations", () => {

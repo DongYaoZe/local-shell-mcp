@@ -738,6 +738,7 @@ function planCard(): string {
 
 function activityRow(event: LiveEvent): string {
   const detail = eventDetail(event)
+  const purpose = typeof event.data.purpose === "string" ? event.data.purpose.trim() : ""
   const destination = activityDestination(event)
   const callId = String(event.data.call_id || "")
   const eventKey = activityEventKey(event)
@@ -765,7 +766,10 @@ function activityRow(event: LiveEvent): string {
     actionLabel = activityExpandedEventKey === eventKey ? "Hide output" : "View output"
   }
   const expanded = callId && activityExpandedEventKey === eventKey ? activityDetailHtml(callId) : ""
-  return `<div class="timeline-row ${eventTone(event)} ${action ? "clickable" : ""}" ${action}><div class="timeline-marker"><span></span></div><div class="timeline-copy"><div><strong>${escapeHtml(eventTitle(event))}</strong><span class="actor ${escapeHtml(event.actor)}">${escapeHtml(event.actor)}</span>${actionLabel ? `<span class="timeline-action">${escapeHtml(actionLabel)}</span>` : ""}</div>${detail ? `<p>${escapeHtml(detail)}</p>` : ""}</div><time>${escapeHtml(formatClock(event.ts))}</time>${expanded}</div>`
+  const subline = purpose || detail
+    ? `<p>${purpose ? `<span class="timeline-purpose">${escapeHtml(purpose)}</span>` : ""}${purpose && detail ? '<span class="timeline-separator"> · </span>' : ""}${detail ? `<span class="timeline-summary">${escapeHtml(detail)}</span>` : ""}</p>`
+    : ""
+  return `<div class="timeline-row ${eventTone(event)} ${action ? "clickable" : ""}" ${action}><div class="timeline-marker"><span></span></div><div class="timeline-copy"><div><strong>${escapeHtml(eventTitle(event))}</strong><span class="actor ${escapeHtml(event.actor)}">${escapeHtml(event.actor)}</span>${actionLabel ? `<span class="timeline-action">${escapeHtml(actionLabel)}</span>` : ""}</div>${subline}</div><time>${escapeHtml(formatClock(event.ts))}</time>${expanded}</div>`
 }
 
 function activityDetailHtml(callId: string): string {

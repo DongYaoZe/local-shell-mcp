@@ -463,7 +463,6 @@ def test_tool_helpers_audit_serialization_timeout_and_tail(tmp_path, monkeypatch
         "tool": "run_shell",
         "cwd": "/workspace",
         "purpose": "Run the focused tests",
-        "explanation": "Validate the Activity metadata change before pushing",
         "command": "pytest -q",
     }
     with pytest.raises(ValueError, match="purpose"):

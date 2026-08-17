@@ -155,7 +155,9 @@ select:hover, input:hover, textarea:hover { border-color: var(--ls-border-strong
 .timeline-copy { min-width: 0; }
 .timeline-copy > div { display: flex; align-items: center; gap: 7px; }
 .timeline-copy strong { font-size: 11.5px; font-weight: 600; }
-.timeline-copy p { margin: 2px 0 0; color: var(--ls-text-3); font-family: var(--ls-mono); font-size: 10.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.timeline-copy p { margin: 2px 0 0; color: var(--ls-text-3); font-size: 10.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.timeline-purpose { color: var(--ls-text-2); font-family: var(--ls-font); font-weight: 500; }
+.timeline-separator, .timeline-summary { color: var(--ls-text-3); font-family: var(--ls-mono); }
 .timeline-row time { color: var(--ls-text-3); font: 10px var(--ls-mono); }
 .actor { padding: 1px 5px; border-radius: 999px; background: var(--ls-panel-strong); color: var(--ls-text-3); font-size: 8.5px; text-transform: uppercase; }
 .actor.human { color: var(--ls-info); background: var(--ls-info-soft); }
