@@ -413,6 +413,12 @@ select:hover, input:hover, textarea:hover { border-color: var(--ls-border-strong
 .session-activity-panel { min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 .session-activity-panel .panel-head { flex: 0 0 auto; }
 .session-timeline { flex: 1 1 auto; min-height: 0; max-height: none; overflow: auto; }
+.session-timeline, .task-context-column {
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  touch-action: pan-y;
+  -webkit-overflow-scrolling: touch;
+}
 .task-monitor-view .timeline-copy strong { font-size: 12px; }
 .task-monitor-view .timeline-copy p { font-size: 10.5px; }
 

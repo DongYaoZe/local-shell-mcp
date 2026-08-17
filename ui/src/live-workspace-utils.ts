@@ -110,6 +110,32 @@ export function reconnectDelayMs(attempt: number): number {
   return Math.min(15_000, 500 * (2 ** exponent))
 }
 
+export type ReverseFeedScrollState = {
+  followStart: boolean
+  endGap: number
+}
+
+export function captureReverseFeedScrollState(
+  scrollTop: number,
+  scrollHeight: number,
+  clientHeight: number,
+  followThreshold = 2,
+): ReverseFeedScrollState {
+  return {
+    followStart: scrollTop <= followThreshold,
+    endGap: Math.max(0, scrollHeight - clientHeight - scrollTop),
+  }
+}
+
+export function restoreReverseFeedScrollTop(
+  state: ReverseFeedScrollState,
+  scrollHeight: number,
+  clientHeight: number,
+): number {
+  if (state.followStart) return 0
+  return Math.max(0, scrollHeight - clientHeight - state.endGap)
+}
+
 export type ContinuationCountdownState = {
   visible: boolean
   remainingSeconds: number

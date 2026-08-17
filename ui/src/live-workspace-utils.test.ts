@@ -3,6 +3,7 @@ import {
   activityDestination,
   activityEventKey,
   activityIntent,
+  captureReverseFeedScrollState,
   coalesceActivityEvents,
   continuationDispatchStillValid,
   continuationCountdownState,
@@ -15,6 +16,7 @@ import {
   mergeActivityEvents,
   parentPath,
   renderDiffHtml,
+  restoreReverseFeedScrollTop,
   toggleWorkspaceDisplayMode,
   reconnectDelayMs,
   toolResultFromOpenAiGlobals,
@@ -23,6 +25,18 @@ import {
 } from "./live-workspace-utils"
 
 describe("live workspace utilities", () => {
+  test("activity rerenders keep the newest edge pinned but preserve historical reading position", () => {
+    const following = captureReverseFeedScrollState(0, 1_000, 300)
+    expect(restoreReverseFeedScrollTop(following, 1_120, 300)).toBe(0)
+
+    const readingHistory = captureReverseFeedScrollState(240, 1_000, 300)
+    expect(readingHistory.endGap).toBe(460)
+    expect(restoreReverseFeedScrollTop(readingHistory, 1_120, 300)).toBe(360)
+
+    const clamped = captureReverseFeedScrollState(900, 1_000, 300)
+    expect(restoreReverseFeedScrollTop(clamped, 250, 300)).toBe(0)
+  })
+
   test("Live Workspace teardown does not recursively call its rendering tool", async () => {
     const source = await Bun.file(new URL("./live-workspace.ts", import.meta.url)).text()
     expect(source).toContain("app.onteardown = async")
@@ -55,6 +69,22 @@ describe("live workspace utilities", () => {
   test("display mode toggles only between floating and fullscreen", () => {
     expect(toggleWorkspaceDisplayMode("pip")).toBe("fullscreen")
     expect(toggleWorkspaceDisplayMode("fullscreen")).toBe("pip")
+  })
+
+  test("Live Workspace stays PiP/fullscreen-only and expands only after the live snapshot renders", async () => {
+    const source = await Bun.file(new URL("./live-workspace.ts", import.meta.url)).text()
+    expect(source).toContain('{ availableDisplayModes: ["pip", "fullscreen"] }')
+    expect(source).not.toContain('availableDisplayModes: ["inline"')
+
+    const snapshotStart = source.indexOf("async function loadSnapshot")
+    const snapshotEnd = source.indexOf("async function pollEvents", snapshotStart)
+    const snapshotSource = source.slice(snapshotStart, snapshotEnd)
+    expect(snapshotSource.indexOf("renderCurrentTab()")).toBeLessThan(snapshotSource.indexOf("void enterPreferredDisplayModeAfterPaint(generation)"))
+
+    const startupStart = source.indexOf("await app.connect()")
+    const startupEnd = source.indexOf("passiveRefreshTimer = window.setInterval", startupStart)
+    const chatGptStartup = source.slice(startupStart, startupEnd)
+    expect(chatGptStartup).not.toContain("await enterPreferredDisplayMode()")
   })
 
   test("reconnect backoff grows but remains bounded", () => {
