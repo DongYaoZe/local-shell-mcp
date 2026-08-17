@@ -254,6 +254,7 @@ function shell(): void {
       <dialog class="live-dialog" data-role="dialog"><form method="dialog"><h3 data-role="dialog-title"></h3><p data-role="dialog-description"></p><label data-role="dialog-label"><span></span><input data-role="dialog-input"/></label><menu><button value="cancel">Cancel</button><button class="primary" value="confirm">Continue</button></menu></form></dialog>
     </div>`
   root.addEventListener("click", onRootClick)
+  root.addEventListener("wheel", onRootWheel, { passive: false })
   updateChrome()
 }
 
@@ -467,6 +468,37 @@ function onRootClick(event: MouseEvent): void {
   if (target.dataset.action) void handleAction(target.dataset.action, target)
 }
 
+function onRootWheel(event: WheelEvent): void {
+  if (activeTab !== "activity" || Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return
+  const target = event.target instanceof Element ? event.target : null
+  if (!target) return
+
+  const candidates: HTMLElement[] = []
+  const detail = target.closest<HTMLElement>(".timeline-detail")
+  const timeline = target.closest<HTMLElement>(".session-timeline")
+  const overview = target.closest<HTMLElement>(".task-overview-column")
+  if (detail) candidates.push(detail)
+  if (timeline && timeline !== detail) candidates.push(timeline)
+  if (overview) candidates.push(overview)
+  if (!candidates.length) return
+
+  for (const scroller of candidates) {
+    const maxScrollTop = Math.max(0, scroller.scrollHeight - scroller.clientHeight)
+    if (maxScrollTop <= 0) continue
+    const scale = event.deltaMode === WheelEvent.DOM_DELTA_LINE
+      ? 16
+      : event.deltaMode === WheelEvent.DOM_DELTA_PAGE
+        ? Math.max(1, scroller.clientHeight)
+        : 1
+    const nextScrollTop = Math.min(maxScrollTop, Math.max(0, scroller.scrollTop + event.deltaY * scale))
+    if (nextScrollTop === scroller.scrollTop) continue
+    scroller.scrollTop = nextScrollTop
+    event.preventDefault()
+    event.stopPropagation()
+    return
+  }
+}
+
 async function handleAction(action: string, target: HTMLElement): Promise<void> {
   try {
     if (action === "expand") await requestDisplayMode(toggleWorkspaceDisplayMode(displayMode))
@@ -661,8 +693,8 @@ function renderActivity(): void {
   const timelineScrollState = previousTimeline
     ? captureReverseFeedScrollState(previousTimeline.scrollTop, previousTimeline.scrollHeight, previousTimeline.clientHeight)
     : null
-  const previousContext = qs<HTMLElement>(".task-context-column")
-  const contextScrollTop = previousContext?.scrollTop || 0
+  const previousOverview = qs<HTMLElement>(".task-overview-column")
+  const overviewScrollTop = previousOverview?.scrollTop || 0
   const visible = coalesceActivityEvents(durableSessionEvents())
   // Durable Session history keeps 200 raw lifecycle events. Since a normal
   // started/completed pair coalesces into one row, reconnects intentionally
@@ -675,29 +707,31 @@ function renderActivity(): void {
   mainNode().innerHTML = `
     <section class="view activity-view task-monitor-view">
       <div class="view-toolbar task-monitor-toolbar"><div><h2>Live task monitor</h2><p>${config?.sessionId ? `Logical Session ${escapeHtml(config.sessionId)}` : "No Logical Session attached yet"}</p></div><div class="toolbar-actions"><button class="button" data-action="activity-ask">${icon("chat")}Ask</button><button class="button" data-action="refresh">${icon("refresh")}Refresh</button></div></div>
-      <div class="task-monitor-grid">
-        <section class="monitor-card session-monitor-card">
-          <div class="monitor-card-head"><span>Session</span><strong class="status-pill ${escapeHtml(sessionStatus)}">${escapeHtml(sessionStatus)}</strong></div>
-          <strong class="monitor-primary">${escapeHtml(logicalSession?.label || logicalSession?.objective || (config?.sessionId ? "Active logical task" : "Standard workspace"))}</strong>
-          <span class="monitor-secondary">${logicalSession?.active_run?.run_id ? `Run ${escapeHtml(logicalSession.active_run.run_id)}` : config?.sessionId ? "Waiting for active run" : "No extra user action required"}</span>
-        </section>
-        <section class="monitor-card operation-monitor-card">
-          <div class="monitor-card-head"><span>Latest operation</span><strong class="live-dot-label"><i class="live-dot ${running ? "busy" : ""}"></i>${running ? "Running" : connected ? "Live" : "Offline"}</strong></div>
-          <strong class="monitor-primary">${escapeHtml(running ? activityIntent(running) : latestCompletedSummary())}</strong>
-          <span class="monitor-secondary">${escapeHtml(running ? eventDetail(running) || "Tool call in progress" : recent[0] ? eventTitle(recent[0]) : "Waiting for activity")}</span>
-        </section>
-        <section class="monitor-card plan-monitor-card">
-          <div class="monitor-card-head"><span>Plan progress</span><strong>${plan ? `${progress.percent}%` : "Standard"}</strong></div>
-          ${plan ? `<div class="progress-track"><span style="width:${progress.percent}%"></span></div><strong class="monitor-primary">${progress.completed}/${progress.total} steps complete</strong><span class="monitor-secondary">${escapeHtml(progress.active?.text || (plan.status === "completed" ? "Plan completed" : plan.status === "blocked" ? "Plan paused" : "No active step"))}</span>` : '<strong class="monitor-primary">No active plan</strong><span class="monitor-secondary">Session tracking remains active without Goal mode.</span>'}
-        </section>
-        ${autoContinueCard()}
-      </div>
       <div class="task-monitor-body">
-        <div class="task-context-column">
-          ${sessionProgressPanel()}
-          ${planCard()}
-          ${activityFocusCards()}
-        </div>
+        <aside class="task-overview-column" aria-label="Task overview">
+          <div class="task-monitor-grid">
+            <section class="monitor-card session-monitor-card">
+              <div class="monitor-card-head"><span>Session</span><strong class="status-pill ${escapeHtml(sessionStatus)}">${escapeHtml(sessionStatus)}</strong></div>
+              <strong class="monitor-primary">${escapeHtml(logicalSession?.label || logicalSession?.objective || (config?.sessionId ? "Active logical task" : "Standard workspace"))}</strong>
+              <span class="monitor-secondary">${logicalSession?.active_run?.run_id ? `Run ${escapeHtml(logicalSession.active_run.run_id)}` : config?.sessionId ? "Waiting for active run" : "No extra user action required"}</span>
+            </section>
+            <section class="monitor-card operation-monitor-card">
+              <div class="monitor-card-head"><span>Latest operation</span><strong class="live-dot-label"><i class="live-dot ${running ? "busy" : ""}"></i>${running ? "Running" : connected ? "Live" : "Offline"}</strong></div>
+              <strong class="monitor-primary">${escapeHtml(running ? activityIntent(running) : latestCompletedSummary())}</strong>
+              <span class="monitor-secondary">${escapeHtml(running ? eventDetail(running) || "Tool call in progress" : recent[0] ? eventTitle(recent[0]) : "Waiting for activity")}</span>
+            </section>
+            <section class="monitor-card plan-monitor-card">
+              <div class="monitor-card-head"><span>Plan progress</span><strong>${plan ? `${progress.percent}%` : "Standard"}</strong></div>
+              ${plan ? `<div class="progress-track"><span style="width:${progress.percent}%"></span></div><strong class="monitor-primary">${progress.completed}/${progress.total} steps complete</strong><span class="monitor-secondary">${escapeHtml(progress.active?.text || (plan.status === "completed" ? "Plan completed" : plan.status === "blocked" ? "Plan paused" : "No active step"))}</span>` : '<strong class="monitor-primary">No active plan</strong><span class="monitor-secondary">Session tracking remains active without Goal mode.</span>'}
+            </section>
+            ${autoContinueCard()}
+          </div>
+          <div class="task-context-column">
+            ${sessionProgressPanel()}
+            ${planCard()}
+            ${activityFocusCards()}
+          </div>
+        </aside>
         <section class="panel activity-panel session-activity-panel">
           <div class="panel-head"><div><strong>Logical Session activity</strong><small>Durable, live execution feed</small></div><span>${recent.length} recent</span></div>
           <div class="timeline session-timeline">${recent.length ? recent.map(activityRow).join("") : '<div class="empty-state">No execution activity yet. The current task will appear here automatically.</div>'}</div>
@@ -712,8 +746,8 @@ function renderActivity(): void {
       nextTimeline.clientHeight,
     )
   }
-  const nextContext = qs<HTMLElement>(".task-context-column")
-  if (nextContext && contextScrollTop > 0) nextContext.scrollTop = contextScrollTop
+  const nextOverview = qs<HTMLElement>(".task-overview-column")
+  if (nextOverview && overviewScrollTop > 0) nextOverview.scrollTop = overviewScrollTop
 }
 
 function sessionProgressPanel(): string {
