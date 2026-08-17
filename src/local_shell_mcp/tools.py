@@ -3358,6 +3358,8 @@ def _register_live_workspace_tools(
             live_id=live_id,
             logical_session_id=logical_session_id,
             app_reattach=app_reattach,
+            machine=machine,
+            cwd=cwd,
             parent_expires_at=(
                 float(principal.claims["exp"])
                 if principal is not None and principal.claims.get("exp") is not None
@@ -3369,8 +3371,8 @@ def _register_live_workspace_tools(
             session_id=channel.logical_session_id,
             api_base=_live_workspace_api_base(),
             ui_path=settings.ui_path,
-            machine=machine or "local",
-            cwd=cwd,
+            machine=channel.machine,
+            cwd=channel.cwd,
         )
         return cast(
             LiveChannelResult,
