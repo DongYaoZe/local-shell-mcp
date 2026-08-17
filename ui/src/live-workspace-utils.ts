@@ -364,6 +364,17 @@ export function eventTitle(event: LiveEvent): string {
 export function eventDetail(event: LiveEvent): string {
   const data = event.data
   const pieces: string[] = []
+  if (event.type.startsWith("plan.")) {
+    if (typeof data.reason === "string" && data.reason) pieces.push(data.reason)
+    const activeStep = data.active_step
+    if (activeStep && typeof activeStep === "object" && !Array.isArray(activeStep)) {
+      const text = (activeStep as Record<string, unknown>).text
+      if (typeof text === "string" && text) pieces.push(`Active: ${text}`)
+    }
+    if (data.total_steps !== undefined) pieces.push(`${String(data.completed_steps || 0)}/${String(data.total_steps)} complete`)
+    if (data.revision !== undefined) pieces.push(`r${String(data.revision)}`)
+    if (pieces.length) return pieces.join(" · ")
+  }
   for (const key of ["machine", "path", "cwd", "session_id", "job_id"] as const) {
     const value = data[key]
     if (value !== undefined && value !== null && value !== "") pieces.push(String(value))

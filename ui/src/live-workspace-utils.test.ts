@@ -55,10 +55,14 @@ describe("live workspace utilities", () => {
     expect(css).not.toContain(".diff-view")
     expect(css).not.toContain(".diff-layout")
     expect(source).toContain('class="task-monitor-body ${overview ? "has-overview" : ""}"')
+    expect(source).toContain("const goalStatus = compactPlanStatus()")
+    expect(source).toContain('class="compact-plan-status ${escapeHtml(plan.status)}"')
     expect(css).toContain(".task-monitor-body.has-overview { grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr); }")
     expect(css).toContain(".task-overview-column { max-height: 108px;")
     expect(css).toContain("@media (max-height: 460px)")
     expect(css).toContain(".task-overview-column { display: none; }")
+    expect(css).toContain(".compact-plan-status { min-height: 35px;")
+    expect(css).not.toContain(".compact-plan-status { display: none; }")
     expect(source).toContain('class="timeline-purpose"')
     expect(source).not.toContain("Explanation:")
     expect(source).not.toContain("Purpose:")
@@ -257,6 +261,29 @@ describe("live workspace utilities", () => {
     expect(activityDestination(event)).toBe("detail")
     const detail = eventDetail(event)
     expect(detail).toBe("/workspace · 1.4 s")
+  })
+
+  test("plan lifecycle activity exposes concise summaries and expandable details", async () => {
+    const event: LiveEvent = {
+      seq: 5,
+      ts: 1,
+      type: "plan.updated",
+      actor: "agent",
+      data: {
+        plan_id: "p1",
+        revision: 3,
+        status: "active",
+        completed_steps: 1,
+        total_steps: 3,
+        active_step: { id: "test", text: "Run tests", status: "active" },
+        changes: { step: { id: "impl", text: "Implement UI", status: "completed" }, updated_fields: ["status"] },
+      },
+    }
+    expect(eventDetail(event)).toBe("Active: Run tests · 1/3 complete · r3")
+    const source = await Bun.file(new URL("./live-workspace.ts", import.meta.url)).text()
+    expect(source).toContain('data-action="activity-toggle-plan-detail"')
+    expect(source).toContain("function planActivityDetailHtml(event: LiveEvent)")
+    expect(source).toContain('lines.push("", "Changes:")')
   })
 
   test("activity hides workspace bootstrap noise and routes useful operations", () => {

@@ -338,6 +338,21 @@ select:hover, input:hover, textarea:hover { border-color: var(--ls-border-strong
 .goal-actions .button.danger { color: var(--ls-danger); border-color: color-mix(in srgb, var(--ls-danger) 35%, var(--ls-border)); }
 
 .task-monitor-view { display: flex; flex-direction: column; min-height: 0; }
+.compact-plan-status { position: relative; flex: 0 0 auto; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 2px 8px; min-height: 43px; padding: 5px 8px 7px 9px; border-bottom: 1px solid var(--ls-border); background: color-mix(in srgb, var(--ls-accent-soft) 42%, var(--ls-panel)); }
+.compact-plan-status.blocked { background: color-mix(in srgb, var(--ls-warning-soft) 50%, var(--ls-panel)); }
+.compact-plan-copy { min-width: 0; display: grid; gap: 2px; }
+.compact-plan-goal { min-width: 0; display: flex; align-items: center; gap: 6px; }
+.compact-plan-goal small { flex: 0 0 auto; color: var(--ls-text-3); font-size: 8.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .07em; }
+.compact-plan-goal strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; font-weight: 600; }
+.compact-plan-status .goal-status { flex: 0 0 auto; padding: 1px 5px; font-size: 8.5px; }
+.compact-plan-status.blocked .goal-status { color: var(--ls-warning); background: var(--ls-warning-soft); }
+.compact-plan-meta { min-width: 0; display: flex; align-items: center; gap: 7px; color: var(--ls-text-3); font-size: 9px; white-space: nowrap; overflow: hidden; }
+.compact-plan-step { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--ls-text-2); }
+.compact-plan-actions { display: flex; align-items: center; gap: 1px; }
+.compact-plan-actions .text-button { padding: 2px 4px; font-size: 9px; }
+.compact-plan-progress { position: absolute; left: 0; right: 0; bottom: 0; height: 2px; overflow: hidden; background: var(--ls-panel-strong); }
+.compact-plan-progress > span { display: block; height: 100%; background: var(--ls-accent); transition: width .25s ease; }
+.compact-plan-status.blocked .compact-plan-progress > span { background: var(--ls-warning); }
 .progress-track { height: 5px; border-radius: 999px; overflow: hidden; background: var(--ls-panel-strong); }
 .progress-track > span { display: block; height: 100%; border-radius: inherit; background: var(--ls-accent); transition: width .25s ease; }
 
@@ -413,4 +428,6 @@ select:hover, input:hover, textarea:hover { border-color: var(--ls-border-strong
 @media (max-height: 460px) {
   .task-monitor-body.has-overview { grid-template-columns: 1fr; grid-template-rows: minmax(0, 1fr); }
   .task-overview-column { display: none; }
+  .compact-plan-status { min-height: 35px; padding-block: 3px 5px; }
+  .compact-plan-step { display: none; }
 }

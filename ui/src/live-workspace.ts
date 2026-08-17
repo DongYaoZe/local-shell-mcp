@@ -479,6 +479,7 @@ async function handleAction(action: string, target: HTMLElement): Promise<void> 
     else if (action === "plan-cancel") await controlPlan("cancel")
     else if (action === "plan-cancel-countdown") await controlPlan("pause", "Auto continuation cancelled by user")
     else if (action === "activity-open-detail") await toggleActivityDetail(target.dataset.eventKey || "", target.dataset.callId || "")
+    else if (action === "activity-toggle-plan-detail") togglePlanActivityDetail(target.dataset.eventKey || "")
     else if (action === "activity-open-terminal") {
       terminalMachine = target.dataset.machine || "local"
       selectedSession = target.dataset.session || ""
@@ -662,13 +663,15 @@ function renderActivity(): void {
   // restore roughly 100 tool rows; the larger slice also leaves room for
   // live-only and semantic Session/Plan events.
   const recent = [...visible].reverse().slice(0, 200)
-  const overview = [sessionProgressPanel(), planCard()].filter(Boolean).join("")
+  const overview = sessionProgressPanel()
+  const goalStatus = compactPlanStatus()
   mainNode().innerHTML = `
     <section class="view activity-view task-monitor-view">
       <div class="task-monitor-body ${overview ? "has-overview" : ""}">
         ${overview ? `<aside class="task-overview-column" aria-label="Task overview">${overview}</aside>` : ""}
         <section class="panel activity-panel session-activity-panel">
           <div class="panel-head activity-panel-head"><strong>Activity</strong><div class="activity-panel-actions"><span>${recent.length}</span><button class="button" data-action="activity-ask">${icon("chat")}Ask</button><button class="button" data-action="refresh">${icon("refresh")}Refresh</button></div></div>
+          ${goalStatus}
           <div class="timeline session-timeline">${recent.length ? recent.map(activityRow).join("") : '<div class="empty-state">No execution activity yet. The current task will appear here automatically.</div>'}</div>
         </section>
       </div>
@@ -722,18 +725,20 @@ function refreshPlanAutoStatus(): void {
   if (node) node.textContent = planAutoStatus()
 }
 
-function planCard(): string {
+function compactPlanStatus(): string {
   if (!plan || !["active", "blocked"].includes(plan.status)) return ""
   const progress = planProgress()
-  const status = plan.status === "blocked" ? "Needs you" : plan.continuation_pending ? "Continuing" : "Active"
+  const status = plan.status === "blocked" ? "Blocked" : plan.continuation_pending ? "Continuing" : "Active"
+  const activeStep = progress.active?.text || "No active step"
   return `
-    <section class="goal-card ${escapeHtml(plan.status)} detailed-plan-card">
-      <div class="goal-head"><div><small>Plan</small><strong>${escapeHtml(plan.objective)}</strong></div><span class="goal-status">${escapeHtml(status)}</span></div>
-      <div class="plan-progress-summary"><div class="progress-track"><span style="width:${progress.percent}%"></span></div><span>${progress.completed}/${progress.total} complete · ${progress.percent}%</span></div>
-      ${plan.note ? `<p class="goal-note">${escapeHtml(plan.note)}</p>` : ""}
-      <div class="plan-steps">${plan.steps.map((step) => `<div class="plan-step ${escapeHtml(step.status)}"><span class="plan-step-mark">${step.status === "completed" ? "✓" : step.status === "skipped" ? "–" : step.status === "active" ? "→" : "○"}</span><div><strong>${escapeHtml(step.text)}</strong>${step.note ? `<small>${escapeHtml(step.note)}</small>` : ""}</div></div>`).join("")}</div>
-      <footer><span data-role="plan-auto-status">${escapeHtml(planAutoStatus())}</span><div class="goal-actions">${plan.status === "blocked" ? '<button class="button" data-action="plan-resume">Resume</button>' : '<button class="button" data-action="plan-pause">Pause</button>'}<button class="button danger" data-action="plan-cancel">Cancel plan</button></div></footer>
-    </section>`
+    <div class="compact-plan-status ${escapeHtml(plan.status)}">
+      <div class="compact-plan-copy">
+        <div class="compact-plan-goal"><small>Goal</small><strong title="${escapeHtml(plan.objective)}">${escapeHtml(plan.objective)}</strong><span class="goal-status">${escapeHtml(status)}</span></div>
+        <div class="compact-plan-meta"><span>${progress.completed}/${progress.total} · ${progress.percent}%</span><span class="compact-plan-step">→ ${escapeHtml(activeStep)}</span><span data-role="plan-auto-status">${escapeHtml(planAutoStatus())}</span></div>
+      </div>
+      <div class="compact-plan-actions">${plan.status === "blocked" ? '<button class="text-button" data-action="plan-resume">Resume</button>' : '<button class="text-button" data-action="plan-pause">Pause</button>'}<button class="text-button danger" data-action="plan-cancel">Cancel</button></div>
+      <div class="compact-plan-progress"><span style="width:${progress.percent}%"></span></div>
+    </div>`
 }
 
 function activityRow(event: LiveEvent): string {
@@ -742,6 +747,7 @@ function activityRow(event: LiveEvent): string {
   const destination = activityDestination(event)
   const callId = String(event.data.call_id || "")
   const eventKey = activityEventKey(event)
+  const expandablePlanEvent = event.type.startsWith("plan.")
   let action = ""
   let actionLabel = ""
   if (destination === "terminal") {
@@ -764,12 +770,83 @@ function activityRow(event: LiveEvent): string {
   } else if (destination === "detail" && callId) {
     action = `data-action="activity-open-detail" data-event-key="${escapeHtml(eventKey)}" data-call-id="${escapeHtml(callId)}"`
     actionLabel = activityExpandedEventKey === eventKey ? "Hide output" : "View output"
+  } else if (expandablePlanEvent) {
+    action = `data-action="activity-toggle-plan-detail" data-event-key="${escapeHtml(eventKey)}"`
+    actionLabel = activityExpandedEventKey === eventKey ? "Hide details" : "View details"
   }
-  const expanded = callId && activityExpandedEventKey === eventKey ? activityDetailHtml(callId) : ""
+  const expanded = activityExpandedEventKey === eventKey
+    ? callId && destination === "detail"
+      ? activityDetailHtml(callId)
+      : expandablePlanEvent
+        ? planActivityDetailHtml(event)
+        : ""
+    : ""
   const subline = purpose || detail
     ? `<p>${purpose ? `<span class="timeline-purpose">${escapeHtml(purpose)}</span>` : ""}${purpose && detail ? '<span class="timeline-separator"> · </span>' : ""}${detail ? `<span class="timeline-summary">${escapeHtml(detail)}</span>` : ""}</p>`
     : ""
   return `<div class="timeline-row ${eventTone(event)} ${action ? "clickable" : ""}" ${action}><div class="timeline-marker"><span></span></div><div class="timeline-copy"><div><strong>${escapeHtml(eventTitle(event))}</strong><span class="actor ${escapeHtml(event.actor)}">${escapeHtml(event.actor)}</span>${actionLabel ? `<span class="timeline-action">${escapeHtml(actionLabel)}</span>` : ""}</div>${subline}</div><time>${escapeHtml(formatClock(event.ts))}</time>${expanded}</div>`
+}
+
+function togglePlanActivityDetail(eventKey: string): void {
+  if (!eventKey) return
+  activityExpandedEventKey = activityExpandedEventKey === eventKey ? "" : eventKey
+  renderActivity()
+}
+
+function planActivityDetailHtml(event: LiveEvent): string {
+  const data = event.data
+  const record = (value: unknown): JsonRecord | null => (
+    value !== null && typeof value === "object" && !Array.isArray(value) ? value as JsonRecord : null
+  )
+  const stepLine = (value: unknown): string => {
+    const step = record(value)
+    if (!step) return ""
+    const status = String(step.status || "pending")
+    const mark = status === "completed" ? "✓" : status === "skipped" ? "–" : status === "active" ? "→" : "○"
+    const id = step.id ? `[${String(step.id)}] ` : ""
+    const note = step.note ? ` — ${String(step.note)}` : ""
+    return `${mark} ${id}${String(step.text || "step")}${note}`
+  }
+  const lines: string[] = []
+  if (data.objective) lines.push(`Goal: ${String(data.objective)}`)
+  const state: string[] = []
+  if (data.status) state.push(`Status: ${String(data.status)}`)
+  if (data.revision !== undefined) state.push(`Revision: ${String(data.revision)}`)
+  if (data.total_steps !== undefined) state.push(`Progress: ${String(data.completed_steps || 0)}/${String(data.total_steps)}`)
+  if (state.length) lines.push(state.join(" · "))
+  const activeLine = stepLine(data.active_step)
+  if (activeLine) lines.push(`Active: ${activeLine}`)
+  if (data.reason) lines.push(`Reason: ${String(data.reason)}`)
+  if (data.note && data.note !== data.reason) lines.push(`Note: ${String(data.note)}`)
+
+  const changes = record(data.changes)
+  if (changes) {
+    lines.push("", "Changes:")
+    if (changes.objective) lines.push(`  Goal → ${String(changes.objective)}`)
+    if ("note" in changes) lines.push(`  Note → ${String(changes.note || "cleared")}`)
+    const changedStep = stepLine(changes.step)
+    if (changedStep) {
+      const fields = Array.isArray(changes.updated_fields) ? ` (${changes.updated_fields.map(String).join(", ")})` : ""
+      lines.push(`  Step${fields}: ${changedStep}`)
+    }
+    if (Array.isArray(changes.steps)) {
+      lines.push("  Steps replaced:")
+      for (const step of changes.steps) {
+        const line = stepLine(step)
+        if (line) lines.push(`    ${line}`)
+      }
+      if (changes.steps_truncated) lines.push(`    … ${String(changes.steps_total || "more")} total steps`)
+    }
+  } else if (Array.isArray(data.steps)) {
+    lines.push("", "Steps:")
+    for (const step of data.steps) {
+      const line = stepLine(step)
+      if (line) lines.push(`  ${line}`)
+    }
+    if (data.steps_truncated) lines.push(`  … ${String(data.steps_total || "more")} total steps`)
+  }
+  const text = lines.length ? lines.join("\n") : JSON.stringify(data, null, 2)
+  return `<pre class="timeline-detail plan-activity-detail">${escapeHtml(truncateContext(text, 24_000))}</pre>`
 }
 
 function activityDetailHtml(callId: string): string {
