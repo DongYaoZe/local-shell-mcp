@@ -3,6 +3,7 @@ import {
   activityDestination,
   activityEventKey,
   activityIntent,
+  captureReverseFeedScrollState,
   coalesceActivityEvents,
   continuationDispatchStillValid,
   continuationCountdownState,
@@ -15,6 +16,7 @@ import {
   mergeActivityEvents,
   parentPath,
   renderDiffHtml,
+  restoreReverseFeedScrollTop,
   toggleWorkspaceDisplayMode,
   reconnectDelayMs,
   toolResultFromOpenAiGlobals,
@@ -23,6 +25,18 @@ import {
 } from "./live-workspace-utils"
 
 describe("live workspace utilities", () => {
+  test("activity rerenders keep the newest edge pinned but preserve historical reading position", () => {
+    const following = captureReverseFeedScrollState(0, 1_000, 300)
+    expect(restoreReverseFeedScrollTop(following, 1_120, 300)).toBe(0)
+
+    const readingHistory = captureReverseFeedScrollState(240, 1_000, 300)
+    expect(readingHistory.endGap).toBe(460)
+    expect(restoreReverseFeedScrollTop(readingHistory, 1_120, 300)).toBe(360)
+
+    const clamped = captureReverseFeedScrollState(900, 1_000, 300)
+    expect(restoreReverseFeedScrollTop(clamped, 250, 300)).toBe(0)
+  })
+
   test("Live Workspace teardown does not recursively call its rendering tool", async () => {
     const source = await Bun.file(new URL("./live-workspace.ts", import.meta.url)).text()
     expect(source).toContain("app.onteardown = async")

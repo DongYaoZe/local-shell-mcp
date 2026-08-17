@@ -11,6 +11,7 @@ import {
   activityEventKey,
   activityIntent,
   basename,
+  captureReverseFeedScrollState,
   coalesceActivityEvents,
   continuationCountdownState,
   continuationDispatchStillValid,
@@ -28,6 +29,7 @@ import {
   parentPath,
   reconnectDelayMs,
   renderDiffHtml,
+  restoreReverseFeedScrollTop,
   toolResultFromOpenAiGlobals,
   truncateContext,
   type DisplayMode,
@@ -655,6 +657,12 @@ function planProgress(): { completed: number; total: number; percent: number; ac
 }
 
 function renderActivity(): void {
+  const previousTimeline = qs<HTMLElement>(".session-timeline")
+  const timelineScrollState = previousTimeline
+    ? captureReverseFeedScrollState(previousTimeline.scrollTop, previousTimeline.scrollHeight, previousTimeline.clientHeight)
+    : null
+  const previousContext = qs<HTMLElement>(".task-context-column")
+  const contextScrollTop = previousContext?.scrollTop || 0
   const visible = coalesceActivityEvents(durableSessionEvents())
   // Durable Session history keeps 200 raw lifecycle events. Since a normal
   // started/completed pair coalesces into one row, reconnects intentionally
@@ -696,6 +704,16 @@ function renderActivity(): void {
         </section>
       </div>
     </section>`
+  const nextTimeline = qs<HTMLElement>(".session-timeline")
+  if (timelineScrollState && nextTimeline) {
+    nextTimeline.scrollTop = restoreReverseFeedScrollTop(
+      timelineScrollState,
+      nextTimeline.scrollHeight,
+      nextTimeline.clientHeight,
+    )
+  }
+  const nextContext = qs<HTMLElement>(".task-context-column")
+  if (nextContext && contextScrollTop > 0) nextContext.scrollTop = contextScrollTop
 }
 
 function sessionProgressPanel(): string {
