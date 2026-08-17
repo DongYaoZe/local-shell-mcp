@@ -28,7 +28,6 @@ import {
   toggleWorkspaceDisplayMode,
   parentPath,
   reconnectDelayMs,
-  renderDiffHtml,
   restoreReverseFeedScrollTop,
   toolResultFromOpenAiGlobals,
   truncateContext,
@@ -202,9 +201,6 @@ let fileEditContent = ""
 let fileEditSha = ""
 
 let workloadMachine = "local"
-let diffMachine = "local"
-let diffCwd = "."
-let gitSnapshot: { machine?: string; cwd: string; status: JsonRecord; diff: JsonRecord } | null = null
 let auditEntries: JsonRecord[] = []
 let remoteSnapshot: JsonRecord | null = null
 
@@ -213,7 +209,6 @@ function icon(name: string): string {
     activity: '<path d="M4 12h3l2-6 4 12 2-6h5"/>',
     terminal: '<path d="m5 7 4 4-4 4M11 15h7"/>',
     files: '<path d="M4 5h6l2 2h8v12H4z"/>',
-    diff: '<path d="M7 4v16M4 7h6M14 8h6M17 5v6M14 17h6"/>',
     jobs: '<path d="M4 7h16v11H4zM8 7V4h8v3M8 12h8"/>',
     remotes: '<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/>',
     audit: '<path d="M5 3h14v18H5zM8 8h8M8 12h8M8 16h5"/>',
@@ -241,13 +236,8 @@ function shell(): void {
           <button class="icon-button" data-action="expand" title="Fullscreen">${icon("expand")}</button>
         </div>
       </header>
-      <section class="status-strip">
-        <div class="current-operation"><span class="pulse" data-role="op-pulse"></span><div><small>Current</small><strong data-role="current-op">No active tool call</strong><span data-role="current-detail">Waiting for activity</span></div></div>
-        <div class="status-stat compact-stat"><small>Machines</small><strong data-role="machine-count">—</strong></div>
-        <div class="status-stat compact-stat"><small>Workload</small><strong data-role="workload-count">—</strong></div>
-      </section>
       <nav class="tabs" aria-label="Workspace views">
-        ${tabButton("activity", "Activity")}${tabButton("terminal", "Terminal")}${tabButton("files", "Files")}${tabButton("diff", "Diff")}${tabButton("jobs", "Jobs")}${tabButton("remotes", "Remotes")}${tabButton("audit", "Audit")}
+        ${tabButton("activity", "Activity")}${tabButton("terminal", "Terminal")}${tabButton("files", "Files")}${tabButton("jobs", "Jobs")}${tabButton("remotes", "Remotes")}${tabButton("audit", "Audit")}
       </nav>
       <main class="workspace-main" data-role="main"><div class="loading"><span></span>${escapeHtml(connectionMessage)}</div></main>
       <div class="toast-stack" data-role="toasts" aria-live="polite"></div>
@@ -380,10 +370,17 @@ function updateChrome(): void {
   qs<HTMLElement>("[data-role=connection-dot]")?.classList.toggle("connected", connected)
   const connectionLabel = qs<HTMLElement>("[data-role=connection-label]")
   if (connectionLabel) connectionLabel.textContent = connectionMessage
+  const running = currentRunningEvent()
+  const activeJob = dashboard?.jobs?.[0]
+  const activeSession = dashboard?.sessions?.[0]
+  let workspaceStatus = latestCompletedSummary()
+  if (running) workspaceStatus = activityIntent(running)
+  else if (activeJob) workspaceStatus = `Background: ${String(activeJob.name || activeJob.job_id || "job")}`
+  else if (activeSession) workspaceStatus = `Terminal: ${String(activeSession.name || activeSession.session_id || "session")}`
   const subtitle = qs<HTMLElement>("[data-role=subtitle]")
   if (subtitle) subtitle.textContent = config?.sessionId
-    ? `local-shell-mcp · session ${config.sessionId}`
-    : "local-shell-mcp · no logical session attached"
+    ? `session ${config.sessionId} · ${workspaceStatus}`
+    : `standard workspace · ${workspaceStatus}`
   root.querySelectorAll<HTMLButtonElement>("[data-tab]").forEach((button) => {
     button.classList.toggle("active", button.dataset.tab === activeTab)
   })
@@ -408,33 +405,6 @@ function updateChrome(): void {
       expandButton.setAttribute("aria-label", expandButton.title)
     }
   }
-
-  const running = currentRunningEvent()
-  const activeJob = dashboard?.jobs?.[0]
-  const activeSession = dashboard?.sessions?.[0]
-  const current = qs<HTMLElement>("[data-role=current-op]")
-  const detail = qs<HTMLElement>("[data-role=current-detail]")
-  const pulse = qs<HTMLElement>("[data-role=op-pulse]")
-  if (current) {
-    if (running) current.textContent = activityIntent(running)
-    else if (activeJob) current.textContent = `Background: ${String(activeJob.name || activeJob.job_id || "job")}`
-    else if (activeSession) current.textContent = `Terminal: ${String(activeSession.name || activeSession.session_id || "session")}`
-    else current.textContent = "Idle"
-  }
-  if (detail) {
-    if (running) detail.textContent = eventDetail(running) || "In progress"
-    else if (activeJob) detail.textContent = String(activeJob.command || activeJob.status || "running")
-    else if (activeSession) detail.textContent = String(activeSession.cwd || activeSession.backend || "ready")
-    else detail.textContent = latestCompletedSummary()
-  }
-  pulse?.classList.toggle("active", Boolean(running || activeJob))
-
-  const machineCount = qs<HTMLElement>("[data-role=machine-count]")
-  const online = machines.filter((item) => item.status === "online" || item.name === "local").length
-  if (machineCount) machineCount.textContent = `${machines.length || 1} · ${online || 1} online`
-  const workload = (dashboard?.jobs?.length || 0) + (dashboard?.session_count || dashboard?.sessions?.length || 0)
-  const workloadCount = qs<HTMLElement>("[data-role=workload-count]")
-  if (workloadCount) workloadCount.textContent = workload ? `${workload} active` : "0"
 
 }
 
@@ -509,6 +479,7 @@ async function handleAction(action: string, target: HTMLElement): Promise<void> 
     else if (action === "plan-cancel") await controlPlan("cancel")
     else if (action === "plan-cancel-countdown") await controlPlan("pause", "Auto continuation cancelled by user")
     else if (action === "activity-open-detail") await toggleActivityDetail(target.dataset.eventKey || "", target.dataset.callId || "")
+    else if (action === "activity-toggle-plan-detail") togglePlanActivityDetail(target.dataset.eventKey || "")
     else if (action === "activity-open-terminal") {
       terminalMachine = target.dataset.machine || "local"
       selectedSession = target.dataset.session || ""
@@ -534,12 +505,6 @@ async function handleAction(action: string, target: HTMLElement): Promise<void> 
       await switchTab("files")
       if (selectedFile && fileEntries.some((entry) => entry.path === selectedFile)) await selectFile(selectedFile)
     }
-    else if (action === "activity-open-diff") {
-      diffMachine = target.dataset.machine || "local"
-      diffCwd = target.dataset.cwd || config?.cwd || "."
-      gitSnapshot = null
-      await switchTab("diff")
-    }
     else if (action === "activity-open-remotes") await switchTab("remotes")
     else if (action === "activity-open-audit") await switchTab("audit")
     else if (action === "terminal-new") await newTerminal()
@@ -556,8 +521,6 @@ async function handleAction(action: string, target: HTMLElement): Promise<void> 
     else if (action === "file-cancel-edit") { fileEditing = false; renderFiles() }
     else if (action === "file-context") await shareSelectedFile(false)
     else if (action === "file-ask") await shareSelectedFile(true)
-    else if (action === "diff-context") await shareDiff(false)
-    else if (action === "diff-ask") await shareDiff(true)
     else if (action === "remote-invite") await createRemoteInvite()
     else if (action === "remote-rename") await renameRemote(target.dataset.machine || "")
     else if (action === "remote-revoke") await revokeRemote(target.dataset.machine || "")
@@ -665,7 +628,6 @@ function renderCurrentTab(): void {
   if (activeTab === "activity") renderActivity()
   else if (activeTab === "terminal") renderTerminal()
   else if (activeTab === "files") renderFiles()
-  else if (activeTab === "diff") renderDiff()
   else if (activeTab === "jobs") renderJobs()
   else if (activeTab === "remotes") renderRemotes()
   else renderAudit()
@@ -701,39 +663,15 @@ function renderActivity(): void {
   // restore roughly 100 tool rows; the larger slice also leaves room for
   // live-only and semantic Session/Plan events.
   const recent = [...visible].reverse().slice(0, 200)
-  const running = currentRunningEvent()
-  const progress = planProgress()
-  const sessionStatus = logicalSession?.status || (config?.sessionId ? "active" : "unattached")
+  const overview = sessionProgressPanel()
+  const goalStatus = compactPlanStatus()
   mainNode().innerHTML = `
     <section class="view activity-view task-monitor-view">
-      <div class="view-toolbar task-monitor-toolbar"><div><h2>Live task monitor</h2><p>${config?.sessionId ? `Logical Session ${escapeHtml(config.sessionId)}` : "No Logical Session attached yet"}</p></div><div class="toolbar-actions"><button class="button" data-action="activity-ask">${icon("chat")}Ask</button><button class="button" data-action="refresh">${icon("refresh")}Refresh</button></div></div>
-      <div class="task-monitor-body">
-        <aside class="task-overview-column" aria-label="Task overview">
-          <div class="task-monitor-grid">
-            <section class="monitor-card session-monitor-card">
-              <div class="monitor-card-head"><span>Session</span><strong class="status-pill ${escapeHtml(sessionStatus)}">${escapeHtml(sessionStatus)}</strong></div>
-              <strong class="monitor-primary">${escapeHtml(logicalSession?.label || logicalSession?.objective || (config?.sessionId ? "Active logical task" : "Standard workspace"))}</strong>
-              <span class="monitor-secondary">${logicalSession?.active_run?.run_id ? `Run ${escapeHtml(logicalSession.active_run.run_id)}` : config?.sessionId ? "Waiting for active run" : "No extra user action required"}</span>
-            </section>
-            <section class="monitor-card operation-monitor-card">
-              <div class="monitor-card-head"><span>Latest operation</span><strong class="live-dot-label"><i class="live-dot ${running ? "busy" : ""}"></i>${running ? "Running" : connected ? "Live" : "Offline"}</strong></div>
-              <strong class="monitor-primary">${escapeHtml(running ? activityIntent(running) : latestCompletedSummary())}</strong>
-              <span class="monitor-secondary">${escapeHtml(running ? eventDetail(running) || "Tool call in progress" : recent[0] ? eventTitle(recent[0]) : "Waiting for activity")}</span>
-            </section>
-            <section class="monitor-card plan-monitor-card">
-              <div class="monitor-card-head"><span>Plan progress</span><strong>${plan ? `${progress.percent}%` : "Standard"}</strong></div>
-              ${plan ? `<div class="progress-track"><span style="width:${progress.percent}%"></span></div><strong class="monitor-primary">${progress.completed}/${progress.total} steps complete</strong><span class="monitor-secondary">${escapeHtml(progress.active?.text || (plan.status === "completed" ? "Plan completed" : plan.status === "blocked" ? "Plan paused" : "No active step"))}</span>` : '<strong class="monitor-primary">No active plan</strong><span class="monitor-secondary">Session tracking remains active without Goal mode.</span>'}
-            </section>
-            ${autoContinueCard()}
-          </div>
-          <div class="task-context-column">
-            ${sessionProgressPanel()}
-            ${planCard()}
-            ${activityFocusCards()}
-          </div>
-        </aside>
+      <div class="task-monitor-body ${overview ? "has-overview" : ""}">
+        ${overview ? `<aside class="task-overview-column" aria-label="Task overview">${overview}</aside>` : ""}
         <section class="panel activity-panel session-activity-panel">
-          <div class="panel-head"><div><strong>Logical Session activity</strong><small>Durable, live execution feed</small></div><span>${recent.length} recent</span></div>
+          <div class="panel-head activity-panel-head"><strong>Activity</strong><div class="activity-panel-actions"><span>${recent.length}</span><button class="button" data-action="activity-ask">${icon("chat")}Ask</button><button class="button" data-action="refresh">${icon("refresh")}Refresh</button></div></div>
+          ${goalStatus}
           <div class="timeline session-timeline">${recent.length ? recent.map(activityRow).join("") : '<div class="empty-state">No execution activity yet. The current task will appear here automatically.</div>'}</div>
         </section>
       </div>
@@ -756,87 +694,60 @@ function sessionProgressPanel(): string {
   const findings = progress.findings || []
   const blockers = progress.blockers || []
   if (!progress.summary && !progress.next && !findings.length && !blockers.length) return ""
+  const checkpointItems = [
+    progress.summary ? `<div><small>Current</small><strong>${escapeHtml(progress.summary)}</strong></div>` : "",
+    progress.next ? `<div><small>Next</small><strong>${escapeHtml(progress.next)}</strong></div>` : "",
+    blockers.length ? `<div class="has-blocker"><small>Blockers</small><strong>${escapeHtml(blockers.join(" · "))}</strong></div>` : "",
+  ].filter(Boolean).join("")
   return `
     <section class="panel session-progress-panel">
-      <div class="panel-head"><div><strong>Session checkpoint</strong><small>Semantic progress reported by the active agent</small></div>${progress.updated_at ? `<span>${escapeHtml(formatClock(progress.updated_at))}</span>` : ""}</div>
-      <div class="checkpoint-grid">
-        <div><small>Current</small><strong>${escapeHtml(progress.summary || "No summary yet")}</strong></div>
-        <div><small>Next</small><strong>${escapeHtml(progress.next || "No next action reported")}</strong></div>
-        <div class="${blockers.length ? "has-blocker" : ""}"><small>Blockers</small><strong>${escapeHtml(blockers.length ? blockers.join(" · ") : "None")}</strong></div>
-      </div>
-      ${findings.length ? `<div class="checkpoint-findings"><small>Findings</small>${findings.slice(0, 6).map((item) => `<span>${escapeHtml(item)}</span>`).join("")}</div>` : ""}
+      <div class="panel-head"><strong>Checkpoint</strong>${progress.updated_at ? `<span>${escapeHtml(formatClock(progress.updated_at))}</span>` : ""}</div>
+      ${checkpointItems ? `<div class="checkpoint-grid">${checkpointItems}</div>` : ""}
+      ${findings.length ? `<div class="checkpoint-findings"><small>Findings</small>${findings.slice(0, 3).map((item) => `<span>${escapeHtml(item)}</span>`).join("")}</div>` : ""}
     </section>`
 }
 
-function autoContinueCard(): string {
-  if (!plan) {
-    return `<section class="monitor-card auto-monitor-card" data-role="auto-continue-card"><div class="monitor-card-head"><span>Auto continue</span><strong>Off</strong></div><strong class="monitor-primary">Plan mode inactive</strong><span class="monitor-secondary">No continuation timer is needed.</span></section>`
-  }
-  if (plan.status === "blocked") {
-    return `<section class="monitor-card auto-monitor-card paused" data-role="auto-continue-card"><div class="monitor-card-head"><span>Auto continue</span><strong>Paused</strong></div><strong class="monitor-primary">Waiting for you</strong><span class="monitor-secondary">Automatic continuation is disabled while the plan is paused.</span><button class="button compact-monitor-action" data-action="plan-resume">Resume</button></section>`
-  }
-  if (plan.auto_continue_exhausted) {
-    return `<section class="monitor-card auto-monitor-card paused" data-role="auto-continue-card"><div class="monitor-card-head"><span>Auto continue</span><strong>Stopped</strong></div><strong class="monitor-primary">${plan.continuation_count}/${plan.max_continuations} attempts used</strong><span class="monitor-secondary">The automatic continuation cap has been reached.</span></section>`
-  }
-  if (plan.continuation_pending) {
-    return `<section class="monitor-card auto-monitor-card active" data-role="auto-continue-card"><div class="monitor-card-head"><span>Auto continue</span><strong>Triggering</strong></div><strong class="monitor-primary">Continuation requested</strong><span class="monitor-secondary">Handing the same Logical Session to the next agent run.</span></section>`
-  }
-  if (Number(plan.in_flight_calls || 0) > 0) {
-    return `<section class="monitor-card auto-monitor-card" data-role="auto-continue-card"><div class="monitor-card-head"><span>Auto continue</span><strong>Waiting</strong></div><strong class="monitor-primary">Tool call in progress</strong><span class="monitor-secondary">The idle timer does not trigger while work is still running.</span></section>`
-  }
+function planAutoStatus(): string {
+  if (!plan) return ""
+  if (plan.status === "blocked") return "Auto paused"
+  if (plan.auto_continue_exhausted) return `Auto stopped · ${plan.continuation_count}/${plan.max_continuations}`
+  if (plan.continuation_pending) return "Auto continuing"
+  if (Number(plan.in_flight_calls || 0) > 0) return `Auto armed · ${plan.continuation_count}/${plan.max_continuations}`
   const countdown = continuationCountdownState(plan)
-  if (!countdown.visible) {
-    const untilVisible = Math.max(0, (5 * 60) - countdown.idleSeconds)
-    return `<section class="monitor-card auto-monitor-card" data-role="auto-continue-card"><div class="monitor-card-head"><span>Auto continue</span><strong>Armed</strong></div><strong class="monitor-primary">${plan.continuation_count}/${plan.max_continuations} continuations</strong><span class="monitor-secondary">Countdown appears after 5 min idle${countdown.idleSeconds > 0 ? ` · ${formatCountdown(untilVisible)} until visible` : ""}.</span></section>`
-  }
-  return `<section class="monitor-card auto-monitor-card countdown" data-role="auto-continue-card"><div class="monitor-card-head"><span>Auto continue</span><strong>Countdown</strong></div><strong class="countdown-time">${escapeHtml(formatCountdown(countdown.remainingSeconds))}</strong><div class="countdown-track"><span style="width:${Math.round(countdown.progress * 100)}%"></span></div><span class="monitor-secondary">until automatic continuation · attempt ${plan.continuation_count + 1}/${plan.max_continuations}</span><button class="button compact-monitor-action" data-action="plan-cancel-countdown">Cancel countdown</button></section>`
+  return countdown.visible
+    ? `${formatCountdown(countdown.remainingSeconds)} · auto ${plan.continuation_count + 1}/${plan.max_continuations}`
+    : `Auto ${plan.continuation_count}/${plan.max_continuations}`
 }
 
-function refreshAutoContinueCard(): void {
+function refreshPlanAutoStatus(): void {
   if (activeTab !== "activity") return
-  const node = qs<HTMLElement>('[data-role="auto-continue-card"]')
-  if (!node) return
-  const replacement = document.createElement("div")
-  replacement.innerHTML = autoContinueCard()
-  const next = replacement.firstElementChild
-  if (next) node.replaceWith(next)
+  const node = qs<HTMLElement>('[data-role="plan-auto-status"]')
+  if (node) node.textContent = planAutoStatus()
 }
 
-function planCard(): string {
+function compactPlanStatus(): string {
   if (!plan || !["active", "blocked"].includes(plan.status)) return ""
   const progress = planProgress()
-  const status = plan.status === "blocked" ? "Needs you" : plan.continuation_pending ? "Continuing" : "Active"
+  const status = plan.status === "blocked" ? "Blocked" : plan.continuation_pending ? "Continuing" : "Active"
+  const activeStep = progress.active?.text || "No active step"
   return `
-    <section class="goal-card ${escapeHtml(plan.status)} detailed-plan-card">
-      <div class="goal-head"><div><small>Plan</small><strong>${escapeHtml(plan.objective)}</strong></div><span class="goal-status">${escapeHtml(status)}</span></div>
-      <div class="plan-progress-summary"><div class="progress-track"><span style="width:${progress.percent}%"></span></div><span>${progress.completed}/${progress.total} complete · ${progress.percent}%</span></div>
-      ${plan.note ? `<p class="goal-note">${escapeHtml(plan.note)}</p>` : ""}
-      <div class="plan-steps">${plan.steps.map((step) => `<div class="plan-step ${escapeHtml(step.status)}"><span class="plan-step-mark">${step.status === "completed" ? "✓" : step.status === "skipped" ? "–" : step.status === "active" ? "→" : "○"}</span><div><strong>${escapeHtml(step.text)}</strong>${step.note ? `<small>${escapeHtml(step.note)}</small>` : ""}</div></div>`).join("")}</div>
-      <footer><span>Auto continue ${plan.continuation_count}/${plan.max_continuations}</span><div class="goal-actions">${plan.status === "blocked" ? '<button class="button" data-action="plan-resume">Resume</button>' : '<button class="button" data-action="plan-pause">Pause</button>'}<button class="button danger" data-action="plan-cancel">Cancel plan</button></div></footer>
-    </section>`
-}
-
-function activityFocusCards(): string {
-  const jobs = dashboard?.jobs || []
-  const sessions = dashboard?.sessions || []
-  if (!jobs.length && !sessions.length) return ""
-  const cards: string[] = []
-  for (const job of jobs.slice(0, 2)) {
-    const sessionId = String(job.session_id || "")
-    const action = sessionId ? "activity-open-terminal" : "activity-open-jobs"
-    cards.push(`<button class="focus-card job" data-action="${action}" data-session="${escapeHtml(sessionId)}" data-machine="${escapeHtml(String(job.machine || workloadMachine || "local"))}"><small>Background job</small><strong>${escapeHtml(String(job.name || job.job_id || "job"))}</strong><span>${escapeHtml(String(job.status || "running"))} · ${sessionId ? "View output" : "Open jobs"}</span></button>`)
-  }
-  for (const session of sessions.slice(0, Math.max(0, 3 - cards.length))) {
-    cards.push(`<button class="focus-card terminal" data-action="activity-open-terminal" data-session="${escapeHtml(String(session.session_id || ""))}" data-machine="${escapeHtml(String(session.machine || workloadMachine || "local"))}"><small>Persistent terminal</small><strong>${escapeHtml(String(session.name || session.session_id || "terminal"))}</strong><span>Open terminal</span></button>`)
-  }
-  return `<div class="activity-focus">${cards.join("")}</div>`
+    <div class="compact-plan-status ${escapeHtml(plan.status)}">
+      <div class="compact-plan-copy">
+        <div class="compact-plan-goal"><small>Goal</small><strong title="${escapeHtml(plan.objective)}">${escapeHtml(plan.objective)}</strong><span class="goal-status">${escapeHtml(status)}</span></div>
+        <div class="compact-plan-meta"><span>${progress.completed}/${progress.total} · ${progress.percent}%</span><span class="compact-plan-step">→ ${escapeHtml(activeStep)}</span><span data-role="plan-auto-status">${escapeHtml(planAutoStatus())}</span></div>
+      </div>
+      <div class="compact-plan-actions">${plan.status === "blocked" ? '<button class="text-button" data-action="plan-resume">Resume</button>' : '<button class="text-button" data-action="plan-pause">Pause</button>'}<button class="text-button danger" data-action="plan-cancel">Cancel</button></div>
+      <div class="compact-plan-progress"><span style="width:${progress.percent}%"></span></div>
+    </div>`
 }
 
 function activityRow(event: LiveEvent): string {
   const detail = eventDetail(event)
+  const purpose = typeof event.data.purpose === "string" ? event.data.purpose.trim() : ""
   const destination = activityDestination(event)
   const callId = String(event.data.call_id || "")
   const eventKey = activityEventKey(event)
+  const expandablePlanEvent = event.type.startsWith("plan.")
   let action = ""
   let actionLabel = ""
   if (destination === "terminal") {
@@ -850,9 +761,6 @@ function activityRow(event: LiveEvent): string {
     const path = Array.isArray(rawPath) ? String(rawPath[0] || "") : String(rawPath || "")
     action = `data-action="activity-open-files" data-tool="${escapeHtml(String(event.data.tool || ""))}" data-path="${escapeHtml(path)}" data-machine="${escapeHtml(String(event.data.machine || "local"))}"`
     actionLabel = "Open files"
-  } else if (destination === "diff") {
-    action = `data-action="activity-open-diff" data-machine="${escapeHtml(String(event.data.machine || "local"))}" data-cwd="${escapeHtml(String(event.data.cwd || config?.cwd || "."))}"`
-    actionLabel = "View diff"
   } else if (destination === "remotes") {
     action = `data-action="activity-open-remotes"`
     actionLabel = "Open remotes"
@@ -862,9 +770,83 @@ function activityRow(event: LiveEvent): string {
   } else if (destination === "detail" && callId) {
     action = `data-action="activity-open-detail" data-event-key="${escapeHtml(eventKey)}" data-call-id="${escapeHtml(callId)}"`
     actionLabel = activityExpandedEventKey === eventKey ? "Hide output" : "View output"
+  } else if (expandablePlanEvent) {
+    action = `data-action="activity-toggle-plan-detail" data-event-key="${escapeHtml(eventKey)}"`
+    actionLabel = activityExpandedEventKey === eventKey ? "Hide details" : "View details"
   }
-  const expanded = callId && activityExpandedEventKey === eventKey ? activityDetailHtml(callId) : ""
-  return `<div class="timeline-row ${eventTone(event)} ${action ? "clickable" : ""}" ${action}><div class="timeline-marker"><span></span></div><div class="timeline-copy"><div><strong>${escapeHtml(eventTitle(event))}</strong><span class="actor ${escapeHtml(event.actor)}">${escapeHtml(event.actor)}</span>${actionLabel ? `<span class="timeline-action">${escapeHtml(actionLabel)}</span>` : ""}</div>${detail ? `<p>${escapeHtml(detail)}</p>` : ""}</div><time>${escapeHtml(formatClock(event.ts))}</time>${expanded}</div>`
+  const expanded = activityExpandedEventKey === eventKey
+    ? callId && destination === "detail"
+      ? activityDetailHtml(callId)
+      : expandablePlanEvent
+        ? planActivityDetailHtml(event)
+        : ""
+    : ""
+  const subline = purpose || detail
+    ? `<p>${purpose ? `<span class="timeline-purpose">${escapeHtml(purpose)}</span>` : ""}${purpose && detail ? '<span class="timeline-separator"> · </span>' : ""}${detail ? `<span class="timeline-summary">${escapeHtml(detail)}</span>` : ""}</p>`
+    : ""
+  return `<div class="timeline-row ${eventTone(event)} ${action ? "clickable" : ""}" ${action}><div class="timeline-marker"><span></span></div><div class="timeline-copy"><div><strong>${escapeHtml(eventTitle(event))}</strong><span class="actor ${escapeHtml(event.actor)}">${escapeHtml(event.actor)}</span>${actionLabel ? `<span class="timeline-action">${escapeHtml(actionLabel)}</span>` : ""}</div>${subline}</div><time>${escapeHtml(formatClock(event.ts))}</time>${expanded}</div>`
+}
+
+function togglePlanActivityDetail(eventKey: string): void {
+  if (!eventKey) return
+  activityExpandedEventKey = activityExpandedEventKey === eventKey ? "" : eventKey
+  renderActivity()
+}
+
+function planActivityDetailHtml(event: LiveEvent): string {
+  const data = event.data
+  const record = (value: unknown): JsonRecord | null => (
+    value !== null && typeof value === "object" && !Array.isArray(value) ? value as JsonRecord : null
+  )
+  const stepLine = (value: unknown): string => {
+    const step = record(value)
+    if (!step) return ""
+    const status = String(step.status || "pending")
+    const mark = status === "completed" ? "✓" : status === "skipped" ? "–" : status === "active" ? "→" : "○"
+    const id = step.id ? `[${String(step.id)}] ` : ""
+    const note = step.note ? ` — ${String(step.note)}` : ""
+    return `${mark} ${id}${String(step.text || "step")}${note}`
+  }
+  const lines: string[] = []
+  if (data.objective) lines.push(`Goal: ${String(data.objective)}`)
+  const state: string[] = []
+  if (data.status) state.push(`Status: ${String(data.status)}`)
+  if (data.revision !== undefined) state.push(`Revision: ${String(data.revision)}`)
+  if (data.total_steps !== undefined) state.push(`Progress: ${String(data.completed_steps || 0)}/${String(data.total_steps)}`)
+  if (state.length) lines.push(state.join(" · "))
+  const activeLine = stepLine(data.active_step)
+  if (activeLine) lines.push(`Active: ${activeLine}`)
+  if (data.reason) lines.push(`Reason: ${String(data.reason)}`)
+  if (data.note && data.note !== data.reason) lines.push(`Note: ${String(data.note)}`)
+
+  const changes = record(data.changes)
+  if (changes) {
+    lines.push("", "Changes:")
+    if (changes.objective) lines.push(`  Goal → ${String(changes.objective)}`)
+    if ("note" in changes) lines.push(`  Note → ${String(changes.note || "cleared")}`)
+    const changedStep = stepLine(changes.step)
+    if (changedStep) {
+      const fields = Array.isArray(changes.updated_fields) ? ` (${changes.updated_fields.map(String).join(", ")})` : ""
+      lines.push(`  Step${fields}: ${changedStep}`)
+    }
+    if (Array.isArray(changes.steps)) {
+      lines.push("  Steps replaced:")
+      for (const step of changes.steps) {
+        const line = stepLine(step)
+        if (line) lines.push(`    ${line}`)
+      }
+      if (changes.steps_truncated) lines.push(`    … ${String(changes.steps_total || "more")} total steps`)
+    }
+  } else if (Array.isArray(data.steps)) {
+    lines.push("", "Steps:")
+    for (const step of data.steps) {
+      const line = stepLine(step)
+      if (line) lines.push(`  ${line}`)
+    }
+    if (data.steps_truncated) lines.push(`  … ${String(data.steps_total || "more")} total steps`)
+  }
+  const text = lines.length ? lines.join("\n") : JSON.stringify(data, null, 2)
+  return `<pre class="timeline-detail plan-activity-detail">${escapeHtml(truncateContext(text, 24_000))}</pre>`
 }
 
 function activityDetailHtml(callId: string): string {
@@ -1245,35 +1227,6 @@ async function shareSelectedFile(ask: boolean): Promise<void> {
   if (ask) await sendHostMessage({ role: "user", content: [{ type: "text", text: `Inspect the selected file ${requestPath} in Live Workspace. Explain anything important and suggest or make the next appropriate change.` }] })
 }
 
-function renderDiff(): void {
-  const status = gitSnapshot ? String(gitSnapshot.status.stdout || gitSnapshot.status.stderr || "") : ""
-  const diff = gitSnapshot ? String(gitSnapshot.diff.stdout || gitSnapshot.diff.stderr || "") : ""
-  mainNode().innerHTML = `
-    <section class="view diff-view"><div class="view-toolbar"><div><h2>Working tree diff</h2><p>${escapeHtml(gitSnapshot?.machine || diffMachine)}:${escapeHtml(gitSnapshot?.cwd || diffCwd)} · unstaged and staged changes</p></div><div class="toolbar-actions">${isDshHost ? "" : '<button class="button" data-action="diff-context">Send context</button>'}<button class="button" data-action="diff-ask">${icon("chat")}Ask for review</button><button class="button" data-action="refresh">${icon("refresh")}Refresh</button></div></div>
-      <div class="diff-layout"><section class="panel status-panel"><div class="panel-head"><strong>Git status</strong><span>${escapeHtml(gitSnapshot?.cwd || diffCwd)}</span></div><pre>${escapeHtml(status || "Clean")}</pre></section><section class="panel diff-panel"><div class="panel-head"><strong>Changes</strong><span>${diff ? `${diff.split("\n").length} lines` : "clean"}</span></div><div class="diff-code">${gitSnapshot ? renderDiffHtml(diff) : '<div class="loading small"><span></span>Loading diff…</div>'}</div></section></div>
-    </section>`
-}
-
-async function refreshDiff(): Promise<void> {
-  if (!config) return
-  const requestLiveId = config.liveId
-  const requestMachine = diffMachine
-  const requestCwd = diffCwd
-  const snapshot = await api<{ machine?: string; cwd: string; status: JsonRecord; diff: JsonRecord }>(`/api/live/git?machine=${encodeURIComponent(requestMachine)}&cwd=${encodeURIComponent(requestCwd)}`)
-  if (!config || config.liveId !== requestLiveId || diffMachine !== requestMachine || diffCwd !== requestCwd) return
-  gitSnapshot = snapshot
-  if (activeTab === "diff") renderDiff()
-}
-
-async function shareDiff(ask: boolean): Promise<void> {
-  if (!gitSnapshot) await refreshDiff()
-  const status = String(gitSnapshot?.status.stdout || "")
-  const diff = truncateContext(String(gitSnapshot?.diff.stdout || ""), 28_000)
-  await updateHostModelContext({ content: [{ type: "text", text: `Live Workspace git status (${gitSnapshot?.machine || diffMachine}):\n${status}\n\nDiff:\n${diff}` }], structuredContent: { git: { machine: gitSnapshot?.machine || diffMachine, cwd: gitSnapshot?.cwd || diffCwd, status } } })
-  notify("Diff added to model context", "success")
-  if (ask) await sendHostMessage({ role: "user", content: [{ type: "text", text: "Review the current Live Workspace git diff. Identify correctness risks, regressions, missing tests, and concrete improvements. Make fixes when appropriate." }] })
-}
-
 function renderJobs(): void {
   const jobs = dashboard?.jobs || []
   const sessions = dashboard?.sessions || []
@@ -1382,9 +1335,6 @@ function resetTerminalTarget(machine: string): void {
 
 function resetWorkspaceTarget(machine: string, cwd: string): void {
   workloadMachine = machine
-  diffMachine = machine
-  diffCwd = cwd
-  gitSnapshot = null
   dashboard = null
   activityDiscoveryInitialized = false
   knownActiveJobs.clear()
@@ -1398,7 +1348,6 @@ function resetWorkspaceTarget(machine: string, cwd: string): void {
 function replaceMachineSelection(machine: string, replacement: string, replacementCwd?: string): void {
   if (config?.machine === machine) {
     config = { ...config, machine: replacement, cwd: replacementCwd ?? config.cwd }
-    gitSnapshot = null
     dashboard = null
   }
   if (fileMachine === machine) {
@@ -1408,11 +1357,6 @@ function replaceMachineSelection(machine: string, replacement: string, replaceme
     resetTerminalTarget(replacement)
   }
   if (workloadMachine === machine) workloadMachine = replacement
-  if (diffMachine === machine) {
-    diffMachine = replacement
-    if (replacementCwd) diffCwd = replacementCwd
-    gitSnapshot = null
-  }
 }
 
 async function renameRemote(machine: string): Promise<void> {
@@ -1516,12 +1460,6 @@ async function refreshAllCore(): Promise<void> {
       dashboard = null
       selectionChanged = true
     }
-    if (!available.has(diffMachine)) {
-      diffMachine = preferred
-      diffCwd = config.machine === preferred ? config.cwd : "."
-      gitSnapshot = null
-      selectionChanged = true
-    }
     if (selectionChanged) renderCurrentTab()
     const dashboardMachine = workloadMachine
     const dash = await api<Dashboard>(`/api/ui/dashboard?machine=${encodeURIComponent(dashboardMachine || "local")}`)
@@ -1544,7 +1482,6 @@ async function refreshAllCore(): Promise<void> {
   if (selectionChanged) {
     if (activeTab === "files") await refreshFiles()
     else if (activeTab === "terminal") await refreshTerminals()
-    else if (activeTab === "diff") await refreshDiff()
     else if (activeTab === "jobs") { renderJobs(); wireJobRows() }
   }
 }
@@ -1554,7 +1491,6 @@ async function refreshCurrent(force: boolean): Promise<void> {
   if (force || Date.now() - lastPassiveRefresh > 4_000) await refreshAllCore()
   if (activeTab === "terminal") await refreshTerminals()
   else if (activeTab === "files") await refreshFiles()
-  else if (activeTab === "diff") await refreshDiff()
   else if (activeTab === "jobs") await refreshJobs()
   else if (activeTab === "remotes") await refreshRemotes()
   else if (activeTab === "audit") await refreshAudit()
@@ -2172,7 +2108,7 @@ planContinuationTimer = window.setInterval(() => {
 
 countdownRenderTimer = window.setInterval(() => {
   if (shuttingDown || !config || activeTab !== "activity") return
-  refreshAutoContinueCard()
+  refreshPlanAutoStatus()
   const countdown = continuationCountdownState(plan)
   if (countdown.visible && countdown.remainingSeconds <= 0) void checkPlanContinuation()
 }, 1_000)

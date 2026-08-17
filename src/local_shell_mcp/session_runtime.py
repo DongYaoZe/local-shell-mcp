@@ -27,6 +27,7 @@ PLAN_OBJECTIVE_LIMIT = 4_000
 PLAN_STEP_ID_LIMIT = 128
 PLAN_STEP_TEXT_LIMIT = 2_000
 PLAN_NOTE_LIMIT = 2_000
+PLAN_ACTIVITY_DETAIL_STEP_LIMIT = 12
 PLAN_STEP_STATUSES = frozenset({"pending", "active", "completed", "skipped"})
 # Durable activity is bounded in raw events. A normal tool call contributes a
 # started and terminal event that the Live Workspace coalesces into one row, so
@@ -1566,6 +1567,35 @@ class SessionRuntimeManager:
         if next_step is not None:
             next_step.status = "active"
 
+    @staticmethod
+    def _plan_activity_snapshot(plan: PlanState) -> dict[str, Any]:
+        completed = sum(
+            1 for step in plan.steps if step.status in {"completed", "skipped"}
+        )
+        active = next((step for step in plan.steps if step.status == "active"), None)
+        data: dict[str, Any] = {
+            "plan_id": plan.plan_id,
+            "revision": plan.revision,
+            "objective": plan.objective,
+            "status": plan.status,
+            "completed_steps": completed,
+            "total_steps": len(plan.steps),
+        }
+        if active is not None:
+            data["active_step"] = active.public_state()
+        if plan.note:
+            data["note"] = plan.note
+        return data
+
+    @staticmethod
+    def _plan_activity_steps(plan: PlanState) -> dict[str, Any]:
+        visible = plan.steps[:PLAN_ACTIVITY_DETAIL_STEP_LIMIT]
+        return {
+            "steps": [step.public_state() for step in visible],
+            "steps_total": len(plan.steps),
+            "steps_truncated": len(plan.steps) > len(visible),
+        }
+
     def manage_plan(
         self,
         session_key: str,
@@ -1746,7 +1776,10 @@ class SessionRuntimeManager:
             if logical.objective is None:
                 logical.objective = objective_text[:SESSION_TEXT_LIMIT]
             event_type = "plan.started"
-            event_data = {"plan_id": plan.plan_id, "objective": plan.objective}
+            event_data = {
+                **self._plan_activity_snapshot(plan),
+                **self._plan_activity_steps(plan),
+            }
         else:
             if plan is None:
                 raise ValueError("No plan exists in this logical session")
@@ -1754,15 +1787,18 @@ class SessionRuntimeManager:
                 if plan.status not in {"active", "blocked"}:
                     raise ValueError(f"Cannot update a {plan.status} plan")
                 changed = False
+                changes: dict[str, Any] = {}
                 if objective is not None:
                     objective_text = self._bounded_plan_text(objective, PLAN_OBJECTIVE_LIMIT)
                     if not objective_text:
                         raise ValueError("objective cannot be empty")
                     plan.objective = objective_text
                     changed = True
+                    changes["objective"] = plan.objective
                 if steps is not None:
                     plan.steps = self._normalize_plan_steps(list(steps))
                     changed = True
+                    changes.update(self._plan_activity_steps(plan))
                 if step_id is not None:
                     normalized_step_id = self._bounded_plan_text(step_id, PLAN_STEP_ID_LIMIT)
                     target = next(
@@ -1770,6 +1806,7 @@ class SessionRuntimeManager:
                     )
                     if target is None:
                         raise ValueError(f"Unknown plan step: {normalized_step_id}")
+                    updated_fields: list[str] = []
                     if status is not None:
                         normalized_status = status.strip().lower()
                         if normalized_status not in PLAN_STEP_STATUSES:
@@ -1780,20 +1817,27 @@ class SessionRuntimeManager:
                                     item.status = "pending"
                         target.status = normalized_status
                         changed = True
+                        updated_fields.append("status")
                     if text is not None:
                         normalized_text = self._bounded_plan_text(text, PLAN_STEP_TEXT_LIMIT)
                         if not normalized_text:
                             raise ValueError("step text cannot be empty")
                         target.text = normalized_text
                         changed = True
+                        updated_fields.append("text")
                     if note is not None:
                         target.note = self._bounded_plan_text(note, PLAN_NOTE_LIMIT) or None
                         changed = True
+                        updated_fields.append("note")
+                    if updated_fields:
+                        changes["step"] = target.public_state()
+                        changes["updated_fields"] = updated_fields
                 elif status is not None or text is not None:
                     raise ValueError("step_id is required when updating step status or text")
                 if note is not None and step_id is None:
                     plan.note = self._bounded_plan_text(note, PLAN_NOTE_LIMIT) or None
                     changed = True
+                    changes["note"] = plan.note
                 if not changed:
                     raise ValueError("action=update requires objective, steps, step_id, or note")
                 self._promote_next_step(plan)
@@ -1806,7 +1850,8 @@ class SessionRuntimeManager:
                 plan.continuation_reserved = False
                 plan.continuation_retry_after = None
                 event_type = "plan.updated"
-                event_data = {"plan_id": plan.plan_id, "revision": plan.revision}
+                event_data = self._plan_activity_snapshot(plan)
+                event_data["changes"] = changes
             elif normalized_action == "block":
                 if plan.status != "active":
                     raise ValueError(f"Cannot block a {plan.status} plan")
@@ -1822,7 +1867,7 @@ class SessionRuntimeManager:
                 plan.continuation_claim_id = None
                 plan.continuation_reserved = False
                 event_type = "plan.blocked"
-                event_data = {"plan_id": plan.plan_id, "reason": reason}
+                event_data = {**self._plan_activity_snapshot(plan), "reason": reason}
             elif normalized_action == "resume":
                 if plan.status != "blocked":
                     raise ValueError("Only a blocked plan can be resumed")
@@ -1834,7 +1879,7 @@ class SessionRuntimeManager:
                     plan.last_agent_activity = now
                 plan.continuation_retry_after = None
                 event_type = "plan.resumed"
-                event_data = {"plan_id": plan.plan_id}
+                event_data = self._plan_activity_snapshot(plan)
             elif normalized_action == "finish":
                 if plan.status not in {"active", "blocked"}:
                     raise ValueError(f"Cannot finish a {plan.status} plan")
@@ -1853,7 +1898,10 @@ class SessionRuntimeManager:
                 plan.continuation_reserved = False
                 plan.continuation_retry_after = None
                 event_type = "plan.completed"
-                event_data = {"plan_id": plan.plan_id}
+                event_data = {
+                    **self._plan_activity_snapshot(plan),
+                    **self._plan_activity_steps(plan),
+                }
             elif normalized_action == "cancel":
                 if plan.status in {"completed", "cancelled"}:
                     raise ValueError(f"Plan is already {plan.status}")
@@ -1867,7 +1915,10 @@ class SessionRuntimeManager:
                 plan.continuation_reserved = False
                 plan.continuation_retry_after = None
                 event_type = "plan.cancelled"
-                event_data = {"plan_id": plan.plan_id}
+                event_data = {
+                    **self._plan_activity_snapshot(plan),
+                    **self._plan_activity_steps(plan),
+                }
             else:
                 raise ValueError(
                     "action must be one of: start, get, update, block, resume, finish, cancel"

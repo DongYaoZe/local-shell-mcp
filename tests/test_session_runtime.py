@@ -405,6 +405,57 @@ def test_plan_fields_are_bounded_before_persistence(tmp_path):
     assert len(restored["steps"][0]["note"]) == PLAN_NOTE_LIMIT
 
 
+def test_plan_activity_records_meaningful_change_details(tmp_path):
+    manager = SessionRuntimeManager(tmp_path / ".state")
+    started = manager.manage("mcp:a", "user", action="start", objective="Task")
+    run_id = started["active_run"]["run_id"]
+    manager.manage_plan(
+        "mcp:a",
+        action="start",
+        session_run_id=run_id,
+        objective="Ship the UI",
+        steps=[
+            {"id": "impl", "text": "Implement UI"},
+            {"id": "test", "text": "Run tests"},
+        ],
+    )
+    manager.manage_plan(
+        "mcp:a",
+        action="update",
+        session_run_id=run_id,
+        step_id="impl",
+        status="completed",
+        note="done",
+    )
+
+    session = manager.manage("mcp:a", "user", action="get")
+    updated = session["recent_activity"][-1]
+    assert updated["type"] == "plan.updated"
+    assert updated["data"]["objective"] == "Ship the UI"
+    assert updated["data"]["completed_steps"] == 1
+    assert updated["data"]["total_steps"] == 2
+    assert updated["data"]["active_step"]["id"] == "test"
+    assert updated["data"]["changes"]["updated_fields"] == ["status", "note"]
+    assert updated["data"]["changes"]["step"] == {
+        "id": "impl",
+        "text": "Implement UI",
+        "status": "completed",
+        "note": "done",
+    }
+
+    manager.manage_plan(
+        "mcp:a",
+        action="block",
+        session_run_id=run_id,
+        note="Need user input",
+    )
+    blocked = manager.manage("mcp:a", "user", action="get")["recent_activity"][-1]
+    assert blocked["type"] == "plan.blocked"
+    assert blocked["data"]["status"] == "blocked"
+    assert blocked["data"]["reason"] == "Need user input"
+    assert blocked["data"]["active_step"]["id"] == "test"
+
+
 def test_plan_continuation_waits_for_inflight_and_backs_off(tmp_path):
     manager = SessionRuntimeManager(tmp_path / ".state")
     started = manager.manage("mcp:a", "user", action="start", objective="Task")

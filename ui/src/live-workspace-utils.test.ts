@@ -15,7 +15,6 @@ import {
   joinPath,
   mergeActivityEvents,
   parentPath,
-  renderDiffHtml,
   restoreReverseFeedScrollTop,
   toggleWorkspaceDisplayMode,
   reconnectDelayMs,
@@ -44,6 +43,30 @@ describe("live workspace utilities", () => {
     expect(source).toContain('target.closest<HTMLElement>(".task-overview-column")')
     expect(source).toContain("event.preventDefault()")
     expect(source).toContain("event.stopPropagation()")
+  })
+
+  test("Activity keeps compact chrome and gives the timeline priority", async () => {
+    const source = await Bun.file(new URL("./live-workspace.ts", import.meta.url)).text()
+    const css = await Bun.file(new URL("./live-workspace.css", import.meta.url)).text()
+    expect(source).not.toContain('<section class="status-strip">')
+    expect(source).not.toContain('class="task-monitor-grid"')
+    expect(source).not.toContain('tabButton("diff", "Diff")')
+    expect(source).not.toContain("function renderDiff()")
+    expect(css).not.toContain(".diff-view")
+    expect(css).not.toContain(".diff-layout")
+    expect(source).toContain('class="task-monitor-body ${overview ? "has-overview" : ""}"')
+    expect(source).toContain("const goalStatus = compactPlanStatus()")
+    expect(source).toContain('class="compact-plan-status ${escapeHtml(plan.status)}"')
+    expect(css).toContain(".task-monitor-body.has-overview { grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr); }")
+    expect(css).toContain(".task-overview-column { max-height: 108px;")
+    expect(css).toContain("@media (max-height: 460px)")
+    expect(css).toContain(".task-overview-column { display: none; }")
+    expect(css).toContain(".compact-plan-status { min-height: 35px;")
+    expect(css).not.toContain(".compact-plan-status { display: none; }")
+    expect(source).toContain('class="timeline-purpose"')
+    expect(source).not.toContain("Explanation:")
+    expect(source).not.toContain("Purpose:")
+    expect(css).toContain(".timeline-purpose { color: var(--ls-text-2); font-family: var(--ls-font); font-weight: 500; }")
   })
 
   test("remote machine cards keep their intrinsic height inside the full-height grid", async () => {
@@ -240,13 +263,42 @@ describe("live workspace utilities", () => {
       ts: 1,
       type: "tool.completed",
       actor: "agent",
-      data: { tool: "run_shell", cwd: "/workspace", duration_ms: 1420 },
+      data: {
+        tool: "run_shell",
+        explanation: "Verify the compact Activity presentation",
+        purpose: "Run focused validation",
+        cwd: "/workspace",
+        duration_ms: 1420,
+      },
     }
     expect(eventTitle(event)).toBe("run_shell completed")
-    expect(activityIntent(event)).toBe("Running command")
+    expect(activityIntent(event)).toBe("Run focused validation")
     expect(activityDestination(event)).toBe("detail")
-    expect(eventDetail(event)).toContain("/workspace")
-    expect(eventDetail(event)).toContain("1.4 s")
+    const detail = eventDetail(event)
+    expect(detail).toBe("/workspace · 1.4 s")
+  })
+
+  test("plan lifecycle activity exposes concise summaries and expandable details", async () => {
+    const event: LiveEvent = {
+      seq: 5,
+      ts: 1,
+      type: "plan.updated",
+      actor: "agent",
+      data: {
+        plan_id: "p1",
+        revision: 3,
+        status: "active",
+        completed_steps: 1,
+        total_steps: 3,
+        active_step: { id: "test", text: "Run tests", status: "active" },
+        changes: { step: { id: "impl", text: "Implement UI", status: "completed" }, updated_fields: ["status"] },
+      },
+    }
+    expect(eventDetail(event)).toBe("Active: Run tests · 1/3 complete · r3")
+    const source = await Bun.file(new URL("./live-workspace.ts", import.meta.url)).text()
+    expect(source).toContain('data-action="activity-toggle-plan-detail"')
+    expect(source).toContain("function planActivityDetailHtml(event: LiveEvent)")
+    expect(source).toContain('lines.push("", "Changes:")')
   })
 
   test("activity hides workspace bootstrap noise and routes useful operations", () => {
@@ -254,15 +306,18 @@ describe("live workspace utilities", () => {
     const bootstrap: LiveEvent = { seq: 2, ts: 1, type: "tool.completed", actor: "agent", data: { tool: "workspace_open" } }
     const reconnect: LiveEvent = { seq: 3, ts: 1, type: "tool.completed", actor: "agent", data: { tool: "live_workspace_reconnect" } }
     const terminalInput: LiveEvent = { seq: 4, ts: 1, type: "human.action", actor: "human", data: { action: "terminal.input", bytes: 1 } }
-    const edit: LiveEvent = { seq: 5, ts: 1, type: "tool.completed", actor: "agent", data: { tool: "file_edit", path: "/workspace/src/app.ts" } }
-    const job: LiveEvent = { seq: 6, ts: 1, type: "tool.completed", actor: "agent", data: { tool: "job_start", name: "tests" } }
-    const shellStarted: LiveEvent = { seq: 7, ts: 1, type: "tool.started", actor: "agent", data: { tool: "shell_start", call_id: "shell-1" } }
-    const shellReady: LiveEvent = { seq: 8, ts: 1, type: "tool.completed", actor: "agent", data: { tool: "shell_start", call_id: "shell-1", session_id: "session-1" } }
+    const sessionAttached: LiveEvent = { seq: 5, ts: 1, type: "session.attached", actor: "agent", data: { session_id: "session-1" } }
+    const edit: LiveEvent = { seq: 6, ts: 1, type: "tool.completed", actor: "agent", data: { tool: "file_edit", path: "/workspace/src/app.ts" } }
+    const job: LiveEvent = { seq: 7, ts: 1, type: "tool.completed", actor: "agent", data: { tool: "job_start", name: "tests" } }
+    const shellStarted: LiveEvent = { seq: 8, ts: 1, type: "tool.started", actor: "agent", data: { tool: "shell_start", call_id: "shell-1" } }
+    const shellReady: LiveEvent = { seq: 9, ts: 1, type: "tool.completed", actor: "agent", data: { tool: "shell_start", call_id: "shell-1", session_id: "session-1" } }
+    const patch: LiveEvent = { seq: 10, ts: 1, type: "tool.completed", actor: "agent", data: { tool: "file_patch", call_id: "patch-1", cwd: "/workspace" } }
 
     expect(isOperationalActivityEvent(opened)).toBeFalse()
     expect(isOperationalActivityEvent(bootstrap)).toBeFalse()
     expect(isOperationalActivityEvent(reconnect)).toBeFalse()
     expect(isOperationalActivityEvent(terminalInput)).toBeFalse()
+    expect(isOperationalActivityEvent(sessionAttached)).toBeFalse()
     expect(isOperationalActivityEvent(edit)).toBeTrue()
     expect(activityIntent(edit)).toBe("Editing app.ts")
     expect(activityDestination(edit)).toBe("files")
@@ -270,6 +325,7 @@ describe("live workspace utilities", () => {
     expect(activityDestination(job)).toBe("jobs")
     expect(activityDestination(shellStarted)).toBe("detail")
     expect(activityDestination(shellReady)).toBe("terminal")
+    expect(activityDestination(patch)).toBe("detail")
   })
 
   test("activity keeps historical pre-v4 tool names usable", () => {
@@ -333,15 +389,6 @@ describe("live workspace utilities", () => {
     expect(merged[0]).toEqual(durableStarted)
     expect(merged[1]).toEqual(durableTool)
     expect(merged[2]).toEqual(humanDiff)
-  })
-
-  test("diff renderer escapes content and classifies lines", () => {
-    const html = renderDiffHtml("@@ -1 +1 @@\n-old <tag>\n+new & value")
-    expect(html).toContain("diff-line hunk")
-    expect(html).toContain("diff-line removed")
-    expect(html).toContain("diff-line added")
-    expect(html).toContain("&lt;tag&gt;")
-    expect(html).toContain("&amp; value")
   })
 
   test("large model context is bounded", () => {

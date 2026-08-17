@@ -283,7 +283,7 @@ export function activityEventKey(event: LiveEvent): string {
 }
 
 export function isOperationalActivityEvent(event: LiveEvent): boolean {
-  if (event.type === "channel.opened") return false
+  if (event.type === "channel.opened" || event.type === "session.attached") return false
   if (event.type === "human.action" && event.data.action === "terminal.input") return false
   return !["workspace_open", "open_live_workspace", "live_workspace_reconnect"].includes(String(event.data.tool || ""))
 }
@@ -317,7 +317,7 @@ export function activityIntent(event: LiveEvent): string {
   return tool.replaceAll("_", " ")
 }
 
-export type ActivityDestination = "terminal" | "jobs" | "files" | "diff" | "remotes" | "audit" | "detail" | null
+export type ActivityDestination = "terminal" | "jobs" | "files" | "remotes" | "audit" | "detail" | null
 
 export function activityDestination(event: LiveEvent): ActivityDestination {
   const tool = String(event.data.tool || "")
@@ -326,7 +326,7 @@ export function activityDestination(event: LiveEvent): ActivityDestination {
   }
   if (["job_start", "job_list", "job_tail", "job_stop", "job_retry", "remote_transfer"].includes(tool)) return "jobs"
   if (["file_read", "file_write", "file_edit", "file_delete", "file_list", "file_glob", "file_grep", "file_tree", "read_file", "write_file", "edit_file", "delete_file_or_dir", "list_files", "glob_search", "grep_search", "tree_view", "search"].includes(tool)) return "files"
-  if (["file_patch", "apply_patch"].includes(tool)) return "diff"
+  if (["file_patch", "apply_patch"].includes(tool)) return event.data.call_id ? "detail" : null
   if (tool === "remote_manage") return "remotes"
   if (tool === "audit_tail") return "audit"
   if (["run_shell", "run_python", "run_shell_tool", "run_python_tool"].includes(tool)) return "detail"
@@ -364,6 +364,17 @@ export function eventTitle(event: LiveEvent): string {
 export function eventDetail(event: LiveEvent): string {
   const data = event.data
   const pieces: string[] = []
+  if (event.type.startsWith("plan.")) {
+    if (typeof data.reason === "string" && data.reason) pieces.push(data.reason)
+    const activeStep = data.active_step
+    if (activeStep && typeof activeStep === "object" && !Array.isArray(activeStep)) {
+      const text = (activeStep as Record<string, unknown>).text
+      if (typeof text === "string" && text) pieces.push(`Active: ${text}`)
+    }
+    if (data.total_steps !== undefined) pieces.push(`${String(data.completed_steps || 0)}/${String(data.total_steps)} complete`)
+    if (data.revision !== undefined) pieces.push(`r${String(data.revision)}`)
+    if (pieces.length) return pieces.join(" · ")
+  }
   for (const key of ["machine", "path", "cwd", "session_id", "job_id"] as const) {
     const value = data[key]
     if (value !== undefined && value !== null && value !== "") pieces.push(String(value))
@@ -393,17 +404,6 @@ export function eventTone(event: LiveEvent): "success" | "danger" | "warning" | 
   return "muted"
 }
 
-export function renderDiffHtml(diff: string): string {
-  if (!diff.trim()) return '<div class="empty-state">Working tree is clean.</div>'
-  return diff.split("\n").map((line) => {
-    let kind = "context"
-    if (line.startsWith("diff --git") || line.startsWith("index ")) kind = "meta"
-    else if (line.startsWith("@@")) kind = "hunk"
-    else if (line.startsWith("+") && !line.startsWith("+++")) kind = "added"
-    else if (line.startsWith("-") && !line.startsWith("---")) kind = "removed"
-    return `<div class="diff-line ${kind}"><span>${escapeHtml(line || " ")}</span></div>`
-  }).join("")
-}
 
 export function truncateContext(value: string, maxChars = 24_000): string {
   if (value.length <= maxChars) return value
