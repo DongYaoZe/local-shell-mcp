@@ -18,6 +18,7 @@ from starlette.websockets import WebSocket
 
 import local_shell_mcp.audit as audit_module
 from local_shell_mcp.audit import audit, query_audit, suppress_audit
+from local_shell_mcp.auth import Principal
 from local_shell_mcp.http_app import build_http_app
 from local_shell_mcp.human_ui import (
     UI_FULL_SCOPES,
@@ -26,6 +27,7 @@ from local_shell_mcp.human_ui import (
     _authorize_websocket,
     _bounded_int,
     _idle_timeout_remaining,
+    _logical_session_subject,
     _normalize_file_entries,
     _parent_path,
     _path_name,
@@ -51,6 +53,58 @@ def _configure(tmp_path, monkeypatch, *, auth_mode: str = "none") -> None:
     monkeypatch.setenv("LOCAL_SHELL_MCP_REMOTE_ENABLED", "false")
     get_settings.cache_clear()
 
+
+
+def test_trusted_local_ui_maps_logical_session_subject_for_listing_and_creation(
+    tmp_path, monkeypatch
+):
+    _configure(tmp_path, monkeypatch, auth_mode="none")
+    request = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/api/ui/logical-sessions",
+            "headers": [],
+            "query_string": b"",
+        }
+    )
+    request.state.principal = Principal(
+        email=None,
+        subject="native-controller",
+        claims={"auth": "native-tui"},
+    )
+
+    assert _logical_session_subject(request) is None
+    assert _logical_session_subject(request, create=True) == "anonymous"
+
+    _configure(tmp_path, monkeypatch, auth_mode="oauth")
+    assert _logical_session_subject(request, create=True) == "local-user"
+
+    fallback_settings = type("FallbackSettings", (), {"auth_mode": "custom"})()
+    monkeypatch.setattr("local_shell_mcp.human_ui.get_settings", lambda: fallback_settings)
+    assert _logical_session_subject(request, create=True) == "local-mcp-client"
+
+
+def test_webui_logical_sessions_api_ignores_unknown_status_in_counts(tmp_path, monkeypatch):
+    _configure(tmp_path, monkeypatch)
+
+    class Manager:
+        def list_sessions(self, *, subject):
+            assert subject == "anonymous"
+            return [{"session_id": "s_archived", "status": "archived", "recent_activity": []}]
+
+    monkeypatch.setattr(
+        "local_shell_mcp.human_ui.get_session_runtime_manager", lambda: Manager()
+    )
+    response = TestClient(build_http_app()).get("/api/ui/logical-sessions")
+
+    assert response.status_code == 200
+    assert response.json()["data"]["counts"] == {
+        "active": 0,
+        "completed": 0,
+        "cancelled": 0,
+        "total": 1,
+    }
 
 
 def test_webui_logical_sessions_api_is_principal_scoped(tmp_path, monkeypatch):
@@ -120,6 +174,106 @@ def test_webui_logical_session_lifecycle_accepts_preentered_prompt(tmp_path, mon
     )
     assert deleted.status_code == 200
     assert deleted.json()["data"] == {"session_id": session_id, "deleted": True}
+
+
+def test_webui_logical_session_finish_updates_bound_live_workspace(tmp_path, monkeypatch):
+    _configure(tmp_path, monkeypatch)
+    client = TestClient(build_http_app())
+    created = client.post(
+        "/api/ui/logical-sessions/start",
+        json={"objective": "Finish this prepared task."},
+    )
+    assert created.status_code == 200
+    session_id = created.json()["data"]["session_id"]
+
+    published: list[tuple[str, str, str, dict[str, str]]] = []
+
+    class Channel:
+        live_id = "live-session"
+
+    class LiveManager:
+        def active_for_logical_session(self, requested_session_id, *, subject):
+            assert requested_session_id == session_id
+            assert subject == "anonymous"
+            return Channel()
+
+        def publish_channel(self, live_id, event_type, *, actor, data):
+            published.append((live_id, event_type, actor, data))
+
+    monkeypatch.setattr(
+        "local_shell_mcp.human_ui.get_live_channel_manager", lambda: LiveManager()
+    )
+
+    finished = client.post(
+        "/api/ui/logical-sessions/finish", json={"session_id": session_id}
+    )
+
+    assert finished.status_code == 200
+    assert finished.json()["data"]["status"] == "completed"
+    assert published == [
+        (
+            "live-session",
+            "session.updated",
+            "human",
+            {"session_id": session_id, "action": "finish"},
+        )
+    ]
+
+
+def test_webui_logical_session_actions_validate_requests(tmp_path, monkeypatch):
+    _configure(tmp_path, monkeypatch)
+    client = TestClient(build_http_app())
+
+    unsupported = client.post("/api/ui/logical-sessions/resume", json={})
+    assert unsupported.status_code == 400
+    assert "Unsupported logical session action" in unsupported.text
+
+    non_object = client.post("/api/ui/logical-sessions/start", json=[])
+    assert non_object.status_code == 400
+    assert "JSON object required" in non_object.text
+
+    missing_id = client.post("/api/ui/logical-sessions/finish", json={})
+    assert missing_id.status_code == 400
+    assert "session_id is required" in missing_id.text
+
+
+def test_webui_logical_session_api_reports_missing_context_and_runtime_errors(
+    tmp_path, monkeypatch
+):
+    _configure(tmp_path, monkeypatch)
+    client = TestClient(build_http_app())
+
+    missing_detail = client.get("/api/ui/logical-sessions/detail")
+    assert missing_detail.status_code == 404
+    assert "session_id is required" in missing_detail.text
+
+    monkeypatch.setattr(
+        "local_shell_mcp.human_ui._logical_session_subject",
+        lambda request, *, create=False: None if create else "anonymous",
+    )
+    denied_start = client.post("/api/ui/logical-sessions/start", json={})
+    assert denied_start.status_code == 400
+    assert "Unable to determine logical session principal" in denied_start.text
+
+    class BrokenManager:
+        def get(self, *args, **kwargs):  # noqa: ANN002, ANN003, ARG002
+            raise RuntimeError("session store unavailable")
+
+        def list_sessions(self, *, subject):  # noqa: ARG002
+            raise RuntimeError("session list unavailable")
+
+    monkeypatch.setattr(
+        "local_shell_mcp.human_ui.get_session_runtime_manager", lambda: BrokenManager()
+    )
+    broken_detail = client.get(
+        "/api/ui/logical-sessions/detail", params={"session_id": "s_missing"}
+    )
+    assert broken_detail.status_code == 400
+    assert "session store unavailable" in broken_detail.text
+
+    broken_list = client.get("/api/ui/logical-sessions")
+    assert broken_list.status_code == 400
+    assert "session list unavailable" in broken_list.text
 
 
 def test_webui_shell_uses_available_viewport_without_fixed_desktop_cap():
