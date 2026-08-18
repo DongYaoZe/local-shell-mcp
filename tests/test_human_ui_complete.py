@@ -112,6 +112,14 @@ def test_root_redirects_to_relative_ui_path_without_auth(tmp_path, monkeypatch):
     assert response.headers["location"] == "./console/"
 
 
+def test_audit_detail_missing_entry_returns_not_found(tmp_path, monkeypatch):
+    _configure(tmp_path, monkeypatch)
+
+    response = asyncio.run(ui.api_audit_detail(_request("/api/ui/audit/detail")))
+
+    assert response.status_code == 404
+
+
 def test_audit_detail_requires_scopes_before_materializing_payloads(tmp_path, monkeypatch):
     _configure(tmp_path, monkeypatch)
     calls: list[bool] = []
