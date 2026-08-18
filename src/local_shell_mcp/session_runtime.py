@@ -806,6 +806,26 @@ class SessionRuntimeManager:
             logical = self._require_session_locked(session_id, subject)
             return self._public_state_locked(logical)
 
+    def list_sessions(self, *, subject: str) -> list[dict[str, Any]]:
+        """Return principal-scoped Logical Session summaries, newest first."""
+        normalized_subject = str(subject).strip()
+        if not normalized_subject:
+            raise ValueError("subject is required")
+        with self._lock:
+            self._ensure_loaded_locked()
+            if self._uses_shared_state_backend():
+                self._refresh_all_sessions_locked()
+            logical_sessions = [
+                session for session in self._sessions.values() if session.subject == normalized_subject
+            ]
+            logical_sessions.sort(
+                key=lambda session: (session.updated_at, session.created_at), reverse=True
+            )
+            return [
+                self._public_state_locked(session, recent_activity=0)
+                for session in logical_sessions
+            ]
+
     def plan_state(
         self, session_id: str | None, *, subject: str | None = None
     ) -> dict[str, Any] | None:

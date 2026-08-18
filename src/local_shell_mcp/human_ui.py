@@ -42,6 +42,7 @@ from .jobs import list_jobs
 from .live_channel import get_live_channel_manager, live_id_from_claims
 from .oauth import ALL_OAUTH_SCOPES
 from .remote import remote_manager
+from .session_runtime import get_session_runtime_manager
 from .settings import get_settings
 from .shell_environment import subprocess_env
 from .shell_ops import (
@@ -322,6 +323,11 @@ def _json_error(exc: Exception, status_code: int = 400) -> JSONResponse:
 def _request_principal(request: Request) -> Principal:
     principal = getattr(request.state, "principal", None)
     return principal if isinstance(principal, Principal) else verify_request(request)
+
+
+def _logical_session_subject(request: Request) -> str:
+    principal = _request_principal(request)
+    return principal.subject or principal.email or "mcp-client"
 
 
 def _require_ui_scopes(
@@ -1216,6 +1222,42 @@ async def api_terminal_action(request: Request) -> Response:
     except Exception as exc:
         return _json_error(exc)
 
+
+
+async def api_logical_sessions(request: Request) -> Response:
+    try:
+        _require_ui_scopes(request, "shell:read")
+        subject = _logical_session_subject(request)
+        sessions = await asyncio.to_thread(
+            get_session_runtime_manager().list_sessions,
+            subject=subject,
+        )
+        counts = {"active": 0, "completed": 0, "cancelled": 0, "total": len(sessions)}
+        for session in sessions:
+            status = str(session.get("status") or "")
+            if status in counts:
+                counts[status] += 1
+        return _json_ok({"sessions": sessions, "counts": counts})
+    except Exception as exc:
+        return _json_error(exc)
+
+
+async def api_logical_session_detail(request: Request) -> Response:
+    try:
+        _require_ui_scopes(request, "shell:read")
+        session_id = str(request.query_params.get("session_id") or "")
+        if not session_id:
+            raise ValueError("session_id is required")
+        session = await asyncio.to_thread(
+            get_session_runtime_manager().get,
+            session_id,
+            subject=_logical_session_subject(request),
+        )
+        return _json_ok(session)
+    except (ValueError, PermissionError) as exc:
+        return _json_error(exc, status_code=404)
+    except Exception as exc:
+        return _json_error(exc)
 
 
 async def api_audit(request: Request) -> Response:
@@ -2618,6 +2660,8 @@ def ui_routes() -> list[Any]:
         Route(UI_API_PREFIX + "/terminals", api_terminals, methods=["GET"]),
         Route(UI_API_PREFIX + "/terminals/read", api_terminal_read, methods=["GET"]),
         Route(UI_API_PREFIX + "/terminals/{action}", api_terminal_action, methods=["POST"]),
+        Route(UI_API_PREFIX + "/logical-sessions", api_logical_sessions, methods=["GET"]),
+        Route(UI_API_PREFIX + "/logical-sessions/detail", api_logical_session_detail, methods=["GET"]),
         Route(UI_API_PREFIX + "/audit", api_audit, methods=["GET"]),
         Route(UI_API_PREFIX + "/audit/detail", api_audit_detail, methods=["GET"]),
         Route(UI_API_PREFIX + "/remotes", api_remotes, methods=["GET", "POST"]),
