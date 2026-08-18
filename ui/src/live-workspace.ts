@@ -6,6 +6,8 @@ import {
 } from "@modelcontextprotocol/ext-apps"
 import { FitAddon } from "@xterm/addon-fit"
 import { Terminal } from "@xterm/xterm"
+import { auditInput, auditOutput, formatAuditValue } from "./audit-utils"
+import type { AuditEntry } from "./types"
 import {
   activityDestination,
   activityEventKey,
@@ -446,11 +448,13 @@ function onRootWheel(event: WheelEvent): void {
   if (!target) return
 
   const candidates: HTMLElement[] = []
+  const detailPane = target.closest<HTMLElement>(".activity-io-pane pre")
   const detail = target.closest<HTMLElement>(".timeline-detail")
   const timeline = target.closest<HTMLElement>(".session-timeline")
   const overview = target.closest<HTMLElement>(".task-overview-column")
-  if (detail) candidates.push(detail)
-  if (timeline && timeline !== detail) candidates.push(timeline)
+  if (detailPane) candidates.push(detailPane)
+  if (detail && detail !== detailPane) candidates.push(detail)
+  if (timeline && timeline !== detail && timeline !== detailPane) candidates.push(timeline)
   if (overview) candidates.push(overview)
   if (!candidates.length) return
 
@@ -475,7 +479,7 @@ async function handleAction(action: string, target: HTMLElement): Promise<void> 
   try {
     if (action === "expand") await requestDisplayMode(toggleWorkspaceDisplayMode(displayMode))
     else if (action === "refresh") await refreshCurrent(true)
-    else if (action === "activity-ask") await askAboutLatestActivity()
+    else if (action === "activity-ask-event") await askAboutActivity(target.dataset.eventKey || "", target.dataset.callId || "")
     else if (action === "plan-pause") await controlPlan("pause")
     else if (action === "plan-resume") await controlPlan("resume")
     else if (action === "plan-cancel") await controlPlan("cancel")
@@ -671,8 +675,7 @@ function renderActivity(): void {
     <section class="view activity-view task-monitor-view">
       <div class="task-monitor-body ${overview ? "has-overview" : ""}">
         ${overview ? `<aside class="task-overview-column" aria-label="Task overview">${overview}</aside>` : ""}
-        <section class="panel activity-panel session-activity-panel">
-          <div class="panel-head activity-panel-head"><strong>Activity</strong><div class="activity-panel-actions"><span>${recent.length}</span><button class="button" data-action="activity-ask">${icon("chat")}Ask</button><button class="button" data-action="refresh">${icon("refresh")}Refresh</button></div></div>
+        <section class="session-activity-stream" aria-label="Activity timeline">
           ${goalStatus}
           <div class="timeline session-timeline">${recent.length ? recent.map(activityRow).join("") : '<div class="empty-state">No execution activity yet. The current task will appear here automatically.</div>'}</div>
         </section>
@@ -771,7 +774,7 @@ function activityRow(event: LiveEvent): string {
     actionLabel = "Open audit"
   } else if (destination === "detail" && callId) {
     action = `data-action="activity-open-detail" data-event-key="${escapeHtml(eventKey)}" data-call-id="${escapeHtml(callId)}"`
-    actionLabel = activityExpandedEventKey === eventKey ? "Hide output" : "View output"
+    actionLabel = activityExpandedEventKey === eventKey ? "Hide details" : "View details"
   } else if (expandablePlanEvent) {
     action = `data-action="activity-toggle-plan-detail" data-event-key="${escapeHtml(eventKey)}"`
     actionLabel = activityExpandedEventKey === eventKey ? "Hide details" : "View details"
@@ -786,7 +789,8 @@ function activityRow(event: LiveEvent): string {
   const subline = purpose || detail
     ? `<p>${purpose ? `<span class="timeline-purpose">${escapeHtml(purpose)}</span>` : ""}${purpose && detail ? '<span class="timeline-separator"> · </span>' : ""}${detail ? `<span class="timeline-summary">${escapeHtml(detail)}</span>` : ""}</p>`
     : ""
-  return `<div class="timeline-row ${eventTone(event)} ${action ? "clickable" : ""}" ${action}><div class="timeline-marker"><span></span></div><div class="timeline-copy"><div><strong>${escapeHtml(eventTitle(event))}</strong><span class="actor ${escapeHtml(event.actor)}">${escapeHtml(event.actor)}</span>${actionLabel ? `<span class="timeline-action">${escapeHtml(actionLabel)}</span>` : ""}</div>${subline}</div><time>${escapeHtml(formatClock(event.ts))}</time>${expanded}</div>`
+  const askButton = `<button class="timeline-ask" data-action="activity-ask-event" data-event-key="${escapeHtml(eventKey)}" data-call-id="${escapeHtml(callId)}" title="Ask about this activity" aria-label="Ask about this activity">${icon("chat")}</button>`
+  return `<div class="timeline-row ${eventTone(event)} ${action ? "clickable" : ""}" ${action}><div class="timeline-marker"><span></span></div><div class="timeline-copy"><div><strong>${escapeHtml(eventTitle(event))}</strong><span class="actor ${escapeHtml(event.actor)}">${escapeHtml(event.actor)}</span>${actionLabel ? `<span class="timeline-action">${escapeHtml(actionLabel)}</span>` : ""}${askButton}</div>${subline}</div><time>${escapeHtml(formatClock(event.ts))}</time>${expanded}</div>`
 }
 
 function togglePlanActivityDetail(eventKey: string): void {
@@ -853,19 +857,11 @@ function planActivityDetailHtml(event: LiveEvent): string {
 
 function activityDetailHtml(callId: string): string {
   const detail = activityAuditDetails.get(callId)
-  if (!detail) return '<div class="timeline-detail loading-detail">Loading output…</div>'
-  const output = detail.output as JsonRecord | undefined
-  const structured = (output?.structuredContent || output?.structured_content) as JsonRecord | undefined
-  const payload = (structured?.data || output?.data || structured || output || detail) as unknown
-  if (payload && typeof payload === "object" && !Array.isArray(payload)) {
-    const record = payload as JsonRecord
-    const chunks: string[] = []
-    if (record.command) chunks.push(`$ ${String(record.command)}`)
-    if (record.stdout) chunks.push(String(record.stdout))
-    if (record.stderr) chunks.push(`stderr:\n${String(record.stderr)}`)
-    if (chunks.length) return `<pre class="timeline-detail">${escapeHtml(truncateContext(chunks.join("\n"), 24_000))}</pre>`
-  }
-  return `<pre class="timeline-detail">${escapeHtml(truncateContext(JSON.stringify(payload, null, 2), 24_000))}</pre>`
+  if (!detail) return '<div class="timeline-detail loading-detail">Loading details…</div>'
+  const entry = detail as unknown as AuditEntry
+  const inputText = truncateContext(formatAuditValue(auditInput(entry), "No input"), 24_000)
+  const outputText = truncateContext(formatAuditValue(auditOutput(entry), "No output"), 24_000)
+  return `<div class="timeline-detail activity-io-detail"><section class="activity-io-pane"><header>Input</header><pre>${escapeHtml(inputText)}</pre></section><section class="activity-io-pane"><header>Output</header><pre>${escapeHtml(outputText)}</pre></section></div>`
 }
 
 async function toggleActivityDetail(eventKey: string, callId: string): Promise<void> {
@@ -896,13 +892,26 @@ async function toggleActivityDetail(eventKey: string, callId: string): Promise<v
   }
 }
 
-async function askAboutLatestActivity(): Promise<void> {
-  const recent = durableSessionEvents().slice(-20)
+async function askAboutActivity(eventKey: string, callId: string): Promise<void> {
+  const event = coalesceActivityEvents(durableSessionEvents()).find((item) => activityEventKey(item) === eventKey)
+  if (!event) throw new Error("Activity record is no longer available")
+  let auditDetail = callId ? activityAuditDetails.get(callId) : undefined
+  if (callId && !auditDetail) {
+    try {
+      auditDetail = await api<JsonRecord>(`/api/ui/audit/detail?id=${encodeURIComponent(`call:${callId}`)}`)
+      activityAuditDetails.set(callId, auditDetail)
+    } catch {
+      auditDetail = undefined
+    }
+  }
+  const context = auditDetail
+    ? `${formatClock(event.ts)} ${eventTitle(event)} — ${eventDetail(event)}\n\nInput:\n${formatAuditValue(auditInput(auditDetail as unknown as AuditEntry), "No input")}\n\nOutput:\n${formatAuditValue(auditOutput(auditDetail as unknown as AuditEntry), "No output")}`
+    : `${formatClock(event.ts)} ${eventTitle(event)} — ${eventDetail(event)}\n\n${JSON.stringify(event.data, null, 2)}`
   await updateHostModelContext({
-    content: [{ type: "text", text: `Live Workspace recent operational activity:\n${recent.map((event) => `${formatClock(event.ts)} ${eventTitle(event)} — ${eventDetail(event)}`).join("\n")}` }],
-    structuredContent: { liveWorkspaceEvents: recent },
+    content: [{ type: "text", text: `Selected Live Workspace activity:\n${truncateContext(context, 28_000)}` }],
+    structuredContent: { liveWorkspaceEvent: event, ...(auditDetail ? { liveWorkspaceAuditDetail: auditDetail } : {}) },
   })
-  await sendHostMessage({ role: "user", content: [{ type: "text", text: "Review the recent Live Workspace activity and tell me what matters, especially any failure, blocker, or next action." }] })
+  await sendHostMessage({ role: "user", content: [{ type: "text", text: "Explain this Live Workspace activity, including what it did, its result, and whether I need to take any action." }] })
 }
 
 function renderTerminal(): void {
