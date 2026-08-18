@@ -1024,3 +1024,126 @@ def test_terminal_transition_rolls_back_when_activity_persistence_fails(
     restored = SessionRuntimeManager(state_dir)
     durable = restored.manage("user", action="get", session_id=session_id)
     assert durable["status"] == "active"
+
+
+def test_explicit_session_edge_contracts_cover_terminal_and_cleanup_paths(tmp_path):
+    manager = SessionRuntimeManager(tmp_path / ".state")
+
+    assert manager.plan_state(None) is None
+    assert manager.begin_tool_call(None, "no-session") is None
+    assert manager.finish_tool_call(None, "tool.completed") is None
+    assert manager.retry_tool_call_cleanup(None) is True
+    assert manager.retry_tool_call_cleanup({}) is True
+    assert manager.renew_tool_call(None) is False
+    assert manager.renew_tool_call({}) is False
+
+    started = manager.manage("user", action="start", objective="Explicit session edges")
+    session_id = started["session_id"]
+    with pytest.raises(ValueError, match="action=report requires"):
+        manager.manage("user", action="report", session_id=session_id)
+
+    reported = manager.manage(
+        "user",
+        action="report",
+        session_id=session_id,
+        findings=["", "finding"],
+        blockers=["blocker"],
+        objective="Updated objective",
+        label="Updated label",
+    )
+    assert reported["objective"] == "Updated objective"
+    assert reported["label"] == "Updated label"
+    assert reported["progress"]["findings"] == ["finding"]
+    assert reported["progress"]["blockers"] == ["blocker"]
+
+    lease = manager.begin_tool_call(session_id, "call-1", data={"tool": "run_shell"})
+    assert lease is not None
+    with pytest.raises(ValueError, match="while tool calls are in flight"):
+        manager.manage("user", action="delete", session_id=session_id)
+    assert manager.renew_tool_call({"session_id": session_id, "call_id": "missing"}) is False
+    assert manager.finish_tool_call(
+        {"session_id": "s_missing", "call_id": "missing"}, "tool.completed"
+    ) is None
+    assert manager.finish_tool_call(lease, "tool.completed") is None
+
+    cancelled = manager.manage("user", action="cancel", session_id=session_id)
+    assert cancelled["status"] == "cancelled"
+    with pytest.raises(RuntimeError, match="Logical session is cancelled"):
+        manager.begin_tool_call(session_id, "after-cancel")
+    with pytest.raises(ValueError, match="Logical session is cancelled"):
+        manager.manage("user", action="report", session_id=session_id, summary="too late")
+    with pytest.raises(ValueError, match="Logical session is cancelled"):
+        manager.manage_plan(
+            session_id,
+            action="start",
+            objective="Too late",
+            steps=[{"id": "x", "text": "x"}],
+        )
+    assert manager.manage("user", action="delete", session_id=session_id) == {
+        "session_id": session_id,
+        "deleted": True,
+    }
+
+
+def test_tool_lease_renew_and_cleanup_restore_state_on_persistence_failure(
+    tmp_path, monkeypatch
+):
+    manager = SessionRuntimeManager(tmp_path / ".state")
+    session_id = manager.manage("user", action="start", objective="Lease rollback")["session_id"]
+    lease = manager.begin_tool_call(session_id, "call-rollback")
+    assert lease is not None
+
+    logical = manager._sessions[session_id]
+    previous = logical.in_flight_calls["call-rollback"]["heartbeat_at"]
+    original_save = manager._save_locked
+
+    def fail_save(_session):
+        raise OSError("lease persistence failed")
+
+    monkeypatch.setattr(manager, "_save_locked", fail_save)
+    with pytest.raises(OSError, match="lease persistence failed"):
+        manager.renew_tool_call(lease)
+    assert logical.in_flight_calls["call-rollback"]["heartbeat_at"] == previous
+
+    with pytest.raises(OSError, match="lease persistence failed"):
+        manager.retry_tool_call_cleanup(lease)
+    assert "call-rollback" in manager._sessions[session_id].in_flight_calls
+
+    monkeypatch.setattr(manager, "_save_locked", original_save)
+    assert manager.retry_tool_call_cleanup(lease) is True
+    assert "call-rollback" not in manager._sessions[session_id].in_flight_calls
+
+
+def test_continuation_abandon_and_unreserved_report_edges(tmp_path):
+    manager = SessionRuntimeManager(tmp_path / ".state")
+    session_id = manager.manage("user", action="start", objective="Continuation edges")[
+        "session_id"
+    ]
+    manager.manage_plan(
+        session_id,
+        action="start",
+        objective="Continuation edges",
+        steps=[{"id": "work", "text": "Work"}],
+    )
+    plan = manager._sessions[session_id].plan
+    assert plan is not None
+    plan.last_agent_activity -= PLAN_EXECUTION_LEASE_S + 1
+
+    claim = manager.claim_plan_continuation(session_id, claim_id="c_abandon")
+    assert claim is not None
+    assert manager.abandon_plan_continuation(session_id, None) is False
+    assert manager.abandon_plan_continuation(session_id, "wrong") is False
+    assert manager.abandon_plan_continuation(session_id, "c_abandon") is True
+    assert manager.plan_state(session_id)["continuation_pending"] is False
+
+    claim = manager.claim_plan_continuation(session_id, claim_id="c_unreserved")
+    assert claim is not None
+    with pytest.raises(ValueError, match="claim is stale"):
+        manager.report_plan_continuation(
+            session_id, accepted=False, claim_id="wrong-claim"
+        )
+    with pytest.raises(ValueError, match="not reserved"):
+        manager.report_plan_continuation(
+            session_id, accepted=True, claim_id="c_unreserved"
+        )
+    assert manager.abandon_plan_continuation(session_id, "c_unreserved") is True

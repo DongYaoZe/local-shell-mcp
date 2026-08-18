@@ -1675,3 +1675,136 @@ async def test_live_workspace_session_lookups_run_off_event_loop(tmp_path, monke
     )
 
     assert get_threads and all(thread_id != loop_thread for thread_id in get_threads)
+
+
+def test_live_resource_fallbacks_and_explicit_channel_rebinding(tmp_path, monkeypatch):
+    missing = tmp_path / "missing.html"
+    monkeypatch.setattr(live_channel_module, "_LIVE_RESOURCE_PATH", missing)
+    assert live_channel_module._versioned_live_resource_uri().endswith("-unbuilt.html")
+
+    aliases = tmp_path / "aliases.json"
+    monkeypatch.setattr(live_channel_module, "_LIVE_RESOURCE_ALIASES_PATH", aliases)
+    assert live_channel_module._compat_live_resource_uris() == ()
+    aliases.write_text("{}", encoding="utf-8")
+    assert live_channel_module._compat_live_resource_uris() == ()
+    aliases.write_text(
+        '[123, "bad", "0123456789ABCDEF", "0123456789abcdef", "0123456789abcdeg"]',
+        encoding="utf-8",
+    )
+    assert live_channel_module._compat_live_resource_uris() == (
+        "ui://local-shell-mcp/live-workspace-0123456789abcdef.html",
+    )
+
+    manager = LiveChannelManager()
+    channel, _ = manager.open(subject="user", scopes=tuple(ALL_OAUTH_SCOPES))
+    with manager._lock:
+        manager._set_logical_session_locked(channel, "s_one")
+        first_generation = channel.binding_generation
+        manager._set_logical_session_locked(channel, "s_one")
+        assert channel.binding_generation == first_generation
+        manager._set_logical_session_locked(channel, "s_two")
+    assert manager.active_for_logical_session("s_one") is None
+    assert manager.active_for_logical_session("s_two") is channel
+    assert manager.active_for_logical_session("s_two", subject="other") is None
+    detached = manager.detach_logical_session("s_two")
+    assert detached == [channel]
+    assert channel.logical_session_id is None
+
+
+def test_live_routes_reject_binding_churn_and_stale_continuation(tmp_path, monkeypatch):
+    _configure(tmp_path, monkeypatch, auth="oauth")
+    live_manager = live_channel_module.get_live_channel_manager()
+    session_manager = session_runtime_module.get_session_runtime_manager()
+    session_id = session_manager.manage(
+        "user", action="start", objective="Binding churn"
+    )["session_id"]
+    session_manager.manage_plan(
+        session_id,
+        action="start",
+        objective="Binding churn",
+        steps=[{"id": "work", "text": "Work"}],
+    )
+    channel, token = live_manager.open(
+        subject="user",
+        scopes=tuple(ALL_OAUTH_SCOPES),
+        logical_session_id=session_id,
+    )
+    headers = {"Authorization": f"Bearer {token}"}
+    app = _build_mcp_http_app(build_mcp())
+
+    with TestClient(app, base_url="http://testserver") as client:
+        monkeypatch.setattr(live_manager, "binding_matches", lambda *_args, **_kwargs: False)
+        snapshot = client.get("/api/live/snapshot", headers=headers)
+        assert snapshot.status_code == 409
+        events = client.get("/api/live/events?after=0&timeout=1", headers=headers)
+        assert events.status_code == 409
+
+        paused = client.post(
+            "/api/live/plan", headers=headers, json={"action": "pause"}
+        )
+        assert paused.status_code == 409
+
+        # Restore the real binding check and reactivate the Plan after the human
+        # mutation above; then exercise continuation request validation.
+        monkeypatch.undo()
+        _configure(tmp_path, monkeypatch, auth="oauth")
+        live_manager = live_channel_module.get_live_channel_manager()
+        session_manager = session_runtime_module.get_session_runtime_manager()
+        session_id = session_manager.manage(
+            "user", action="start", objective="Stale continuation"
+        )["session_id"]
+        session_manager.manage_plan(
+            session_id,
+            action="start",
+            objective="Stale continuation",
+            steps=[{"id": "work", "text": "Work"}],
+        )
+        state = session_manager._sessions[session_id]
+        assert state.plan is not None
+        state.plan.last_agent_activity -= session_runtime_module.PLAN_EXECUTION_LEASE_S + 1
+        channel, token = live_manager.open(
+            subject="user",
+            scopes=tuple(ALL_OAUTH_SCOPES),
+            logical_session_id=session_id,
+        )
+        headers = {"Authorization": f"Bearer {token}"}
+        app = _build_mcp_http_app(build_mcp())
+        missing_validate = client.post(
+            "/api/live/plan/continuation",
+            headers=headers,
+            json={"action": "validate"},
+        )
+        assert missing_validate.status_code == 400
+        missing_report = client.post(
+            "/api/live/plan/continuation",
+            headers=headers,
+            json={"action": "report", "accepted": False},
+        )
+        assert missing_report.status_code == 400
+
+    # Use a fresh TestClient after reconfiguring module globals above.
+    with TestClient(app, base_url="http://testserver") as client:
+        monkeypatch.setattr(live_manager, "binding_matches", lambda *_args, **_kwargs: False)
+        stale = client.post(
+            "/api/live/plan/continuation",
+            headers=headers,
+            json={"action": "claim", "claim_id": "c_binding_changed"},
+        )
+        assert stale.status_code == 409
+    assert session_manager.plan_state(session_id)["continuation_pending"] is False
+
+
+def test_live_git_route_reports_local_failure(tmp_path, monkeypatch):
+    _configure(tmp_path, monkeypatch, auth="oauth")
+    manager = live_channel_module.get_live_channel_manager()
+    _channel, token = manager.open(subject="user", scopes=tuple(ALL_OAUTH_SCOPES))
+    monkeypatch.setenv("LOCAL_SHELL_MCP_DISABLE_LOCAL", "true")
+    get_settings.cache_clear()
+    app = _build_mcp_http_app(build_mcp())
+    with TestClient(app, base_url="http://testserver") as client:
+        response = client.get(
+            "/api/live/git?machine=local&cwd=.",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    assert response.status_code == 400
+    assert "Local access is disabled" in response.json()["message"]
