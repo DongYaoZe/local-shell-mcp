@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 
-const nativePages = ["files", "terminals", "remotes", "audit"] as const
+const nativePages = ["files", "terminals", "sessions", "remotes", "audit"] as const
 
 describe("Native WebUI actions", () => {
   test("uses visible controls instead of shortcut footers", async () => {
@@ -13,22 +13,24 @@ describe("Native WebUI actions", () => {
 
   test("does not register document-wide single-key actions on ordinary WebUI pages", async () => {
     const sources = await Promise.all(
-      ["files", "remotes", "audit"].map((page) => Bun.file(new URL(`./web-native/${page}.ts`, import.meta.url)).text()),
+      ["files", "sessions", "remotes", "audit"].map((page) => Bun.file(new URL(`./web-native/${page}.ts`, import.meta.url)).text()),
     )
 
     for (const source of sources) expect(source).not.toContain('this.listen(document, "keydown"')
   })
 
-  test("keeps file and remote rows keyboard accessible within their page", async () => {
+  test("keeps file, session, and remote rows keyboard accessible within their page", async () => {
     const files = await Bun.file(new URL("./web-native/files.ts", import.meta.url)).text()
+    const sessions = await Bun.file(new URL("./web-native/sessions.ts", import.meta.url)).text()
     const remotes = await Bun.file(new URL("./web-native/remotes.ts", import.meta.url)).text()
 
-    for (const source of [files, remotes]) {
+    for (const source of [files, sessions, remotes]) {
       expect(source).toContain('this.listen(root, "keydown"')
       expect(source).toContain('tabindex="${selected ? "0" : "-1"}"')
       expect(source).toContain('event.key === "ArrowDown"')
       expect(source).toContain('event.key === "Enter"')
     }
+    expect(sessions).toContain("data-session-id")
     expect(remotes).toContain("data-remote-name")
     expect(remotes).toContain("focusedName")
     expect(files).toContain("this.select(entryPath, true)")

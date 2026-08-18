@@ -310,6 +310,10 @@ class LiveChannelManager:
                     raise ValueError(
                         "Live workspace reattach is ambiguous; provide live_id or session_id"
                     )
+                elif any(existing.subject == subject for existing in self._channels.values()):
+                    raise ValueError(
+                        "Live workspace reattach has no recoverable context; provide live_id or session_id"
+                    )
             if channel is None:
                 token = secrets.token_urlsafe(32)
                 digest = self._digest(token)

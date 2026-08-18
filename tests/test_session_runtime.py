@@ -89,6 +89,20 @@ def test_session_list_requires_subject(tmp_path):
         manager.list_sessions(subject="")
 
 
+def test_session_list_supports_trusted_unscoped_human_view_and_actor(tmp_path):
+    manager = SessionRuntimeManager(tmp_path / ".state")
+    first = manager.manage("alpha", action="start", label="First", actor="human")
+    second = manager.manage("beta", action="start", label="Second")
+    manager.manage("alpha", action="cancel", session_id=first["session_id"], actor="human")
+
+    sessions = manager.list_sessions(subject=None)
+
+    assert {item["session_id"] for item in sessions} == {first["session_id"], second["session_id"]}
+    detail = manager.get(first["session_id"])
+    assert detail["recent_activity"][0]["actor"] == "human"
+    assert detail["recent_activity"][-1]["actor"] == "human"
+
+
 def test_session_public_state_exposes_full_rolling_activity_window(tmp_path):
     state_dir = tmp_path / ".state"
     manager = SessionRuntimeManager(state_dir)

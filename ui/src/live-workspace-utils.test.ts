@@ -19,6 +19,8 @@ import {
   toggleWorkspaceDisplayMode,
   reconnectDelayMs,
   toolResultFromOpenAiGlobals,
+  liveWorkspaceResumeHintFromOpenAiGlobals,
+  liveWorkspaceWidgetStateWithHint,
   truncateContext,
   type LiveEvent,
 } from "./live-workspace-utils"
@@ -54,7 +56,20 @@ describe("live workspace utilities", () => {
     expect(source).not.toContain("function renderDiff()")
     expect(css).not.toContain(".diff-view")
     expect(css).not.toContain(".diff-layout")
-    expect(source).toContain('class="task-monitor-body ${overview ? "has-overview" : ""}"')
+    const activityStart = source.indexOf("function renderActivity")
+    const activityEnd = source.indexOf("function sessionProgressPanel", activityStart)
+    const activitySource = source.slice(activityStart, activityEnd)
+    expect(activitySource).toContain('class="task-monitor-body ${overview ? "has-overview" : ""}"')
+    expect(activitySource).toContain('class="session-activity-stream"')
+    expect(activitySource).not.toContain('class="panel activity-panel session-activity-panel"')
+    expect(activitySource).not.toContain('data-action="activity-ask"')
+    expect(activitySource).not.toContain('data-action="refresh"')
+    expect(source).toContain('data-action="activity-ask-event"')
+    expect(source).toContain('class="timeline-detail activity-io-detail"')
+    expect(source).toContain('<header>Input</header>')
+    expect(source).toContain('<header>Output</header>')
+    expect(css).toContain(".activity-io-detail { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);")
+    expect(css).toContain(".activity-io-detail { grid-template-columns: 1fr; }")
     expect(source).toContain("const goalStatus = compactPlanStatus()")
     expect(source).toContain('class="compact-plan-status ${escapeHtml(plan.status)}"')
     expect(css).toContain(".task-monitor-body.has-overview { grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr); }")
@@ -67,6 +82,41 @@ describe("live workspace utilities", () => {
     expect(source).not.toContain("Explanation:")
     expect(source).not.toContain("Purpose:")
     expect(css).toContain(".timeline-purpose { color: var(--ls-text-2); font-family: var(--ls-font); font-weight: 500; }")
+  })
+
+  test("wide workspaces merge navigation into the top header", async () => {
+    const source = await Bun.file(new URL("./live-workspace.ts", import.meta.url)).text()
+    const css = await Bun.file(new URL("./live-workspace.css", import.meta.url)).text()
+    const shellStart = source.indexOf("function shell")
+    const shellEnd = source.indexOf("function tabButton", shellStart)
+    const shellSource = source.slice(shellStart, shellEnd)
+    const headerStart = shellSource.indexOf('<header class="topbar">')
+    const headerEnd = shellSource.indexOf("</header>", headerStart)
+    const headerSource = shellSource.slice(headerStart, headerEnd)
+    expect(headerSource).toContain('<nav class="tabs" aria-label="Workspace views">')
+    expect(css).toContain(".topbar { flex: 0 0 auto; min-height: 42px; display: grid; grid-template-columns: minmax(0, 1fr) auto auto;")
+    expect(css).toContain("@media (max-width: 900px)")
+    expect(css).toContain(".tabs { grid-column: 1 / -1; grid-row: 2;")
+  })
+
+  test("workspace tabs distinguish initial loading from confirmed empty states", async () => {
+    const source = await Bun.file(new URL("./live-workspace.ts", import.meta.url)).text()
+    const css = await Bun.file(new URL("./live-workspace.css", import.meta.url)).text()
+    expect(source).toContain('let activityLoaded = false')
+    expect(source).toContain('let terminalsLoaded = false')
+    expect(source).toContain('let filesLoaded = false')
+    expect(source).toContain('let auditLoaded = false')
+    expect(source).toContain('Loading activity…')
+    expect(source).toContain('Loading terminals…')
+    expect(source).toContain('Loading files…')
+    expect(source).toContain('Loading jobs and sessions…')
+    expect(source).toContain('Loading remote machines…')
+    expect(source).toContain('Loading audit stream…')
+    expect(source).toContain('filesLoaded = true')
+    expect(source).toContain('terminalsLoaded = true')
+    expect(source).toContain('activityLoaded = true')
+    expect(source).toContain('auditLoaded = true')
+    expect(css).toContain('.loading.view-loading { flex: 1 1 auto; min-height: 0; }')
   })
 
   test("remote machine cards keep their intrinsic height inside the full-height grid", async () => {
@@ -434,5 +484,83 @@ describe("live workspace utilities", () => {
     })
 
     expect(result?.structuredContent).toEqual({ live_id: "live-2" })
+  })
+
+  test("ChatGPT compatibility globals prefer current toolOutput over stale metadata content", () => {
+    const result = toolResultFromOpenAiGlobals({
+      toolOutput: {
+        live_id: "live-current",
+        session_id: "s_current",
+        machine: "local",
+        cwd: "/workspace/local-shell-mcp",
+      },
+      toolResponseMetadata: {
+        mcp_tool_result: {
+          _meta: {
+            "local-shell-mcp/live": {
+              token: "current-or-refreshable-token",
+              apiBase: "https://lsm.example.test",
+            },
+          },
+          structuredContent: {
+            live_id: "live-stale",
+            session_id: "s_stale",
+            machine: "local",
+            cwd: "/workspace/capos",
+          },
+        },
+      },
+    })
+
+    expect(result?.structuredContent).toEqual({
+      live_id: "live-current",
+      session_id: "s_current",
+      machine: "local",
+      cwd: "/workspace/local-shell-mcp",
+    })
+    expect(result?._meta).toEqual({
+      "local-shell-mcp/live": {
+        token: "current-or-refreshable-token",
+        apiBase: "https://lsm.example.test",
+      },
+    })
+  })
+
+  test("ChatGPT widget state round-trips the workspace identity without credentials", () => {
+    const state = liveWorkspaceWidgetStateWithHint(
+      { widgetState: { selectedTab: "activity" } },
+      {
+        live_id: "live-current",
+        session_id: "s_current",
+        machine: "local",
+        cwd: "/workspace/local-shell-mcp",
+      },
+    )
+
+    expect(state).toEqual({
+      selectedTab: "activity",
+      localShellMcpLiveWorkspace: {
+        live_id: "live-current",
+        session_id: "s_current",
+        machine: "local",
+        cwd: "/workspace/local-shell-mcp",
+      },
+    })
+    expect(liveWorkspaceResumeHintFromOpenAiGlobals({ widgetState: state })).toEqual({
+      live_id: "live-current",
+      session_id: "s_current",
+      machine: "local",
+      cwd: "/workspace/local-shell-mcp",
+    })
+    expect(JSON.stringify(state)).not.toContain("token")
+    expect(JSON.stringify(state)).not.toContain("apiBase")
+  })
+
+  test("ChatGPT widget state ignores empty workspace hints", () => {
+    expect(liveWorkspaceResumeHintFromOpenAiGlobals({
+      widgetState: {
+        localShellMcpLiveWorkspace: { live_id: "", session_id: "" },
+      },
+    })).toBeNull()
   })
 })

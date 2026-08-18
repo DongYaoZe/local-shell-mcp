@@ -7,6 +7,8 @@ import type {
   FilePreview,
   FilesPayload,
   InvitePayload,
+  LogicalSession,
+  LogicalSessionsPayload,
   MachinePayload,
   TerminalPayload,
 } from "./types"
@@ -70,6 +72,18 @@ export const api = {
   },
   machines(): Promise<MachinePayload> {
     return request("/machines")
+  },
+  sessions(signal?: AbortSignal): Promise<LogicalSessionsPayload> {
+    return request("/logical-sessions", { signal })
+  },
+  sessionDetail(sessionId: string, signal?: AbortSignal): Promise<LogicalSession> {
+    return request(`/logical-sessions/detail${queryString({ session_id: sessionId })}`, { signal })
+  },
+  sessionAction<T = unknown>(action: string, body: Record<string, unknown>): Promise<T> {
+    return request(`/logical-sessions/${encodeURIComponent(action)}`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    })
   },
   files(machine: string, path: string, signal?: AbortSignal): Promise<FilesPayload> {
     return request(`/files${queryString({ machine, path })}`, { signal })

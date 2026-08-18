@@ -201,6 +201,7 @@ button.summary-card { cursor: pointer; }
 
 /* Logical Sessions — durable task list + checkpoint/plan/activity detail */
 .sessions-summary { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 9px; }
+.sessions-controls { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
 .sessions-filter { display: flex; align-items: center; gap: 7px; color: #7f8898; font-size: 12px; font-weight: 650; }
 .sessions-filter select { height: 32px; min-width: 140px; padding: 0 9px; color: #394255; background: #fff; border: 1px solid #dfe3eb; border-radius: 8px; outline: none; font-size: 12px; }
 .sessions-filter select:focus { border-color: #8f84ed; box-shadow: 0 0 0 3px rgba(103,89,231,.1); }
@@ -321,6 +322,7 @@ button.summary-card { cursor: pointer; }
 @media (max-width: 850px) {
   .native-toolbar { align-items: flex-start; flex-direction: column; }
   .toolbar-actions { width: 100%; justify-content: flex-start; }
+  .sessions-controls { width: 100%; justify-content: flex-start; }
   .files-toolbar { display: flex; }
   .path-bar { width: 100%; }
   .path-bar > input { flex: 1; width: auto !important; }

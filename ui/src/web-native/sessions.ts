@@ -1,10 +1,14 @@
 import type { LogicalSession, LogicalSessionsPayload } from "../types"
 import {
   BaseController,
+  button,
+  confirmDialog,
+  copyText,
   escapeHtml,
   formatAge,
   formatDate,
   highlightedHtml,
+  openFormDialog,
   queryString,
   type NativePageContext,
 } from "./common"
@@ -41,8 +45,11 @@ export class SessionsController extends BaseController {
     this.root.innerHTML = `<section class="native-page sessions-page">
       <div class="sessions-summary" data-role="sessions-summary"></div>
       <div class="native-toolbar sessions-toolbar">
-        <div><strong>Logical Sessions</strong><span class="toolbar-detail">Durable agent tasks scoped to the authenticated principal</span></div>
-        <label class="sessions-filter"><span>Status</span><select data-filter="status">${SESSION_STATUSES.map((status) => `<option value="${status}">${status === "all" ? "All sessions" : status}</option>`).join("")}</select></label>
+        <div><strong>Logical Sessions</strong><span class="toolbar-detail">Durable agent tasks handed off explicitly by session_id</span></div>
+        <div class="sessions-controls">
+          <label class="sessions-filter"><span>Status</span><select data-filter="status">${SESSION_STATUSES.map((status) => `<option value="${status}">${status === "all" ? "All sessions" : status}</option>`).join("")}</select></label>
+          <div class="toolbar-actions">${button("New", "new-session", { primary: true })}${button("Copy ID", "copy-id", { disabled: true })}${button("Finish", "finish", { disabled: true })}${button("Cancel", "cancel", { danger: true, disabled: true })}${button("Delete", "delete", { danger: true, disabled: true })}</div>
+        </div>
       </div>
       <div class="sessions-layout">
         <section class="native-panel sessions-list-panel">
@@ -77,6 +84,7 @@ export class SessionsController extends BaseController {
       }
       this.renderSummary()
       this.renderList()
+      this.renderActions()
       void this.loadDetail()
     } catch (error) {
       if (!this.destroyed) this.context.notify(`Logical Sessions: ${error instanceof Error ? error.message : String(error)}`, "error")
@@ -137,6 +145,7 @@ export class SessionsController extends BaseController {
       if (this.destroyed || request !== this.detailRequest) return
       this.detail = detail
       this.renderDetail()
+      this.renderActions()
     } catch (error) {
       if (this.destroyed || request !== this.detailRequest) return
       this.context.notify(`Session detail: ${error instanceof Error ? error.message : String(error)}`, "error")
@@ -158,6 +167,7 @@ export class SessionsController extends BaseController {
         status.textContent = "—"
       }
       target.innerHTML = loading ? '<div class="native-loading">Loading session details…</div>' : '<div class="native-empty">No session selected</div>'
+      this.renderActions()
       return
     }
     if (title) title.textContent = session.label || "Untitled session"
@@ -170,7 +180,95 @@ export class SessionsController extends BaseController {
     const plan = session.plan
     const planHtml = plan ? `<section class="session-section"><div class="session-section-title"><h4>Plan</h4><span class="status-chip ${sessionTone(plan.status)}">${escapeHtml(plan.status)}</span></div><p class="session-plan-objective">${escapeHtml(plan.objective)}</p>${plan.note ? `<p class="session-note">${escapeHtml(plan.note)}</p>` : ""}<div class="session-plan-steps">${plan.steps.map((step) => `<article><span class="status-chip ${sessionTone(step.status)}">${escapeHtml(step.status)}</span><div><strong>${escapeHtml(step.text)}</strong><small>${escapeHtml(step.id)}${step.note ? ` · ${escapeHtml(step.note)}` : ""}</small></div></article>`).join("") || '<div class="native-empty">No plan steps</div>'}</div></section>` : '<section class="session-section"><div class="session-section-title"><h4>Plan</h4></div><div class="native-empty compact">No Goal/Plan attached</div></section>'
     const activityHtml = session.recent_activity.length ? session.recent_activity.slice().reverse().map((event) => `<article class="session-activity-row"><div><strong>${escapeHtml(event.type)}</strong><span>${escapeHtml(event.actor)} · ${formatAge(event.ts)}</span></div><pre>${highlightedHtml(JSON.stringify(event.data || {}, null, 2), "activity.json")}</pre></article>`).join("") : '<div class="native-empty compact">No activity recorded</div>'
-    target.innerHTML = `<section class="session-identity"><dl class="detail-grid"><div><dt>Session ID</dt><dd><code>${escapeHtml(session.session_id)}</code></dd></div><div><dt>Created</dt><dd>${formatDate(session.created_at)}</dd></div><div><dt>Updated</dt><dd>${formatDate(session.updated_at)}</dd></div><div><dt>Status</dt><dd>${escapeHtml(session.status)}</dd></div></dl></section>${textBlock("Objective", session.objective)}<section class="session-section"><div class="session-section-title"><h4>Progress</h4><span>${progress.updated_at ? `Updated ${formatAge(progress.updated_at)}` : "No checkpoint timestamp"}</span></div><div class="session-progress-grid">${textBlock("Summary", progress.summary)}${textBlock("Next", progress.next)}${stringList("Findings", progress.findings || [])}${stringList("Blockers", progress.blockers || [])}</div></section>${planHtml}<section class="session-section"><div class="session-section-title"><h4>Recent activity</h4><span>${session.recent_activity.length} events</span></div><div class="session-activity">${activityHtml}</div></section>`
+    target.innerHTML = `<section class="session-identity"><dl class="detail-grid"><div><dt>Session ID</dt><dd><code>${escapeHtml(session.session_id)}</code></dd></div><div><dt>Created</dt><dd>${formatDate(session.created_at)}</dd></div><div><dt>Updated</dt><dd>${formatDate(session.updated_at)}</dd></div><div><dt>Status</dt><dd>${escapeHtml(session.status)}</dd></div></dl></section>${textBlock("Prompt / objective", session.objective)}<section class="session-section"><div class="session-section-title"><h4>Progress</h4><span>${progress.updated_at ? `Updated ${formatAge(progress.updated_at)}` : "No checkpoint timestamp"}</span></div><div class="session-progress-grid">${textBlock("Summary", progress.summary)}${textBlock("Next", progress.next)}${stringList("Findings", progress.findings || [])}${stringList("Blockers", progress.blockers || [])}</div></section>${planHtml}<section class="session-section"><div class="session-section-title"><h4>Recent activity</h4><span>${session.recent_activity.length} events</span></div><div class="session-activity">${activityHtml}</div></section>`
+    this.renderActions()
+  }
+
+  private selectedSession(): LogicalSession | undefined {
+    return this.detail?.session_id === this.selectedId
+      ? this.detail
+      : this.sessions.find((session) => session.session_id === this.selectedId)
+  }
+
+  private renderActions(): void {
+    const session = this.selectedSession()
+    const active = session?.status === "active"
+    const activePlan = active && session?.plan && ["active", "blocked"].includes(session.plan.status)
+    const states: Record<string, boolean> = {
+      "copy-id": !session,
+      finish: !active || Boolean(activePlan),
+      cancel: !active,
+      delete: !session || active,
+    }
+    for (const [action, disabled] of Object.entries(states)) {
+      const control = this.root.querySelector<HTMLButtonElement>(`[data-action="${action}"]`)
+      if (control) control.disabled = disabled
+    }
+  }
+
+  private async createSession(): Promise<void> {
+    const values = await openFormDialog({
+      title: "New logical session",
+      detail: "The prompt is saved as the session objective. Handoff still requires passing session_id explicitly.",
+      fields: [
+        { name: "label", label: "Label", placeholder: "Optional short name" },
+        { name: "prompt", label: "Prompt", type: "textarea", placeholder: "Describe the task for the agent…", required: false },
+      ],
+      submitLabel: "Create session",
+      wide: true,
+    })
+    if (!values) return
+    try {
+      const created = await this.context.api.send<LogicalSession>("/logical-sessions/start", "POST", {
+        label: values.label.trim() || undefined,
+        prompt: values.prompt.trim() || undefined,
+      })
+      this.filter = "all"
+      const filter = this.root.querySelector<HTMLSelectElement>('[data-filter="status"]')
+      if (filter) filter.value = "all"
+      this.selectedId = created.session_id
+      this.detail = created
+      await this.refresh()
+      this.context.notify(`Created ${created.session_id}`, "success")
+    } catch (error) {
+      this.context.notify(`Create session: ${error instanceof Error ? error.message : String(error)}`, "error")
+    }
+  }
+
+  private async copySessionId(): Promise<void> {
+    const session = this.selectedSession()
+    if (!session) return
+    const copied = await copyText(session.session_id)
+    this.context.notify(copied ? `Copied ${session.session_id}` : "Unable to copy session_id", copied ? "success" : "error")
+  }
+
+  private async lifecycle(action: "finish" | "cancel" | "delete"): Promise<void> {
+    const session = this.selectedSession()
+    if (!session) return
+    const activePlan = session.plan && ["active", "blocked"].includes(session.plan.status)
+    if (action === "finish" && activePlan) {
+      this.context.notify("Finish or cancel the active Goal/Plan first.", "warning")
+      return
+    }
+    const confirmed = await confirmDialog(
+      `${action === "finish" ? "Finish" : action === "cancel" ? "Cancel" : "Delete"} logical session`,
+      action === "delete"
+        ? `Permanently delete ${session.session_id} and its durable history?`
+        : `${action === "finish" ? "Mark" : "Cancel"} ${session.session_id}${action === "finish" ? " completed" : ""}?`,
+      action === "finish" ? "Finish" : action === "cancel" ? "Cancel session" : "Delete",
+    )
+    if (!confirmed) return
+    try {
+      await this.context.api.send(`/logical-sessions/${action}`, "POST", { session_id: session.session_id })
+      if (action === "delete") {
+        this.selectedId = null
+        this.detail = null
+      }
+      await this.refresh()
+      this.context.notify(`${action === "finish" ? "Finished" : action === "cancel" ? "Cancelled" : "Deleted"} ${session.session_id}`, "success")
+    } catch (error) {
+      this.context.notify(`${action}: ${error instanceof Error ? error.message : String(error)}`, "error")
+    }
   }
 
   private selectSession(sessionId: string, focus = false): void {
@@ -183,6 +281,11 @@ export class SessionsController extends BaseController {
   }
 
   private onClick(event: MouseEvent): void {
+    const action = (event.target as HTMLElement).closest<HTMLElement>("[data-action]")?.dataset.action
+    if (action === "new-session") void this.createSession()
+    else if (action === "copy-id") void this.copySessionId()
+    else if (action === "finish" || action === "cancel" || action === "delete") void this.lifecycle(action)
+    if (action) return
     const sessionId = (event.target as HTMLElement).closest<HTMLElement>("[data-session-id]")?.dataset.sessionId
     if (sessionId) this.selectSession(sessionId)
   }
@@ -212,7 +315,8 @@ export class SessionsController extends BaseController {
     else if (event.key === "ArrowUp") next = Math.max(0, current - 1)
     else if (event.key === "Home") next = 0
     else if (event.key === "End") next = visible.length - 1
-    else if (event.key !== "Enter" && event.key !== " ") return
+    else if (event.key === "Enter" || event.key === " ") next = current
+    else return
     event.preventDefault()
     const session = visible[next]
     if (session) this.selectSession(session.session_id, true)

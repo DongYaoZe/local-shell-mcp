@@ -6,6 +6,8 @@ import {
 } from "@modelcontextprotocol/ext-apps"
 import { FitAddon } from "@xterm/addon-fit"
 import { Terminal } from "@xterm/xterm"
+import { auditInput, auditOutput, formatAuditValue } from "./audit-utils"
+import type { AuditEntry } from "./types"
 import {
   activityDestination,
   activityEventKey,
@@ -25,6 +27,8 @@ import {
   isOperationalActivityEvent,
   joinPath,
   mergeActivityEvents,
+  liveWorkspaceResumeHintFromOpenAiGlobals,
+  liveWorkspaceWidgetStateWithHint,
   toggleWorkspaceDisplayMode,
   parentPath,
   reconnectDelayMs,
@@ -155,6 +159,7 @@ let passiveRefreshing = false
 let coreRefreshQueued = false
 let plan: PlanState | null = null
 let logicalSession: LogicalSessionState | null = null
+let activityLoaded = false
 let continuationChecking = false
 let continuationClaimId = ""
 type ContinuationDispatch = {
@@ -189,6 +194,7 @@ let terminalResizeObserver: ResizeObserver | null = null
 let terminalMachine = "local"
 let terminalSessions: TerminalSession[] = []
 let selectedSession = ""
+let terminalsLoaded = false
 
 let fileMachine = "local"
 let filePath = "."
@@ -198,9 +204,11 @@ let filePreview: JsonRecord | null = null
 let fileEditing = false
 let fileEditContent = ""
 let fileEditSha = ""
+let filesLoaded = false
 
 let workloadMachine = "local"
 let auditEntries: JsonRecord[] = []
+let auditLoaded = false
 let remoteSnapshot: JsonRecord | null = null
 
 function icon(name: string): string {
@@ -231,13 +239,13 @@ function shell(): void {
             <div class="subtitle" data-role="subtitle">local-shell-mcp · real-time execution</div>
           </div>
         </div>
+        <nav class="tabs" aria-label="Workspace views">
+          ${tabButton("activity", "Activity")}${tabButton("terminal", "Terminal")}${tabButton("files", "Files")}${tabButton("jobs", "Jobs")}${tabButton("remotes", "Remotes")}${tabButton("audit", "Audit")}
+        </nav>
         <div class="top-actions">
           <button class="icon-button" data-action="expand" title="Fullscreen">${icon("expand")}</button>
         </div>
       </header>
-      <nav class="tabs" aria-label="Workspace views">
-        ${tabButton("activity", "Activity")}${tabButton("terminal", "Terminal")}${tabButton("files", "Files")}${tabButton("jobs", "Jobs")}${tabButton("remotes", "Remotes")}${tabButton("audit", "Audit")}
-      </nav>
       <main class="workspace-main" data-role="main"><div class="loading"><span></span>${escapeHtml(connectionMessage)}</div></main>
       <div class="toast-stack" data-role="toasts" aria-live="polite"></div>
       <dialog class="live-dialog" data-role="dialog"><form method="dialog"><h3 data-role="dialog-title"></h3><p data-role="dialog-description"></p><label data-role="dialog-label"><span></span><input data-role="dialog-input"/></label><menu><button value="cancel">Cancel</button><button class="primary" value="confirm">Continue</button></menu></form></dialog>
@@ -374,6 +382,7 @@ function updateChrome(): void {
   const activeSession = dashboard?.sessions?.[0]
   let workspaceStatus = latestCompletedSummary()
   if (running) workspaceStatus = activityIntent(running)
+  else if (config?.sessionId) workspaceStatus ||= "Task idle"
   else if (activeJob) workspaceStatus = `Background: ${String(activeJob.name || activeJob.job_id || "job")}`
   else if (activeSession) workspaceStatus = `Terminal: ${String(activeSession.name || activeSession.session_id || "session")}`
   const subtitle = qs<HTMLElement>("[data-role=subtitle]")
@@ -443,11 +452,13 @@ function onRootWheel(event: WheelEvent): void {
   if (!target) return
 
   const candidates: HTMLElement[] = []
+  const detailPane = target.closest<HTMLElement>(".activity-io-pane pre")
   const detail = target.closest<HTMLElement>(".timeline-detail")
   const timeline = target.closest<HTMLElement>(".session-timeline")
   const overview = target.closest<HTMLElement>(".task-overview-column")
-  if (detail) candidates.push(detail)
-  if (timeline && timeline !== detail) candidates.push(timeline)
+  if (detailPane) candidates.push(detailPane)
+  if (detail && detail !== detailPane) candidates.push(detail)
+  if (timeline && timeline !== detail && timeline !== detailPane) candidates.push(timeline)
   if (overview) candidates.push(overview)
   if (!candidates.length) return
 
@@ -472,7 +483,7 @@ async function handleAction(action: string, target: HTMLElement): Promise<void> 
   try {
     if (action === "expand") await requestDisplayMode(toggleWorkspaceDisplayMode(displayMode))
     else if (action === "refresh") await refreshCurrent(true)
-    else if (action === "activity-ask") await askAboutLatestActivity()
+    else if (action === "activity-ask-event") await askAboutActivity(target.dataset.eventKey || "", target.dataset.callId || "")
     else if (action === "plan-pause") await controlPlan("pause")
     else if (action === "plan-resume") await controlPlan("resume")
     else if (action === "plan-cancel") await controlPlan("cancel")
@@ -511,7 +522,11 @@ async function handleAction(action: string, target: HTMLElement): Promise<void> 
     else if (action === "terminal-copy") await copyTerminal()
     else if (action === "terminal-ctrl-c") sendTerminal("\u0003")
     else if (action === "terminal-reconnect") connectTerminal()
-    else if (action === "file-up") { filePath = parentPath(filePath); selectedFile = ""; await refreshFiles() }
+    else if (action === "file-up") {
+      resetFileTarget(fileMachine, parentPath(filePath))
+      if (activeTab === "files") renderFiles()
+      await refreshFiles()
+    }
     else if (action === "file-new") await createFile(false)
     else if (action === "file-new-dir") await createFile(true)
     else if (action === "file-delete") await deleteSelectedFile()
@@ -650,6 +665,10 @@ function planProgress(): { completed: number; total: number; percent: number; ac
 }
 
 function renderActivity(): void {
+  if (!activityLoaded) {
+    mainNode().innerHTML = '<section class="view activity-view task-monitor-view"><div class="loading view-loading"><span></span>Loading activity…</div></section>'
+    return
+  }
   const previousTimeline = qs<HTMLElement>(".session-timeline")
   const timelineScrollState = previousTimeline
     ? captureReverseFeedScrollState(previousTimeline.scrollTop, previousTimeline.scrollHeight, previousTimeline.clientHeight)
@@ -668,8 +687,7 @@ function renderActivity(): void {
     <section class="view activity-view task-monitor-view">
       <div class="task-monitor-body ${overview ? "has-overview" : ""}">
         ${overview ? `<aside class="task-overview-column" aria-label="Task overview">${overview}</aside>` : ""}
-        <section class="panel activity-panel session-activity-panel">
-          <div class="panel-head activity-panel-head"><strong>Activity</strong><div class="activity-panel-actions"><span>${recent.length}</span><button class="button" data-action="activity-ask">${icon("chat")}Ask</button><button class="button" data-action="refresh">${icon("refresh")}Refresh</button></div></div>
+        <section class="session-activity-stream" aria-label="Activity timeline">
           ${goalStatus}
           <div class="timeline session-timeline">${recent.length ? recent.map(activityRow).join("") : '<div class="empty-state">No execution activity yet. The current task will appear here automatically.</div>'}</div>
         </section>
@@ -768,7 +786,7 @@ function activityRow(event: LiveEvent): string {
     actionLabel = "Open audit"
   } else if (destination === "detail" && callId) {
     action = `data-action="activity-open-detail" data-event-key="${escapeHtml(eventKey)}" data-call-id="${escapeHtml(callId)}"`
-    actionLabel = activityExpandedEventKey === eventKey ? "Hide output" : "View output"
+    actionLabel = activityExpandedEventKey === eventKey ? "Hide details" : "View details"
   } else if (expandablePlanEvent) {
     action = `data-action="activity-toggle-plan-detail" data-event-key="${escapeHtml(eventKey)}"`
     actionLabel = activityExpandedEventKey === eventKey ? "Hide details" : "View details"
@@ -783,7 +801,8 @@ function activityRow(event: LiveEvent): string {
   const subline = purpose || detail
     ? `<p>${purpose ? `<span class="timeline-purpose">${escapeHtml(purpose)}</span>` : ""}${purpose && detail ? '<span class="timeline-separator"> · </span>' : ""}${detail ? `<span class="timeline-summary">${escapeHtml(detail)}</span>` : ""}</p>`
     : ""
-  return `<div class="timeline-row ${eventTone(event)} ${action ? "clickable" : ""}" ${action}><div class="timeline-marker"><span></span></div><div class="timeline-copy"><div><strong>${escapeHtml(eventTitle(event))}</strong><span class="actor ${escapeHtml(event.actor)}">${escapeHtml(event.actor)}</span>${actionLabel ? `<span class="timeline-action">${escapeHtml(actionLabel)}</span>` : ""}</div>${subline}</div><time>${escapeHtml(formatClock(event.ts))}</time>${expanded}</div>`
+  const askButton = `<button class="timeline-ask" data-action="activity-ask-event" data-event-key="${escapeHtml(eventKey)}" data-call-id="${escapeHtml(callId)}" title="Ask about this activity" aria-label="Ask about this activity">${icon("chat")}</button>`
+  return `<div class="timeline-row ${eventTone(event)} ${action ? "clickable" : ""}" ${action}><div class="timeline-marker"><span></span></div><div class="timeline-copy"><div><strong>${escapeHtml(eventTitle(event))}</strong><span class="actor ${escapeHtml(event.actor)}">${escapeHtml(event.actor)}</span>${actionLabel ? `<span class="timeline-action">${escapeHtml(actionLabel)}</span>` : ""}${askButton}</div>${subline}</div><time>${escapeHtml(formatClock(event.ts))}</time>${expanded}</div>`
 }
 
 function togglePlanActivityDetail(eventKey: string): void {
@@ -850,19 +869,11 @@ function planActivityDetailHtml(event: LiveEvent): string {
 
 function activityDetailHtml(callId: string): string {
   const detail = activityAuditDetails.get(callId)
-  if (!detail) return '<div class="timeline-detail loading-detail">Loading output…</div>'
-  const output = detail.output as JsonRecord | undefined
-  const structured = (output?.structuredContent || output?.structured_content) as JsonRecord | undefined
-  const payload = (structured?.data || output?.data || structured || output || detail) as unknown
-  if (payload && typeof payload === "object" && !Array.isArray(payload)) {
-    const record = payload as JsonRecord
-    const chunks: string[] = []
-    if (record.command) chunks.push(`$ ${String(record.command)}`)
-    if (record.stdout) chunks.push(String(record.stdout))
-    if (record.stderr) chunks.push(`stderr:\n${String(record.stderr)}`)
-    if (chunks.length) return `<pre class="timeline-detail">${escapeHtml(truncateContext(chunks.join("\n"), 24_000))}</pre>`
-  }
-  return `<pre class="timeline-detail">${escapeHtml(truncateContext(JSON.stringify(payload, null, 2), 24_000))}</pre>`
+  if (!detail) return '<div class="timeline-detail loading-detail">Loading details…</div>'
+  const entry = detail as unknown as AuditEntry
+  const inputText = truncateContext(formatAuditValue(auditInput(entry), "No input"), 24_000)
+  const outputText = truncateContext(formatAuditValue(auditOutput(entry), "No output"), 24_000)
+  return `<div class="timeline-detail activity-io-detail"><section class="activity-io-pane"><header>Input</header><pre>${escapeHtml(inputText)}</pre></section><section class="activity-io-pane"><header>Output</header><pre>${escapeHtml(outputText)}</pre></section></div>`
 }
 
 async function toggleActivityDetail(eventKey: string, callId: string): Promise<void> {
@@ -893,16 +904,33 @@ async function toggleActivityDetail(eventKey: string, callId: string): Promise<v
   }
 }
 
-async function askAboutLatestActivity(): Promise<void> {
-  const recent = durableSessionEvents().slice(-20)
+async function askAboutActivity(eventKey: string, callId: string): Promise<void> {
+  const event = coalesceActivityEvents(durableSessionEvents()).find((item) => activityEventKey(item) === eventKey)
+  if (!event) throw new Error("Activity record is no longer available")
+  let auditDetail = callId ? activityAuditDetails.get(callId) : undefined
+  if (callId && !auditDetail) {
+    try {
+      auditDetail = await api<JsonRecord>(`/api/ui/audit/detail?id=${encodeURIComponent(`call:${callId}`)}`)
+      activityAuditDetails.set(callId, auditDetail)
+    } catch {
+      auditDetail = undefined
+    }
+  }
+  const context = auditDetail
+    ? `${formatClock(event.ts)} ${eventTitle(event)} — ${eventDetail(event)}\n\nInput:\n${formatAuditValue(auditInput(auditDetail as unknown as AuditEntry), "No input")}\n\nOutput:\n${formatAuditValue(auditOutput(auditDetail as unknown as AuditEntry), "No output")}`
+    : `${formatClock(event.ts)} ${eventTitle(event)} — ${eventDetail(event)}\n\n${JSON.stringify(event.data, null, 2)}`
   await updateHostModelContext({
-    content: [{ type: "text", text: `Live Workspace recent operational activity:\n${recent.map((event) => `${formatClock(event.ts)} ${eventTitle(event)} — ${eventDetail(event)}`).join("\n")}` }],
-    structuredContent: { liveWorkspaceEvents: recent },
+    content: [{ type: "text", text: `Selected Live Workspace activity:\n${truncateContext(context, 28_000)}` }],
+    structuredContent: { liveWorkspaceEvent: event, ...(auditDetail ? { liveWorkspaceAuditDetail: auditDetail } : {}) },
   })
-  await sendHostMessage({ role: "user", content: [{ type: "text", text: "Review the recent Live Workspace activity and tell me what matters, especially any failure, blocker, or next action." }] })
+  await sendHostMessage({ role: "user", content: [{ type: "text", text: "Explain this Live Workspace activity, including what it did, its result, and whether I need to take any action." }] })
 }
 
 function renderTerminal(): void {
+  if (!terminalsLoaded) {
+    mainNode().innerHTML = '<section class="view terminal-view"><div class="loading view-loading"><span></span>Loading terminals…</div></section>'
+    return
+  }
   const session = terminalSessions.find((item) => item.session_id === selectedSession)
   mainNode().innerHTML = `
     <section class="view terminal-view">
@@ -926,8 +954,8 @@ function wireTerminalControls(): void {
   const machineSelect = qs<HTMLSelectElement>("[data-role=terminal-machine]")
   const sessionSelect = qs<HTMLSelectElement>("[data-role=terminal-session]")
   machineSelect?.addEventListener("change", () => {
-    terminalMachine = machineSelect.value
-    selectedSession = ""
+    resetTerminalTarget(machineSelect.value)
+    if (activeTab === "terminal") renderTerminal()
     void refreshTerminals()
   })
   sessionSelect?.addEventListener("change", () => {
@@ -1041,6 +1069,7 @@ async function refreshTerminals(): Promise<void> {
   const payload = await api<{ machine: string; sessions: TerminalSession[] }>(`/api/ui/terminals?machine=${encodeURIComponent(requestMachine)}`)
   if (terminalMachine !== requestMachine) return
   terminalSessions = payload.sessions || []
+  terminalsLoaded = true
   if (!terminalSessions.some((item) => item.session_id === selectedSession)) selectedSession = terminalSessions[0]?.session_id || ""
   if (activeTab === "terminal") renderTerminal()
 }
@@ -1074,6 +1103,10 @@ async function copyTerminal(): Promise<void> {
 }
 
 function renderFiles(): void {
+  if (!filesLoaded) {
+    mainNode().innerHTML = '<section class="view files-view"><div class="loading view-loading"><span></span>Loading files…</div></section>'
+    return
+  }
   const selected = fileEntries.find((entry) => entry.path === selectedFile)
   mainNode().innerHTML = `
     <section class="view files-view">
@@ -1122,13 +1155,26 @@ function drawFileImage(): void {
 function wireFileControls(): void {
   const machine = qs<HTMLSelectElement>("[data-role=file-machine]")
   const path = qs<HTMLInputElement>("[data-role=file-path]")
-  machine?.addEventListener("change", () => { fileMachine = machine.value; filePath = "."; selectedFile = ""; void refreshFiles() })
-  path?.addEventListener("keydown", (event) => { if (event.key === "Enter") { filePath = path.value || "."; selectedFile = ""; void refreshFiles() } })
+  machine?.addEventListener("change", () => {
+    resetFileTarget(machine.value, ".")
+    if (activeTab === "files") renderFiles()
+    void refreshFiles()
+  })
+  path?.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter") return
+    resetFileTarget(fileMachine, path.value || ".")
+    if (activeTab === "files") renderFiles()
+    void refreshFiles()
+  })
   root.querySelectorAll<HTMLButtonElement>("[data-file]").forEach((row) => {
     row.addEventListener("click", () => void selectFile(row.dataset.file || ""))
     row.addEventListener("dblclick", () => {
       const entry = fileEntries.find((item) => item.path === row.dataset.file)
-      if (entry?.type === "dir") { filePath = entry.path; selectedFile = ""; void refreshFiles() }
+      if (entry?.type === "dir") {
+        resetFileTarget(fileMachine, entry.path)
+        if (activeTab === "files") renderFiles()
+        void refreshFiles()
+      }
     })
   })
 }
@@ -1156,6 +1202,7 @@ async function refreshFiles(): Promise<void> {
   if (fileMachine !== requestMachine || filePath !== requestPath) return
   fileEntries = payload.entries || []
   filePath = payload.path || filePath
+  filesLoaded = true
   if (!fileEntries.some((item) => item.path === selectedFile)) selectedFile = ""
   filePreview = null
   fileEditing = false
@@ -1227,7 +1274,11 @@ async function shareSelectedFile(ask: boolean): Promise<void> {
 }
 
 function renderJobs(): void {
-  const jobs = dashboard?.jobs || []
+  if (!dashboard) {
+    mainNode().innerHTML = '<section class="view jobs-view"><div class="loading view-loading"><span></span>Loading jobs and sessions…</div></section>'
+    return
+  }
+  const jobs = dashboard.jobs || []
   const sessions = dashboard?.sessions || []
   mainNode().innerHTML = `
     <section class="view jobs-view"><div class="view-toolbar"><div><h2>Jobs & sessions</h2><p>Active managed work and persistent shells across the workspace.</p></div><button class="button" data-action="refresh">${icon("refresh")}Refresh</button></div>
@@ -1283,6 +1334,10 @@ function trackActivityDiscoveries(next: Dashboard): void {
 }
 
 function renderRemotes(): void {
+  if (!remoteSnapshot) {
+    mainNode().innerHTML = '<section class="view remotes-view"><div class="loading view-loading"><span></span>Loading remote machines…</div></section>'
+    return
+  }
   const enabled = bootstrap ? Boolean((bootstrap.features as JsonRecord | undefined)?.remote) : true
   const rows = (remoteSnapshot?.machines as Machine[] | undefined) || []
   mainNode().innerHTML = `
@@ -1317,6 +1372,7 @@ function resetFileTarget(machine: string, path: string): void {
   fileMachine = machine
   filePath = path
   fileEntries = []
+  filesLoaded = false
   selectedFile = ""
   filePreview = null
   fileEditing = false
@@ -1327,6 +1383,7 @@ function resetFileTarget(machine: string, path: string): void {
 function resetTerminalTarget(machine: string): void {
   terminalMachine = machine
   terminalSessions = []
+  terminalsLoaded = false
   selectedSession = ""
   terminalSocket?.close()
   terminalSocket = null
@@ -1380,6 +1437,10 @@ async function revokeRemote(machine: string): Promise<void> {
 }
 
 function renderAudit(): void {
+  if (!auditLoaded) {
+    mainNode().innerHTML = '<section class="view audit-view"><div class="loading view-loading"><span></span>Loading audit stream…</div></section>'
+    return
+  }
   mainNode().innerHTML = `
     <section class="view audit-view"><div class="view-toolbar"><div><h2>Audit stream</h2><p>Structured MCP activity retained by local-shell-mcp.</p></div><button class="button" data-action="refresh">${icon("refresh")}Refresh</button></div>
       <div class="panel audit-panel"><div class="panel-head"><strong>Recent entries</strong><span>${auditEntries.length} loaded</span></div><div class="audit-table"><div class="audit-header"><span>Time</span><span>Operation</span><span>Node</span><span>Status</span><span></span></div>${auditEntries.length ? auditEntries.map(auditRow).join("") : '<div class="empty-state">No audit entries.</div>'}</div></div>
@@ -1395,6 +1456,7 @@ function auditRow(entry: JsonRecord): string {
 async function refreshAudit(): Promise<void> {
   const payload = await api<JsonRecord>("/api/ui/audit?limit=150&sort=desc")
   auditEntries = (payload.entries as JsonRecord[] | undefined) || []
+  auditLoaded = true
   if (activeTab === "audit") renderAudit()
 }
 
@@ -1530,6 +1592,7 @@ function mergeEvents(incoming: LiveEvent[]): void {
 
 function resetActivityForChannelBoundary(): void {
   events = []
+  activityLoaded = false
   activityExpandedEventKey = ""
   activityAuditDetails.clear()
   activityDetailRevision += 1
@@ -1549,6 +1612,7 @@ async function loadSnapshot(generation: number): Promise<boolean> {
   applyLogicalSessionId(payload.channel.session_id)
   plan = payload.channel.plan || null
   logicalSession = payload.channel.session || null
+  activityLoaded = true
   activityAuditDetails.clear()
   activityDetailRevision += 1
   events = payload.events || []
@@ -1730,6 +1794,27 @@ async function runConnectionLoop(generation: number): Promise<void> {
   }
 }
 
+function persistLiveWorkspaceIdentity(nextConfig: LiveConfig): void {
+  if (isDshHost || !nextConfig.liveId) return
+  const openai = (window as OpenAiGlobalsWindow).openai
+  if (!openai || typeof openai !== "object") return
+  const setter = (openai as { setWidgetState?: (state: JsonRecord) => unknown }).setWidgetState
+  if (typeof setter !== "function") return
+  try {
+    const result = setter.call(openai, liveWorkspaceWidgetStateWithHint(openai, {
+      live_id: nextConfig.liveId,
+      session_id: nextConfig.sessionId,
+      machine: nextConfig.machine,
+      cwd: nextConfig.cwd,
+    }))
+    if (result && typeof (result as PromiseLike<unknown>).then === "function") {
+      void Promise.resolve(result).catch((error) => console.warn("Unable to persist Live Workspace identity", error))
+    }
+  } catch (error) {
+    console.warn("Unable to persist Live Workspace identity", error)
+  }
+}
+
 function activateLiveConfig(nextConfig: LiveConfig): void {
   if (shuttingDown) return
   if (
@@ -1756,6 +1841,7 @@ function activateLiveConfig(nextConfig: LiveConfig): void {
   }
   if (targetChanged) resetWorkspaceTarget(nextConfig.machine, nextConfig.cwd)
   config = nextConfig
+  persistLiveWorkspaceIdentity(nextConfig)
   pollGeneration += 1
   const generation = pollGeneration
   connectionMessage = "Connecting"
@@ -1977,6 +2063,12 @@ type OpenAiGlobalsWindow = Window & {
   openai?: unknown
 }
 
+function persistedOpenAiWorkspaceHint(globals?: unknown): JsonRecord | null {
+  return liveWorkspaceResumeHintFromOpenAiGlobals(
+    globals ?? (window as OpenAiGlobalsWindow).openai,
+  )
+}
+
 function configureFromOpenAiGlobals(globals?: unknown): boolean {
   if (shuttingDown) return false
   const result = toolResultFromOpenAiGlobals(globals ?? (window as OpenAiGlobalsWindow).openai)
@@ -2087,7 +2179,9 @@ void (async () => {
     const initialResult = await waitForInitialToolResult(300)
     if (shuttingDown) return
     if (initialResult) await configureFromToolResult(initialResult)
-    else if (!configureFromOpenAiGlobals()) await recoverCredentialsForever({})
+    else if (!configureFromOpenAiGlobals()) {
+      await recoverCredentialsForever(persistedOpenAiWorkspaceHint() || {})
+    }
   } catch (error) {
     connected = false
     connectionMessage = "Host bridge unavailable"
