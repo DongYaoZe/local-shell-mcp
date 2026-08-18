@@ -111,7 +111,7 @@ def test_webui_visual_regressions_are_packaged():
 
     assert "<strong>TUI</strong><small>Terminal interface</small>" in html
     assert "<strong>OpenTUI</strong><small>Terminal interface</small>" not in html
-    for view in ("files", "terminals", "remotes", "audit"):
+    for view in ("files", "terminals", "sessions", "remotes", "audit"):
         assert f'data-view="{view}"' in html
     assert "Open TUI" in html
     assert "scrollbar-width:none!important" in css
@@ -134,6 +134,8 @@ def test_webui_visual_regressions_are_packaged():
     assert "/ws/shell" in script
     assert "Persistent terminal" in script
     assert "Loading terminals" in script
+    assert "Logical Sessions" in script
+    assert "/logical-sessions" in script
     assert "row-menu" not in script
 
 
