@@ -31,6 +31,43 @@ export function toolResultFromOpenAiGlobals(globals: unknown): JsonRecord | null
   return envelope
 }
 
+const LIVE_WORKSPACE_WIDGET_STATE_KEY = "localShellMcpLiveWorkspace"
+
+export function liveWorkspaceResumeHintFromOpenAiGlobals(globals: unknown): JsonRecord | null {
+  const openai = jsonRecord(globals)
+  const widgetState = jsonRecord(openai?.widgetState)
+  const stored = jsonRecord(widgetState?.[LIVE_WORKSPACE_WIDGET_STATE_KEY])
+  if (!stored) return null
+
+  const liveId = String(stored.live_id || "")
+  const sessionId = String(stored.session_id || "")
+  if (!liveId && !sessionId) return null
+
+  return {
+    ...(liveId ? { live_id: liveId } : {}),
+    ...(sessionId ? { session_id: sessionId } : {}),
+    machine: String(stored.machine || "local"),
+    cwd: String(stored.cwd || "."),
+  }
+}
+
+export function liveWorkspaceWidgetStateWithHint(
+  globals: unknown,
+  hint: { live_id: string; session_id?: string; machine: string; cwd: string },
+): JsonRecord {
+  const openai = jsonRecord(globals)
+  const widgetState = jsonRecord(openai?.widgetState) || {}
+  return {
+    ...widgetState,
+    [LIVE_WORKSPACE_WIDGET_STATE_KEY]: {
+      live_id: hint.live_id,
+      session_id: hint.session_id || "",
+      machine: hint.machine,
+      cwd: hint.cwd,
+    },
+  }
+}
+
 export function escapeHtml(value: unknown): string {
   return String(value ?? "")
     .replaceAll("&", "&amp;")

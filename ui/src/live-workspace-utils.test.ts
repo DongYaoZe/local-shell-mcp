@@ -19,6 +19,8 @@ import {
   toggleWorkspaceDisplayMode,
   reconnectDelayMs,
   toolResultFromOpenAiGlobals,
+  liveWorkspaceResumeHintFromOpenAiGlobals,
+  liveWorkspaceWidgetStateWithHint,
   truncateContext,
   type LiveEvent,
 } from "./live-workspace-utils"
@@ -474,5 +476,43 @@ describe("live workspace utilities", () => {
         apiBase: "https://lsm.example.test",
       },
     })
+  })
+
+  test("ChatGPT widget state round-trips the workspace identity without credentials", () => {
+    const state = liveWorkspaceWidgetStateWithHint(
+      { widgetState: { selectedTab: "activity" } },
+      {
+        live_id: "live-current",
+        session_id: "s_current",
+        machine: "local",
+        cwd: "/workspace/local-shell-mcp",
+      },
+    )
+
+    expect(state).toEqual({
+      selectedTab: "activity",
+      localShellMcpLiveWorkspace: {
+        live_id: "live-current",
+        session_id: "s_current",
+        machine: "local",
+        cwd: "/workspace/local-shell-mcp",
+      },
+    })
+    expect(liveWorkspaceResumeHintFromOpenAiGlobals({ widgetState: state })).toEqual({
+      live_id: "live-current",
+      session_id: "s_current",
+      machine: "local",
+      cwd: "/workspace/local-shell-mcp",
+    })
+    expect(JSON.stringify(state)).not.toContain("token")
+    expect(JSON.stringify(state)).not.toContain("apiBase")
+  })
+
+  test("ChatGPT widget state ignores empty workspace hints", () => {
+    expect(liveWorkspaceResumeHintFromOpenAiGlobals({
+      widgetState: {
+        localShellMcpLiveWorkspace: { live_id: "", session_id: "" },
+      },
+    })).toBeNull()
   })
 })

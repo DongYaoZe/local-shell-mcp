@@ -235,6 +235,26 @@ def test_empty_app_reattach_refuses_ambiguous_recent_workspaces():
         )
 
 
+def test_empty_app_reattach_refuses_to_replace_existing_workspace_after_claim_expires():
+    manager = LiveChannelManager()
+    channel, _ = manager.open(
+        subject="user",
+        scopes=tuple(ALL_OAUTH_SCOPES),
+        logical_session_id="s_task",
+    )
+    manager._app_reattach_claims.clear()
+
+    with pytest.raises(ValueError, match="no recoverable context"):
+        manager.open(
+            subject="user",
+            scopes=("shell:read",),
+            app_reattach=True,
+        )
+
+    assert list(manager._channels.values()) == [channel]
+    assert channel.logical_session_id == "s_task"
+
+
 def test_live_workspace_can_reattach_a_second_mcp_session_by_live_id():
     manager = LiveChannelManager()
     channel, first_token = manager.open(

@@ -25,6 +25,8 @@ import {
   isOperationalActivityEvent,
   joinPath,
   mergeActivityEvents,
+  liveWorkspaceResumeHintFromOpenAiGlobals,
+  liveWorkspaceWidgetStateWithHint,
   toggleWorkspaceDisplayMode,
   parentPath,
   reconnectDelayMs,
@@ -374,6 +376,7 @@ function updateChrome(): void {
   const activeSession = dashboard?.sessions?.[0]
   let workspaceStatus = latestCompletedSummary()
   if (running) workspaceStatus = activityIntent(running)
+  else if (config?.sessionId) workspaceStatus ||= "Task idle"
   else if (activeJob) workspaceStatus = `Background: ${String(activeJob.name || activeJob.job_id || "job")}`
   else if (activeSession) workspaceStatus = `Terminal: ${String(activeSession.name || activeSession.session_id || "session")}`
   const subtitle = qs<HTMLElement>("[data-role=subtitle]")
@@ -1730,6 +1733,27 @@ async function runConnectionLoop(generation: number): Promise<void> {
   }
 }
 
+function persistLiveWorkspaceIdentity(nextConfig: LiveConfig): void {
+  if (isDshHost || !nextConfig.liveId) return
+  const openai = (window as OpenAiGlobalsWindow).openai
+  if (!openai || typeof openai !== "object") return
+  const setter = (openai as { setWidgetState?: (state: JsonRecord) => unknown }).setWidgetState
+  if (typeof setter !== "function") return
+  try {
+    const result = setter.call(openai, liveWorkspaceWidgetStateWithHint(openai, {
+      live_id: nextConfig.liveId,
+      session_id: nextConfig.sessionId,
+      machine: nextConfig.machine,
+      cwd: nextConfig.cwd,
+    }))
+    if (result && typeof (result as PromiseLike<unknown>).then === "function") {
+      void Promise.resolve(result).catch((error) => console.warn("Unable to persist Live Workspace identity", error))
+    }
+  } catch (error) {
+    console.warn("Unable to persist Live Workspace identity", error)
+  }
+}
+
 function activateLiveConfig(nextConfig: LiveConfig): void {
   if (shuttingDown) return
   if (
@@ -1756,6 +1780,7 @@ function activateLiveConfig(nextConfig: LiveConfig): void {
   }
   if (targetChanged) resetWorkspaceTarget(nextConfig.machine, nextConfig.cwd)
   config = nextConfig
+  persistLiveWorkspaceIdentity(nextConfig)
   pollGeneration += 1
   const generation = pollGeneration
   connectionMessage = "Connecting"
@@ -1977,6 +2002,12 @@ type OpenAiGlobalsWindow = Window & {
   openai?: unknown
 }
 
+function persistedOpenAiWorkspaceHint(globals?: unknown): JsonRecord | null {
+  return liveWorkspaceResumeHintFromOpenAiGlobals(
+    globals ?? (window as OpenAiGlobalsWindow).openai,
+  )
+}
+
 function configureFromOpenAiGlobals(globals?: unknown): boolean {
   if (shuttingDown) return false
   const result = toolResultFromOpenAiGlobals(globals ?? (window as OpenAiGlobalsWindow).openai)
@@ -2087,7 +2118,9 @@ void (async () => {
     const initialResult = await waitForInitialToolResult(300)
     if (shuttingDown) return
     if (initialResult) await configureFromToolResult(initialResult)
-    else if (!configureFromOpenAiGlobals()) await recoverCredentialsForever({})
+    else if (!configureFromOpenAiGlobals()) {
+      await recoverCredentialsForever(persistedOpenAiWorkspaceHint() || {})
+    }
   } catch (error) {
     connected = false
     connectionMessage = "Host bridge unavailable"
