@@ -1,4 +1,4 @@
-<!-- i18n-source-sha256: 8c683835be3adb3bf08d9d69b1731f61a39753bf255170fc663cf9456a0df54f -->
+<!-- i18n-source-sha256: 1cb4dc6f53744372145fad4e03a3d413bf105033e13844fea7684ea5f601d6ca -->
 # Kullanıcı arayüzü
 
 `local-shell-mcp`, aynı service API, workspace, persistent terminal registry, remote-worker registry ve MCP audit log üzerinde iki uyumlu human interface sunar:
@@ -18,24 +18,26 @@ local-shell-mcp --mode mcp
 
 ## ChatGPT Live Workspace
 
-ChatGPT MCP Apps render edebildiğinde `workspace_open`, bağlı olan logical Session için floating collaborative view açar. Kalıcı task state Session’a aittir; Live Workspace yalnız live activity ve human controls sunar. Bu nedenle app reconnect veya ChatGPT/MCP transport değişikliği Session’ı sıfırlamaz.
+ChatGPT MCP Apps render ettiğinde `workspace_open(session_id=...)`, **açıkça seçilmiş Logical Session** için yüzen bir ortak çalışma görünümü açar. Kalıcı görev durumu — objective, progress, Plan ve Activity — Session tarafından tutulur; Live Workspace yalnızca bu durumu, canlı etkinliği ve insan kontrollerini gösterir. Görev kimliğini MCP transport üzerinden asla çıkarmaz.
 
-Tipik bir handoff şöyledir:
+Tipik açık handoff akışı şöyledir:
 
 ```text
 session_manage(action="start", objective=...)
         -> session_id
-... tool work + session_manage(action="report", ...) ...
-new agent run
-session_manage(action="resume", session_id=..., takeover=true)
-        -> inherited progress, Plan, and recent activity
-workspace_open()
-        -> reconnectable view of that Session
+... logical_session_id=session_id ile tool çağrıları
+... session_manage(action="report", session_id=...) ...
+yeni ChatGPT konuşması
+kullanıcı önceki session_id değerini iletir
+session_manage(action="resume", session_id=...)
+        -> mevcut progress, Plan ve yakın Activity
+workspace_open(session_id=...)
+        -> aynı Session görünümü
 ```
 
-`takeover=true`, hâlâ active olan eski agent run’ı supersede eder. Supersede edilen run’dan sonraki tool call’lar, o agent Session’ı açıkça yeniden resume edene kadar reddedilir. Sessions machine veya working directory’ye bind olmaz; normal tool parameter’ları local/remote target ve path seçmeye devam eder.
+`session_id` tek kalıcı görev kimliğidir. Agent başka bir konuşmadaki Sessionı listelememeli, tahmin etmemeli veya otomatik seçmemelidir. Çalışmaya yeni bir konuşmada devam etmek için kullanıcı mevcut `session_id` değerini açıkça iletir. Agent start/resume sonrasında, anlamlı ilerleme checkpointlerinde ve turn bitmeden önce aktif `session_id` değerini kullanıcıya bildirmelidir; böylece elle handoff yapılabilir. Sessions machine veya working directory ile bağlı değildir; normal tool parametreleri local/remote targetları ve pathleri seçmeye devam eder.
 
-Optional `plan_manage` Plan, Session için Goal mode’u etkinleştirir. Plan active ve 15 dakika agent activity yoksa bağlı Live Workspace ChatGPT’den devam etmesini isteyebilir. Continuation önce aynı `session_id` ile resume eder ve accepted/rejected toplam 10 denemeyle sınırlıdır. blocked, completed veya cancelled Plan’lar otomatik devam etmez; tüm steps completed/skipped olan active Plan cleanup continuation için uygun kalır, böylece resumed agent Plan’ı finish edebilir. Human pause/resume/cancel controls geçici Live Workspace state yerine Session-owned Plan’ı günceller.
+İsteğe bağlı bir `plan_manage` Planı Session için Goal modeu etkinleştirir. Plan active durumdaysa ve 15 dakika agent activity olmazsa ilişkili Live Workspace ChatGPT’den devam etmesini isteyebilir. Continuation aynı açık `session_id` değerini resume eder ve kabul veya ret durumuna bakılmaksızın 10 denemeyle sınırlıdır. blocked, completed ve cancelled Planlar otomatik devam ettirilmez; tüm steps değerleri completed veya skipped olan active bir Plan, resumed agentın Planı bitirebilmesi için kapanış continuationına uygun kalır. İnsan pause/resume/cancel kontrolleri geçici Live Workspace state yerine Sessionın sahip olduğu Planı günceller.
 
 ## Tarayıcı arayüzü
 

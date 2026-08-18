@@ -1,4 +1,4 @@
-<!-- i18n-source-sha256: 9e104b7a893f61206aea6ed76b78bb04387fc5349535c46ffafd8f2e4c9ccd3e -->
+<!-- i18n-source-sha256: 784cf8286b0aba665f54b0b14b7467047ff618447663c4b354d92176796c4001 -->
 # Tools reference
 
 このページは実際の MCP tool schema から構成されます。Public tool surface を変更した後は `python scripts/generate-tools-reference.py` を実行して English reference を更新します。
@@ -24,13 +24,13 @@
 
 ### `workspace_open`
 
-Real-time human/agent collaboration のため interactive Live Workspace を開くか再利用します。Active task では一度だけ呼び、繰り返し開き直さず self-reconnecting floating workspace を再利用します。Terminal output、files/diffs、jobs、remotes、audit activity が workflow を大きく改善するときに使います。
+明示的に指定した Logical Session を表示する Live Workspace を開くか再利用します。session_manage が返した active な session_id を渡します。Workspace は MCP transport から task identity を推測しません。active な Logical Session がない場合は明示的に null を渡します。
 
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
+| `session_id` | `string \| null` | required |  |
 | `machine` | `string \| null` | `null` |  |
 | `cwd` | `string` | `"."` |  |
-| `session_run_id` | `string \| null` | required | この field は常に指定してください。active な logical Session がない場合は `null`。`session_manage` の start/resume 後は返された `active_run.run_id` を渡し、MCP transport の reconnect をまたいで使い続けます。明示的な resume/takeover 後は新しい値を使用します。 |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -45,7 +45,7 @@ Local または remote machine の version、workspace、auth、policy、environ
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | この field は常に指定してください。active な logical Session がない場合は `null`。`session_manage` の start/resume 後は返された `active_run.run_id` を渡し、MCP transport の reconnect をまたいで使い続けます。明示的な resume/takeover 後は新しい値を使用します。 |
+| `logical_session_id` | `string \| null` | required | この tool call に属する Logical Session です。task を処理している間は session_manage が返した session_id を渡します。active な Logical Session がない場合だけ null を使います。 |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -57,7 +57,7 @@ Instructions を読み込まず installed Agent Skills を列挙します。MCP 
 
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
-| `session_run_id` | `string \| null` | required | この field は常に指定してください。active な logical Session がない場合は `null`。`session_manage` の start/resume 後は返された `active_run.run_id` を渡し、MCP transport の reconnect をまたいで使い続けます。明示的な resume/takeover 後は新しい値を使用します。 |
+| `logical_session_id` | `string \| null` | required | この tool call に属する Logical Session です。task を処理している間は session_manage が返した session_id を渡します。active な Logical Session がない場合だけ null を使います。 |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -68,7 +68,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
 | `name` | `string` | required |  |
-| `session_run_id` | `string \| null` | required | この field は常に指定してください。active な logical Session がない場合は `null`。`session_manage` の start/resume 後は返された `active_run.run_id` を渡し、MCP transport の reconnect をまたいで使い続けます。明示的な resume/takeover 後は新しい値を使用します。 |
+| `logical_session_id` | `string \| null` | required | この tool call に属する Logical Session です。task を処理している間は session_manage が返した session_id を渡します。active な Logical Session がない場合だけ null を使います。 |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -80,7 +80,7 @@ Installed Skill の related text file を 1 つ読み取ります。
 |---|---|---|---|
 | `name` | `string` | required |  |
 | `path` | `string` | required |  |
-| `session_run_id` | `string \| null` | required | この field は常に指定してください。active な logical Session がない場合は `null`。`session_manage` の start/resume 後は返された `active_run.run_id` を渡し、MCP transport の reconnect をまたいで使い続けます。明示的な resume/takeover 後は新しい値を使用します。 |
+| `logical_session_id` | `string \| null` | required | この tool call に属する Logical Session です。task を処理している間は session_manage が返した session_id を渡します。active な Logical Session がない場合だけ null を使います。 |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -93,37 +93,35 @@ Commit/push 前に local workspace text files を common secrets について sc
 | `cwd` | `string` | `"."` |  |
 | `glob` | `string \| null` | `null` |  |
 | `max_results` | `integer` | `200` |  |
-| `session_run_id` | `string \| null` | required | この field は常に指定してください。active な logical Session がない場合は `null`。`session_manage` の start/resume 後は返された `active_run.run_id` を渡し、MCP transport の reconnect をまたいで使い続けます。明示的な resume/takeover 後は新しい値を使用します。 |
+| `logical_session_id` | `string \| null` | required | この tool call に属する Logical Session です。task を処理している間は session_manage が返した session_id を渡します。active な Logical Session がない場合だけ null を使います。 |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
 ### `session_manage`
 
-machine と cwd から独立した durable logical task Session を管理します。本格的な tool work の前に start し、意味のある checkpoint で進捗を report し、新しい GPT/MCP run は `session_id` で resume して引き継ぎます。`resume(takeover=true)` は常に新しい agent run を作り、古い run を supersede します。以後の report/finish/cancel と各 tool では返された `active_run.run_id` を `session_run_id` として使います。action: start, resume, get, report, list, finish, cancel, delete。
+1 つの durable Logical Session を管理します。start は新しい task を作成して session_id を返します。resume は user が明示的に指定した、またはこの conversation にすでに存在する session_id だけを継続します。start 以外の全 action には session_id が必要です。Action: start, resume, get, report, finish, cancel, delete。report は summary/findings/next/blockers/objective/label を受け取り、delete には terminal Session が必要です。
 
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
 | `action` | `string` | required |  |
 | `session_id` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | `null` |  |
 | `label` | `string \| null` | `null` |  |
 | `objective` | `string \| null` | `null` |  |
 | `summary` | `string \| null` | `null` |  |
 | `findings` | `array[string] \| null` | `null` |  |
 | `next` | `string \| null` | `null` |  |
 | `blockers` | `array[string] \| null` | `null` |  |
-| `takeover` | `boolean` | `false` |  |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
 ### `plan_manage`
 
-現在の logical Session が所有する optional Goal Plan を管理します。active Plan は agent activity が15分ないと自動 continuation を有効にし、最大10回に制限されます。先に `session_manage` で Session を start/resume し、変更 action ではその Session の `active_run.run_id` を `session_run_id` として渡します。action: start, get, update, block, resume, finish, cancel。start は objective と steps が必須で、finish は全 step が completed または skipped である必要があります。
+明示的な Logical Session の optional Goal mode を管理します。active plan は agent activity が 15 分ない場合に automatic continuation を有効化し、最大 10 回まで試行します。session_id は session_manage が返した同じ durable id でなければならず。Action: start, get, update, block, resume, finish, cancel。start には objective と steps、finish には全 steps が completed または skipped であることが必要です。
 
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
 | `action` | `string` | required |  |
-| `session_run_id` | `string \| null` | `null` |  |
+| `session_id` | `string` | required |  |
 | `objective` | `string \| null` | `null` |  |
 | `steps` | `array[object] \| null` | `null` |  |
 | `step_id` | `string \| null` | `null` |  |
@@ -140,7 +138,7 @@ Recent local audit log entries を読み取ります。
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
 | `lines` | `integer` | `100` |  |
-| `session_run_id` | `string \| null` | required | この field は常に指定してください。active な logical Session がない場合は `null`。`session_manage` の start/resume 後は返された `active_run.run_id` を渡し、MCP transport の reconnect をまたいで使い続けます。明示的な resume/takeover 後は新しい値を使用します。 |
+| `logical_session_id` | `string \| null` | required | この tool call に属する Logical Session です。task を処理している間は session_manage が返した session_id を渡します。active な Logical Session がない場合だけ null を使います。 |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -159,7 +157,7 @@ Local または remote machine で non-interactive shell command を 1 回実行
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | この field は常に指定してください。active な logical Session がない場合は `null`。`session_manage` の start/resume 後は返された `active_run.run_id` を渡し、MCP transport の reconnect をまたいで使い続けます。明示的な resume/takeover 後は新しい値を使用します。 |
+| `logical_session_id` | `string \| null` | required | この tool call に属する Logical Session です。task を処理している間は session_manage が返した session_id を渡します。active な Logical Session がない場合だけ null を使います。 |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -177,7 +175,7 @@ Local または remote machine で short Python script を書いて実行しま�
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | この field は常に指定してください。active な logical Session がない場合は `null`。`session_manage` の start/resume 後は返された `active_run.run_id` を渡し、MCP transport の reconnect をまたいで使い続けます。明示的な resume/takeover 後は新しい値を使用します。 |
+| `logical_session_id` | `string \| null` | required | この tool call に属する Logical Session です。task を処理している間は session_manage が返した session_id を渡します。active な Logical Session がない場合だけ null を使います。 |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -195,7 +193,7 @@ Local または remote machine で persistent interactive shell を開始しま�
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | この field は常に指定してください。active な logical Session がない場合は `null`。`session_manage` の start/resume 後は返された `active_run.run_id` を渡し、MCP transport の reconnect をまたいで使い続けます。明示的な resume/takeover 後は新しい値を使用します。 |
+| `logical_session_id` | `string \| null` | required | この tool call に属する Logical Session です。task を処理している間は session_manage が返した session_id を渡します。active な Logical Session がない場合だけ null を使います。 |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -211,7 +209,7 @@ Persistent local/remote shell session に input を送ります。
 | `input_text` | `string` | required |  |
 | `enter` | `boolean` | `true` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | この field は常に指定してください。active な logical Session がない場合は `null`。`session_manage` の start/resume 後は返された `active_run.run_id` を渡し、MCP transport の reconnect をまたいで使い続けます。明示的な resume/takeover 後は新しい値を使用します。 |
+| `logical_session_id` | `string \| null` | required | この tool call に属する Logical Session です。task を処理している間は session_manage が返した session_id を渡します。active な Logical Session がない場合だけ null を使います。 |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -226,7 +224,7 @@ Persistent local/remote shell session の recent output を読みます。
 | `session_id` | `string` | required |  |
 | `lines` | `integer` | `200` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | この field は常に指定してください。active な logical Session がない場合は `null`。`session_manage` の start/resume 後は返された `active_run.run_id` を渡し、MCP transport の reconnect をまたいで使い続けます。明示的な resume/takeover 後は新しい値を使用します。 |
+| `logical_session_id` | `string \| null` | required | この tool call に属する Logical Session です。task を処理している間は session_manage が返した session_id を渡します。active な Logical Session がない場合だけ null を使います。 |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -240,7 +238,7 @@ Persistent local/remote shell session を終了します。
 |---|---|---|---|
 | `session_id` | `string` | required |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | この field は常に指定してください。active な logical Session がない場合は `null`。`session_manage` の start/resume 後は返された `active_run.run_id` を渡し、MCP transport の reconnect をまたいで使い続けます。明示的な resume/takeover 後は新しい値を使用します。 |
+| `logical_session_id` | `string \| null` | required | この tool call に属する Logical Session です。task を処理している間は session_manage が返した session_id を渡します。active な Logical Session がない場合だけ null を使います。 |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -253,7 +251,7 @@ Local または remote machine の persistent shell sessions を列挙します�
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | この field は常に指定してください。active な logical Session がない場合は `null`。`session_manage` の start/resume 後は返された `active_run.run_id` を渡し、MCP transport の reconnect をまたいで使い続けます。明示的な resume/takeover 後は新しい値を使用します。 |
+| `logical_session_id` | `string \| null` | required | この tool call に属する Logical Session です。task を処理している間は session_manage が返した session_id を渡します。active な Logical Session がない場合だけ null を使います。 |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -271,7 +269,7 @@ Local または remote machine で tracked long-running job を開始します�
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | この field は常に指定してください。active な logical Session がない場合は `null`。`session_manage` の start/resume 後は返された `active_run.run_id` を渡し、MCP transport の reconnect をまたいで使い続けます。明示的な resume/takeover 後は新しい値を使用します。 |
+| `logical_session_id` | `string \| null` | required | この tool call に属する Logical Session です。task を処理している間は session_manage が返した session_id を渡します。active な Logical Session がない場合だけ null を使います。 |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -285,7 +283,7 @@ Local または remote machine の tracked jobs を列挙します。
 |---|---|---|---|
 | `include_finished` | `boolean` | `true` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | この field は常に指定してください。active な logical Session がない場合は `null`。`session_manage` の start/resume 後は返された `active_run.run_id` を渡し、MCP transport の reconnect をまたいで使い続けます。明示的な resume/takeover 後は新しい値を使用します。 |
+| `logical_session_id` | `string \| null` | required | この tool call に属する Logical Session です。task を処理している間は session_manage が返した session_id を渡します。active な Logical Session がない場合だけ null を使います。 |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -300,7 +298,7 @@ Tracked local/remote job の recent output を読み取ります。
 | `job_id` | `string` | required |  |
 | `lines` | `integer` | `200` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | この field は常に指定してください。active な logical Session がない場合は `null`。`session_manage` の start/resume 後は返された `active_run.run_id` を渡し、MCP transport の reconnect をまたいで使い続けます。明示的な resume/takeover 後は新しい値を使用します。 |
+| `logical_session_id` | `string \| null` | required | この tool call に属する Logical Session です。task を処理している間は session_manage が返した session_id を渡します。active な Logical Session がない場合だけ null を使います。 |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -314,7 +312,7 @@ Tracked local/remote job を停止します。
 |---|---|---|---|
 | `job_id` | `string` | required |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | この field は常に指定してください。active な logical Session がない場合は `null`。`session_manage` の start/resume 後は返された `active_run.run_id` を渡し、MCP transport の reconnect をまたいで使い続けます。明示的な resume/takeover 後は新しい値を使用します。 |
+| `logical_session_id` | `string \| null` | required | この tool call に属する Logical Session です。task を処理している間は session_manage が返した session_id を渡します。active な Logical Session がない場合だけ null を使います。 |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -330,7 +328,7 @@ Stopped/exited tracked local/remote job を再起動します。
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | この field は常に指定してください。active な logical Session がない場合は `null`。`session_manage` の start/resume 後は返された `active_run.run_id` を渡し、MCP transport の reconnect をまたいで使い続けます。明示的な resume/takeover 後は新しい値を使用します。 |
+| `logical_session_id` | `string \| null` | required | この tool call に属する Logical Session です。task を処理している間は session_manage が返した session_id を渡します。active な Logical Session がない場合だけ null を使います。 |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -348,7 +346,7 @@ Local または remote machine の files/directories を列挙します。
 | `recursive` | `boolean` | `false` |  |
 | `max_entries` | `integer` | `500` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | この field は常に指定してください。active な logical Session がない場合は `null`。`session_manage` の start/resume 後は返された `active_run.run_id` を渡し、MCP transport の reconnect をまたいで使い続けます。明示的な resume/takeover 後は新しい値を使用します。 |
+| `logical_session_id` | `string \| null` | required | この tool call に属する Logical Session です。task を処理している間は session_manage が返した session_id を渡します。active な Logical Session がない場合だけ null を使います。 |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -364,7 +362,7 @@ Local または remote machine の compact directory tree を返します。
 | `depth` | `integer` | `3` |  |
 | `max_entries` | `integer` | `500` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | この field は常に指定してください。active な logical Session がない場合は `null`。`session_manage` の start/resume 後は返された `active_run.run_id` を渡し、MCP transport の reconnect をまたいで使い続けます。明示的な resume/takeover 後は新しい値を使用します。 |
+| `logical_session_id` | `string \| null` | required | この tool call に属する Logical Session です。task を処理している間は session_manage が返した session_id を渡します。active な Logical Session がない場合だけ null を使います。 |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -380,7 +378,7 @@ Local または remote machine で glob により paths を検索します。
 | `cwd` | `string` | `"."` |  |
 | `max_results` | `integer` | `500` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | この field は常に指定してください。active な logical Session がない場合は `null`。`session_manage` の start/resume 後は返された `active_run.run_id` を渡し、MCP transport の reconnect をまたいで使い続けます。明示的な resume/takeover 後は新しい値を使用します。 |
+| `logical_session_id` | `string \| null` | required | この tool call に属する Logical Session です。task を処理している間は session_manage が返した session_id を渡します。active な Logical Session がない場合だけ null を使います。 |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -399,7 +397,7 @@ Local または remote machine の file contents を検索します。
 | `case_sensitive` | `boolean` | `true` |  |
 | `max_results` | `integer \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | この field は常に指定してください。active な logical Session がない場合は `null`。`session_manage` の start/resume 後は返された `active_run.run_id` を渡し、MCP transport の reconnect をまたいで使い続けます。明示的な resume/takeover 後は新しい値を使用します。 |
+| `logical_session_id` | `string \| null` | required | この tool call に属する Logical Session です。task を処理している間は session_manage が返した session_id を渡します。active な Logical Session がない場合だけ null を使います。 |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -417,7 +415,7 @@ Local または remote machine の file 1 個または file list を読み取り
 | `binary_preview` | `string \| null` | `null` |  |
 | `binary_preview_bytes` | `integer` | `256` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | この field は常に指定してください。active な logical Session がない場合は `null`。`session_manage` の start/resume 後は返された `active_run.run_id` を渡し、MCP transport の reconnect をまたいで使い続けます。明示的な resume/takeover 後は新しい値を使用します。 |
+| `logical_session_id` | `string \| null` | required | この tool call に属する Logical Session です。task を処理している間は session_manage が返した session_id を渡します。active な Logical Session がない場合だけ null を使います。 |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -431,7 +429,7 @@ PNG、JPEG、GIF、WebP file を native MCP image content として表示しま�
 |---|---|---|---|
 | `path` | `string` | required |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | この field は常に指定してください。active な logical Session がない場合は `null`。`session_manage` の start/resume 後は返された `active_run.run_id` を渡し、MCP transport の reconnect をまたいで使い続けます。明示的な resume/takeover 後は新しい値を使用します。 |
+| `logical_session_id` | `string \| null` | required | この tool call に属する Logical Session です。task を処理している間は session_manage が返した session_id を渡します。active な Logical Session がない場合だけ null を使います。 |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -449,7 +447,7 @@ Local または remote machine に UTF-8 text file を書き込みます。
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | この field は常に指定してください。active な logical Session がない場合は `null`。`session_manage` の start/resume 後は返された `active_run.run_id` を渡し、MCP transport の reconnect をまたいで使い続けます。明示的な resume/takeover 後は新しい値を使用します。 |
+| `logical_session_id` | `string \| null` | required | この tool call に属する Logical Session です。task を処理している間は session_manage が返した session_id を渡します。active な Logical Session がない場合だけ null を使います。 |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -466,7 +464,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | この field は常に指定してください。active な logical Session がない場合は `null`。`session_manage` の start/resume 後は返された `active_run.run_id` を渡し、MCP transport の reconnect をまたいで使い続けます。明示的な resume/takeover 後は新しい値を使用します。 |
+| `logical_session_id` | `string \| null` | required | この tool call に属する Logical Session です。task を処理している間は session_manage が返した session_id を渡します。active な Logical Session がない場合だけ null を使います。 |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -483,7 +481,7 @@ Local/remote file または directory を削除します。`recursive=false` は
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | この field は常に指定してください。active な logical Session がない場合は `null`。`session_manage` の start/resume 後は返された `active_run.run_id` を渡し、MCP transport の reconnect をまたいで使い続けます。明示的な resume/takeover 後は新しい値を使用します。 |
+| `logical_session_id` | `string \| null` | required | この tool call に属する Logical Session です。task を処理している間は session_manage が返した session_id を渡します。active な Logical Session がない場合だけ null を使います。 |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -500,7 +498,7 @@ Local または remote で unified diff / file_patch envelope を検証して適
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | この field は常に指定してください。active な logical Session がない場合は `null`。`session_manage` の start/resume 後は返された `active_run.run_id` を渡し、MCP transport の reconnect をまたいで使い続けます。明示的な resume/takeover 後は新しい値を使用します。 |
+| `logical_session_id` | `string \| null` | required | この tool call に属する Logical Session です。task を処理している間は session_manage が返した session_id を渡します。active な Logical Session がない場合だけ null を使います。 |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -520,7 +518,7 @@ controller と remote machine の間で file/directory を copy する tracked j
 | `chunk_size` | `integer \| null` | `null` |  |
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | この field は常に指定してください。active な logical Session がない場合は `null`。`session_manage` の start/resume 後は返された `active_run.run_id` を渡し、MCP transport の reconnect をまたいで使い続けます。明示的な resume/takeover 後は新しい値を使用します。 |
+| `logical_session_id` | `string \| null` | required | この tool call に属する Logical Session です。task を処理している間は session_manage が返した session_id を渡します。active な Logical Session がない場合だけ null を使います。 |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -537,7 +535,7 @@ Local file 用の temporary browser-accessible URL を作成します。Default 
 | `filename` | `string \| null` | `null` |  |
 | `max_downloads` | `integer \| null` | `null` |  |
 | `inline` | `boolean` | `false` |  |
-| `session_run_id` | `string \| null` | required | この field は常に指定してください。active な logical Session がない場合は `null`。`session_manage` の start/resume 後は返された `active_run.run_id` を渡し、MCP transport の reconnect をまたいで使い続けます。明示的な resume/takeover 後は新しい値を使用します。 |
+| `logical_session_id` | `string \| null` | required | この tool call に属する Logical Session です。task を処理している間は session_manage が返した session_id を渡します。active な Logical Session がない場合だけ null を使います。 |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -548,7 +546,7 @@ Generated local file download URLs を列挙します。
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
 | `include_expired` | `boolean` | `false` |  |
-| `session_run_id` | `string \| null` | required | この field は常に指定してください。active な logical Session がない場合は `null`。`session_manage` の start/resume 後は返された `active_run.run_id` を渡し、MCP transport の reconnect をまたいで使い続けます。明示的な resume/takeover 後は新しい値を使用します。 |
+| `logical_session_id` | `string \| null` | required | この tool call に属する Logical Session です。task を処理している間は session_manage が返した session_id を渡します。active な Logical Session がない場合だけ null を使います。 |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -559,7 +557,7 @@ Generated local file download URL を revoke します。
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
 | `token` | `string` | required |  |
-| `session_run_id` | `string \| null` | required | この field は常に指定してください。active な logical Session がない場合は `null`。`session_manage` の start/resume 後は返された `active_run.run_id` を渡し、MCP transport の reconnect をまたいで使い続けます。明示的な resume/takeover 後は新しい値を使用します。 |
+| `logical_session_id` | `string \| null` | required | この tool call に属する Logical Session です。task を処理している間は session_manage が返した session_id を渡します。active な Logical Session がない場合だけ null を使います。 |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -585,7 +583,7 @@ Dynamic MCP servers の isolated environment/headers を register、list、get�
 | `refresh` | `boolean` | `true` |  |
 | `key` | `string \| null` | `null` |  |
 | `value` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | この field は常に指定してください。active な logical Session がない場合は `null`。`session_manage` の start/resume 後は返された `active_run.run_id` を渡し、MCP transport の reconnect をまたいで使い続けます。明示的な resume/takeover 後は新しい値を使用します。 |
+| `logical_session_id` | `string \| null` | required | この tool call に属する Logical Session です。task を処理している間は session_manage が返した session_id を渡します。active な Logical Session がない場合だけ null を使います。 |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -598,7 +596,7 @@ Enabled dynamic MCP servers の cached lightweight tool summaries を検索し�
 | `query` | `string` | `""` |  |
 | `server` | `string \| null` | `null` |  |
 | `limit` | `integer` | `20` |  |
-| `session_run_id` | `string \| null` | required | この field は常に指定してください。active な logical Session がない場合は `null`。`session_manage` の start/resume 後は返された `active_run.run_id` を渡し、MCP transport の reconnect をまたいで使い続けます。明示的な resume/takeover 後は新しい値を使用します。 |
+| `logical_session_id` | `string \| null` | required | この tool call に属する Logical Session です。task を処理している間は session_manage が返した session_id を渡します。active な Logical Session がない場合だけ null を使います。 |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -609,7 +607,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
 | `name` | `string` | required |  |
-| `session_run_id` | `string \| null` | required | この field は常に指定してください。active な logical Session がない場合は `null`。`session_manage` の start/resume 後は返された `active_run.run_id` を渡し、MCP transport の reconnect をまたいで使い続けます。明示的な resume/takeover 後は新しい値を使用します。 |
+| `logical_session_id` | `string \| null` | required | この tool call に属する Logical Session です。task を処理している間は session_manage が返した session_id を渡します。active な Logical Session がない場合だけ null を使います。 |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -622,7 +620,7 @@ Cached dynamic MCP tool `<server>:<tool>` を call します。`mcp_tool_search`
 | `name` | `string` | required |  |
 | `arguments` | `object \| null` | `null` |  |
 | `timeout_s` | `integer \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | この field は常に指定してください。active な logical Session がない場合は `null`。`session_manage` の start/resume 後は返された `active_run.run_id` を渡し、MCP transport の reconnect をまたいで使い続けます。明示的な resume/takeover 後は新しい値を使用します。 |
+| `logical_session_id` | `string \| null` | required | この tool call に属する Logical Session です。task を処理している間は session_manage が返した session_id を渡します。active な Logical Session がない場合だけ null を使います。 |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -646,7 +644,7 @@ Local/remote の persistent high-level browser sessions を start、list、close
 | `storage_state_path` | `string \| null` | `null` |  |
 | `save_storage_state_path` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | この field は常に指定してください。active な logical Session がない場合は `null`。`session_manage` の start/resume 後は返された `active_run.run_id` を渡し、MCP transport の reconnect をまたいで使い続けます。明示的な resume/takeover 後は新しい値を使用します。 |
+| `logical_session_id` | `string \| null` | required | この tool call に属する Logical Session です。task を処理している間は session_manage が返した session_id を渡します。active な Logical Session がない場合だけ null を使います。 |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -666,7 +664,7 @@ Persistent browser page の title、URL、bounded visible text、`e1` など sta
 | `max_text_chars` | `integer` | `100000` |  |
 | `max_elements` | `integer` | `100` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | この field は常に指定してください。active な logical Session がない場合は `null`。`session_manage` の start/resume 後は返された `active_run.run_id` を渡し、MCP transport の reconnect をまたいで使い続けます。明示的な resume/takeover 後は新しい値を使用します。 |
+| `logical_session_id` | `string \| null` | required | この tool call に属する Logical Session です。task を処理している間は session_manage が返した session_id を渡します。active な Logical Session がない場合だけ null を使います。 |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -683,7 +681,7 @@ Persistent browser session で structured actions を実行します。navigate�
 | `page_id` | `string \| null` | `null` |  |
 | `timeout_ms` | `integer` | `30000` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | この field は常に指定してください。active な logical Session がない場合は `null`。`session_manage` の start/resume 後は返された `active_run.run_id` を渡し、MCP transport の reconnect をまたいで使い続けます。明示的な resume/takeover 後は新しい値を使用します。 |
+| `logical_session_id` | `string \| null` | required | この tool call に属する Logical Session です。task を処理している間は session_manage が返した session_id を渡します。active な Logical Session がない場合だけ null を使います。 |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -699,7 +697,7 @@ Local または remote machine で full Python Playwright script を実行しま
 | `cwd` | `string` | `"."` |  |
 | `timeout_s` | `integer` | `60` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | この field は常に指定してください。active な logical Session がない場合は `null`。`session_manage` の start/resume 後は返された `active_run.run_id` を渡し、MCP transport の reconnect をまたいで使い続けます。明示的な resume/takeover 後は新しい値を使用します。 |
+| `logical_session_id` | `string \| null` | required | この tool call に属する Logical Session です。task を処理している間は session_manage が返した session_id を渡します。active な Logical Session がない場合だけ null を使います。 |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -719,7 +717,7 @@ action=invite、list、revoke、rename で remote workers を管理します。i
 | `ttl_s` | `integer \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
 | `new_name` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | この field は常に指定してください。active な logical Session がない場合は `null`。`session_manage` の start/resume 後は返された `active_run.run_id` を渡し、MCP transport の reconnect をまたいで使い続けます。明示的な resume/takeover 後は新しい値を使用します。 |
+| `logical_session_id` | `string \| null` | required | この tool call に属する Logical Session です。task を処理している間は session_manage が返した session_id を渡します。active な Logical Session がない場合だけ null を使います。 |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 

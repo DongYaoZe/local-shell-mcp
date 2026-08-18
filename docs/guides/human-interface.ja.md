@@ -1,4 +1,4 @@
-<!-- i18n-source-sha256: 8c683835be3adb3bf08d9d69b1731f61a39753bf255170fc663cf9456a0df54f -->
+<!-- i18n-source-sha256: 1cb4dc6f53744372145fad4e03a3d413bf105033e13844fea7684ea5f601d6ca -->
 # ヒューマンインターフェース
 
 `local-shell-mcp` は、同じ service API、workspace、persistent terminal registry、remote-worker registry、MCP audit log の上に、互換性のある2つの human interface を提供します。
@@ -18,24 +18,26 @@ local-shell-mcp --mode mcp
 
 ## ChatGPT Live Workspace
 
-ChatGPT が MCP Apps を描画できる場合、`workspace_open` は現在 attach されている logical Session の floating collaborative view を開きます。durable task state は Session が所有し、Live Workspace は live activity と human controls の表示だけを担当します。そのため App の reconnect や ChatGPT/MCP transport の変更で Session はリセットされません。
+ChatGPT が MCP Apps を表示できる場合、`workspace_open(session_id=...)` は**明示的に選択した Logical Session** のフローティング共同作業ビューを開きます。objective、progress、Plan、Activity などの永続的な task state は Session が保持し、Live Workspace はその state、live activity、人間向け control を表示するだけです。MCP transport から task identity を推測することはありません。
 
-典型的な handoff は次のとおりです。
+典型的な明示的 handoff は次のとおりです。
 
 ```text
 session_manage(action="start", objective=...)
         -> session_id
-... tool work + session_manage(action="report", ...) ...
-new agent run
-session_manage(action="resume", session_id=..., takeover=true)
-        -> inherited progress, Plan, and recent activity
-workspace_open()
-        -> reconnectable view of that Session
+... 各 tool call で logical_session_id=session_id を渡す
+... session_manage(action="report", session_id=...) ...
+新しい ChatGPT conversation
+user が以前の session_id を渡す
+session_manage(action="resume", session_id=...)
+        -> 既存の progress、Plan、最近の Activity
+workspace_open(session_id=...)
+        -> 同じ Session を表示
 ```
 
-`takeover=true` はまだ active な古い agent run を supersede します。supersede された run からの後続 tool call は、その agent が明示的に Session を再び resume するまで拒否されます。Session は machine や working directory に bind されず、通常の tool parameter が引き続き local/remote target と path を選びます。
+`session_id` が唯一の永続 task identity です。Agent は別 conversation の Session を list、推測、自動選択してはいけません。新しい conversation で作業を続ける場合、user が既存の `session_id` を明示的に渡します。Agent は start/resume 後、重要な progress checkpoint、および turn を終える前に、使用中の `session_id` を user に知らせ、手動 handoff できるようにします。Session は machine や working directory には結び付きません。通常の tool parameter が引き続き local/remote target と path を選択します。
 
-optional な `plan_manage` Plan は Session の Goal mode を有効にします。Plan が active で agent activity が15分ない場合、attach 済み Live Workspace は ChatGPT に continuation を要求できます。continuation は同じ `session_id` を先に resume し、accepted/rejected を問わず最大10回です。blocked/completed/cancelled Plan は自動 continuation されません。全 step が completed/skipped の active Plan は cleanup continuation の対象に残り、resumed agent が Plan を正式に finish できます。human pause/resume/cancel controls は一時的な Live Workspace state ではなく Session-owned Plan を更新します。
+任意の `plan_manage` Plan で Session の Goal mode を有効にできます。Plan が active で agent activity が 15 分ない場合、関連付けられた Live Workspace は ChatGPT に continuation を要求できます。continuation は同じ明示的な `session_id` を resume し、accepted/rejected を問わず最大 10 回です。blocked、completed、cancelled の Plan は自動 continuation されません。すべての step が completed/skipped の active Plan は、resumed agent が Plan を正式に finish できるよう、cleanup continuation の対象に残ります。人間の pause/resume/cancel control は一時的な Live Workspace state ではなく Session 所有の Plan を更新します。
 
 ## ブラウザーインターフェース
 

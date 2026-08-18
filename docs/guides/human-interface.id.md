@@ -1,4 +1,4 @@
-<!-- i18n-source-sha256: 8c683835be3adb3bf08d9d69b1731f61a39753bf255170fc663cf9456a0df54f -->
+<!-- i18n-source-sha256: 1cb4dc6f53744372145fad4e03a3d413bf105033e13844fea7684ea5f601d6ca -->
 # Antarmuka pengguna
 
 `local-shell-mcp` menyediakan dua human interface yang kompatibel di atas service API, workspace, persistent terminal registry, remote-worker registry, dan MCP audit log yang sama:
@@ -18,24 +18,26 @@ local-shell-mcp --mode mcp
 
 ## ChatGPT Live Workspace
 
-Saat ChatGPT dapat merender MCP Apps, `workspace_open` membuka floating collaborative view untuk logical Session yang sedang terpasang. Session memiliki durable task state; Live Workspace hanya menampilkan live activity dan human controls. Karena itu reconnect app atau perubahan transport ChatGPT/MCP tidak mereset Session.
+Saat ChatGPT merender MCP Apps, `workspace_open(session_id=...)` membuka tampilan kolaboratif mengambang untuk **Logical Session yang dipilih secara eksplisit**. Session menyimpan state task yang durable—objective, progress, Plan, dan Activity—sementara Live Workspace hanya menampilkan state tersebut, aktivitas live, dan kontrol manusia. Identitas task tidak pernah disimpulkan dari transport MCP.
 
-Handoff tipikal adalah:
+Handoff eksplisit yang umum adalah:
 
 ```text
 session_manage(action="start", objective=...)
         -> session_id
-... tool work + session_manage(action="report", ...) ...
-new agent run
-session_manage(action="resume", session_id=..., takeover=true)
-        -> inherited progress, Plan, and recent activity
-workspace_open()
-        -> reconnectable view of that Session
+... pemanggilan tool dengan logical_session_id=session_id
+... session_manage(action="report", session_id=...) ...
+percakapan ChatGPT baru
+pengguna memberikan session_id sebelumnya
+session_manage(action="resume", session_id=...)
+        -> progress, Plan, dan Activity terbaru yang sudah ada
+workspace_open(session_id=...)
+        -> tampilan Session yang sama
 ```
 
-`takeover=true` menggantikan agent run lama yang masih active. Tool call berikutnya dari run yang digantikan ditolak sampai agent tersebut secara eksplisit resume Session lagi. Session tidak terikat ke machine atau working directory; parameter tool biasa tetap memilih target local/remote dan path.
+`session_id` adalah satu-satunya identitas task yang durable. Agent tidak boleh membuat daftar, menyimpulkan, atau otomatis memilih Session dari percakapan lain. Untuk melanjutkan pekerjaan di percakapan baru, pengguna memberikan `session_id` yang sudah ada secara eksplisit. Agent harus menyebutkan `session_id` aktif setelah start/resume, pada checkpoint progres yang bermakna, dan sebelum mengakhiri turn agar handoff manual dapat dilakukan. Session tidak terikat pada machine atau working directory; parameter tool biasa tetap memilih target local/remote dan path.
 
-Plan `plan_manage` opsional mengaktifkan Goal mode untuk Session. Jika Plan active dan tidak ada agent activity selama 15 menit, Live Workspace yang terpasang dapat meminta ChatGPT melanjutkan. Continuation terlebih dahulu resume `session_id` yang sama dan dibatasi 10 percobaan, diterima maupun ditolak. Plan blocked, completed, atau cancelled tidak dilanjutkan otomatis; Plan active dengan semua step completed/skipped tetap eligible untuk cleanup continuation agar agent yang resume dapat finish Plan. Kontrol human pause/resume/cancel memperbarui Plan milik Session, bukan state Live Workspace sementara.
+Plan `plan_manage` opsional mengaktifkan Goal mode untuk Session. Jika Plan active dan tidak ada agent activity selama 15 menit, Live Workspace yang terkait dapat meminta ChatGPT melanjutkan. Continuation me-resume `session_id` eksplisit yang sama dan dibatasi 10 percobaan, baik diterima maupun ditolak. Plan blocked, completed, dan cancelled tidak dilanjutkan otomatis; Plan active dengan semua steps completed atau skipped tetap memenuhi syarat untuk continuation penutup agar agent yang di-resume dapat menyelesaikan Plan. Kontrol manusia pause/resume/cancel memperbarui Plan milik Session, bukan state Live Workspace yang sementara.
 
 ## Antarmuka browser
 

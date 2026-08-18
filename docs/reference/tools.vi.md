@@ -1,4 +1,4 @@
-<!-- i18n-source-sha256: 9e104b7a893f61206aea6ed76b78bb04387fc5349535c46ffafd8f2e4c9ccd3e -->
+<!-- i18n-source-sha256: 784cf8286b0aba665f54b0b14b7467047ff618447663c4b354d92176796c4001 -->
 # Tham chiếu tools
 
 Page này được xây từ MCP tool schemas thực tế. Chạy `python scripts/generate-tools-reference.py` sau khi thay đổi public tool surface để cập nhật English reference.
@@ -24,13 +24,13 @@ Phần lớn tool trả về `ToolResult` có cấu trúc gồm `ok`, `message` 
 
 ### `workspace_open`
 
-Mở hoặc reuse interactive Live Workspace để real-time human/agent collaboration. Chỉ call một lần cho active task rồi reuse floating workspace tự reconnect thay vì mở lại liên tục. Dùng khi terminal output, files/diffs, jobs, remotes hoặc audit activity cải thiện workflow đáng kể.
+Mở hoặc tái sử dụng Live Workspace hiển thị Logical Session được chỉ định rõ ràng. Truyền session_id đang hoạt động do session_manage trả về. Workspace không bao giờ suy ra danh tính task từ MCP transport; hãy truyền null rõ ràng khi không có Logical Session hoạt động.
 
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
+| `session_id` | `string \| null` | required |  |
 | `machine` | `string \| null` | `null` |  |
 | `cwd` | `string` | `"."` |  |
-| `session_run_id` | `string \| null` | required | Luôn cung cấp field này. Dùng `null` khi không có logical Session đang hoạt động; sau start/resume của `session_manage`, truyền `active_run.run_id` được trả về và tiếp tục dùng nó qua các lần reconnect MCP transport. Sau resume/takeover rõ ràng, dùng giá trị mới. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -45,7 +45,7 @@ Trả về version, workspace, auth, policy và environment information local ho
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Luôn cung cấp field này. Dùng `null` khi không có logical Session đang hoạt động; sau start/resume của `session_manage`, truyền `active_run.run_id` được trả về và tiếp tục dùng nó qua các lần reconnect MCP transport. Sau resume/takeover rõ ràng, dùng giá trị mới. |
+| `logical_session_id` | `string \| null` | required | Logical Session cho lần gọi tool này. Khi làm việc trên task, truyền session_id do session_manage trả về. Chỉ dùng null khi không có Logical Session hoạt động. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -57,7 +57,7 @@ Liệt kê installed Agent Skills mà không load instructions. MCP tool surface
 
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
-| `session_run_id` | `string \| null` | required | Luôn cung cấp field này. Dùng `null` khi không có logical Session đang hoạt động; sau start/resume của `session_manage`, truyền `active_run.run_id` được trả về và tiếp tục dùng nó qua các lần reconnect MCP transport. Sau resume/takeover rõ ràng, dùng giá trị mới. |
+| `logical_session_id` | `string \| null` | required | Logical Session cho lần gọi tool này. Khi làm việc trên task, truyền session_id do session_manage trả về. Chỉ dùng null khi không có Logical Session hoạt động. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -68,7 +68,7 @@ Load installed Skill bằng exact name do `skill_list` trả về. Trả về in
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
 | `name` | `string` | required |  |
-| `session_run_id` | `string \| null` | required | Luôn cung cấp field này. Dùng `null` khi không có logical Session đang hoạt động; sau start/resume của `session_manage`, truyền `active_run.run_id` được trả về và tiếp tục dùng nó qua các lần reconnect MCP transport. Sau resume/takeover rõ ràng, dùng giá trị mới. |
+| `logical_session_id` | `string \| null` | required | Logical Session cho lần gọi tool này. Khi làm việc trên task, truyền session_id do session_manage trả về. Chỉ dùng null khi không có Logical Session hoạt động. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -80,7 +80,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 |---|---|---|---|
 | `name` | `string` | required |  |
 | `path` | `string` | required |  |
-| `session_run_id` | `string \| null` | required | Luôn cung cấp field này. Dùng `null` khi không có logical Session đang hoạt động; sau start/resume của `session_manage`, truyền `active_run.run_id` được trả về và tiếp tục dùng nó qua các lần reconnect MCP transport. Sau resume/takeover rõ ràng, dùng giá trị mới. |
+| `logical_session_id` | `string \| null` | required | Logical Session cho lần gọi tool này. Khi làm việc trên task, truyền session_id do session_manage trả về. Chỉ dùng null khi không có Logical Session hoạt động. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -93,37 +93,35 @@ Scan local workspace text files để tìm common secrets trước commit hoặc
 | `cwd` | `string` | `"."` |  |
 | `glob` | `string \| null` | `null` |  |
 | `max_results` | `integer` | `200` |  |
-| `session_run_id` | `string \| null` | required | Luôn cung cấp field này. Dùng `null` khi không có logical Session đang hoạt động; sau start/resume của `session_manage`, truyền `active_run.run_id` được trả về và tiếp tục dùng nó qua các lần reconnect MCP transport. Sau resume/takeover rõ ràng, dùng giá trị mới. |
+| `logical_session_id` | `string \| null` | required | Logical Session cho lần gọi tool này. Khi làm việc trên task, truyền session_id do session_manage trả về. Chỉ dùng null khi không có Logical Session hoạt động. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
 ### `session_manage`
 
-Quản lý logical task Session bền vững, độc lập với machine và cwd. Hãy start trước công việc tool đáng kể, report tiến độ tại checkpoint có ý nghĩa và resume bằng `session_id` để bàn giao cho run GPT/MCP mới. `resume(takeover=true)` luôn tạo agent run mới và thay thế run cũ. Dùng `active_run.run_id` được trả về làm `session_run_id` cho report/finish/cancel và các tool tiếp theo. Action: start, resume, get, report, list, finish, cancel, delete.
+Quản lý một Logical Session bền vững. start tạo task mới và trả về session_id của nó. resume chỉ tiếp tục session_id được người dùng cung cấp rõ ràng hoặc đã có trong conversation này. Mọi action ngoài start đều yêu cầu session_id. Action: start, resume, get, report, finish, cancel, delete. report nhận summary/findings/next/blockers/objective/label; delete yêu cầu Session ở trạng thái terminal.
 
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
 | `action` | `string` | required |  |
 | `session_id` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | `null` |  |
 | `label` | `string \| null` | `null` |  |
 | `objective` | `string \| null` | `null` |  |
 | `summary` | `string \| null` | `null` |  |
 | `findings` | `array[string] \| null` | `null` |  |
 | `next` | `string \| null` | `null` |  |
 | `blockers` | `array[string] \| null` | `null` |  |
-| `takeover` | `boolean` | `false` |  |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
 ### `plan_manage`
 
-Quản lý Goal Plan tùy chọn thuộc logical Session hiện tại. Plan đang active cho phép continuation tự động sau 15 phút không có agent activity, giới hạn 10 lần thử. Hãy start/resume Session bằng `session_manage` trước; action thay đổi state phải dùng `active_run.run_id` của Session làm `session_run_id`. Action: start, get, update, block, resume, finish, cancel. start cần objective và steps; finish yêu cầu mọi step completed hoặc skipped.
+Quản lý Goal mode tùy chọn cho Logical Session được chỉ định rõ ràng. Plan đang active bật automatic continuation sau 15 phút không có agent activity, tối đa 10 lần. session_id phải là cùng durable id do session_manage trả về. Action: start, get, update, block, resume, finish, cancel. start yêu cầu objective và steps; finish yêu cầu mọi steps đều completed hoặc skipped.
 
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
 | `action` | `string` | required |  |
-| `session_run_id` | `string \| null` | `null` |  |
+| `session_id` | `string` | required |  |
 | `objective` | `string \| null` | `null` |  |
 | `steps` | `array[object] \| null` | `null` |  |
 | `step_id` | `string \| null` | `null` |  |
@@ -140,7 +138,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
 | `lines` | `integer` | `100` |  |
-| `session_run_id` | `string \| null` | required | Luôn cung cấp field này. Dùng `null` khi không có logical Session đang hoạt động; sau start/resume của `session_manage`, truyền `active_run.run_id` được trả về và tiếp tục dùng nó qua các lần reconnect MCP transport. Sau resume/takeover rõ ràng, dùng giá trị mới. |
+| `logical_session_id` | `string \| null` | required | Logical Session cho lần gọi tool này. Khi làm việc trên task, truyền session_id do session_manage trả về. Chỉ dùng null khi không có Logical Session hoạt động. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -159,7 +157,7 @@ Chạy một non-interactive shell command local hoặc trên remote machine. D�
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Luôn cung cấp field này. Dùng `null` khi không có logical Session đang hoạt động; sau start/resume của `session_manage`, truyền `active_run.run_id` được trả về và tiếp tục dùng nó qua các lần reconnect MCP transport. Sau resume/takeover rõ ràng, dùng giá trị mới. |
+| `logical_session_id` | `string \| null` | required | Logical Session cho lần gọi tool này. Khi làm việc trên task, truyền session_id do session_manage trả về. Chỉ dùng null khi không có Logical Session hoạt động. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -177,7 +175,7 @@ Viết và chạy short Python script local hoặc trên remote machine.
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Luôn cung cấp field này. Dùng `null` khi không có logical Session đang hoạt động; sau start/resume của `session_manage`, truyền `active_run.run_id` được trả về và tiếp tục dùng nó qua các lần reconnect MCP transport. Sau resume/takeover rõ ràng, dùng giá trị mới. |
+| `logical_session_id` | `string \| null` | required | Logical Session cho lần gọi tool này. Khi làm việc trên task, truyền session_id do session_manage trả về. Chỉ dùng null khi không có Logical Session hoạt động. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -195,7 +193,7 @@ Khởi động persistent interactive shell local hoặc trên remote machine.
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Luôn cung cấp field này. Dùng `null` khi không có logical Session đang hoạt động; sau start/resume của `session_manage`, truyền `active_run.run_id` được trả về và tiếp tục dùng nó qua các lần reconnect MCP transport. Sau resume/takeover rõ ràng, dùng giá trị mới. |
+| `logical_session_id` | `string \| null` | required | Logical Session cho lần gọi tool này. Khi làm việc trên task, truyền session_id do session_manage trả về. Chỉ dùng null khi không có Logical Session hoạt động. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -211,7 +209,7 @@ Gửi input tới persistent local/remote shell session.
 | `input_text` | `string` | required |  |
 | `enter` | `boolean` | `true` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Luôn cung cấp field này. Dùng `null` khi không có logical Session đang hoạt động; sau start/resume của `session_manage`, truyền `active_run.run_id` được trả về và tiếp tục dùng nó qua các lần reconnect MCP transport. Sau resume/takeover rõ ràng, dùng giá trị mới. |
+| `logical_session_id` | `string \| null` | required | Logical Session cho lần gọi tool này. Khi làm việc trên task, truyền session_id do session_manage trả về. Chỉ dùng null khi không có Logical Session hoạt động. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -226,7 +224,7 @@ Khi cung cấp `machine`, call cũng cần `remote:use` và chạy qua giao th�
 | `session_id` | `string` | required |  |
 | `lines` | `integer` | `200` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Luôn cung cấp field này. Dùng `null` khi không có logical Session đang hoạt động; sau start/resume của `session_manage`, truyền `active_run.run_id` được trả về và tiếp tục dùng nó qua các lần reconnect MCP transport. Sau resume/takeover rõ ràng, dùng giá trị mới. |
+| `logical_session_id` | `string \| null` | required | Logical Session cho lần gọi tool này. Khi làm việc trên task, truyền session_id do session_manage trả về. Chỉ dùng null khi không có Logical Session hoạt động. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -240,7 +238,7 @@ Kết thúc persistent local/remote shell session.
 |---|---|---|---|
 | `session_id` | `string` | required |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Luôn cung cấp field này. Dùng `null` khi không có logical Session đang hoạt động; sau start/resume của `session_manage`, truyền `active_run.run_id` được trả về và tiếp tục dùng nó qua các lần reconnect MCP transport. Sau resume/takeover rõ ràng, dùng giá trị mới. |
+| `logical_session_id` | `string \| null` | required | Logical Session cho lần gọi tool này. Khi làm việc trên task, truyền session_id do session_manage trả về. Chỉ dùng null khi không có Logical Session hoạt động. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -253,7 +251,7 @@ Liệt kê persistent shell sessions local hoặc trên remote machine.
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Luôn cung cấp field này. Dùng `null` khi không có logical Session đang hoạt động; sau start/resume của `session_manage`, truyền `active_run.run_id` được trả về và tiếp tục dùng nó qua các lần reconnect MCP transport. Sau resume/takeover rõ ràng, dùng giá trị mới. |
+| `logical_session_id` | `string \| null` | required | Logical Session cho lần gọi tool này. Khi làm việc trên task, truyền session_id do session_manage trả về. Chỉ dùng null khi không có Logical Session hoạt động. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -271,7 +269,7 @@ Khởi động tracked long-running job local hoặc trên remote machine.
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Luôn cung cấp field này. Dùng `null` khi không có logical Session đang hoạt động; sau start/resume của `session_manage`, truyền `active_run.run_id` được trả về và tiếp tục dùng nó qua các lần reconnect MCP transport. Sau resume/takeover rõ ràng, dùng giá trị mới. |
+| `logical_session_id` | `string \| null` | required | Logical Session cho lần gọi tool này. Khi làm việc trên task, truyền session_id do session_manage trả về. Chỉ dùng null khi không có Logical Session hoạt động. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -285,7 +283,7 @@ Liệt kê tracked jobs local hoặc trên remote machine.
 |---|---|---|---|
 | `include_finished` | `boolean` | `true` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Luôn cung cấp field này. Dùng `null` khi không có logical Session đang hoạt động; sau start/resume của `session_manage`, truyền `active_run.run_id` được trả về và tiếp tục dùng nó qua các lần reconnect MCP transport. Sau resume/takeover rõ ràng, dùng giá trị mới. |
+| `logical_session_id` | `string \| null` | required | Logical Session cho lần gọi tool này. Khi làm việc trên task, truyền session_id do session_manage trả về. Chỉ dùng null khi không có Logical Session hoạt động. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -300,7 +298,7 @@ Khi cung cấp `machine`, call cũng cần `remote:use` và chạy qua giao th�
 | `job_id` | `string` | required |  |
 | `lines` | `integer` | `200` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Luôn cung cấp field này. Dùng `null` khi không có logical Session đang hoạt động; sau start/resume của `session_manage`, truyền `active_run.run_id` được trả về và tiếp tục dùng nó qua các lần reconnect MCP transport. Sau resume/takeover rõ ràng, dùng giá trị mới. |
+| `logical_session_id` | `string \| null` | required | Logical Session cho lần gọi tool này. Khi làm việc trên task, truyền session_id do session_manage trả về. Chỉ dùng null khi không có Logical Session hoạt động. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -314,7 +312,7 @@ Dừng tracked local/remote job.
 |---|---|---|---|
 | `job_id` | `string` | required |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Luôn cung cấp field này. Dùng `null` khi không có logical Session đang hoạt động; sau start/resume của `session_manage`, truyền `active_run.run_id` được trả về và tiếp tục dùng nó qua các lần reconnect MCP transport. Sau resume/takeover rõ ràng, dùng giá trị mới. |
+| `logical_session_id` | `string \| null` | required | Logical Session cho lần gọi tool này. Khi làm việc trên task, truyền session_id do session_manage trả về. Chỉ dùng null khi không có Logical Session hoạt động. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -330,7 +328,7 @@ Khởi động lại stopped/exited tracked local/remote job.
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Luôn cung cấp field này. Dùng `null` khi không có logical Session đang hoạt động; sau start/resume của `session_manage`, truyền `active_run.run_id` được trả về và tiếp tục dùng nó qua các lần reconnect MCP transport. Sau resume/takeover rõ ràng, dùng giá trị mới. |
+| `logical_session_id` | `string \| null` | required | Logical Session cho lần gọi tool này. Khi làm việc trên task, truyền session_id do session_manage trả về. Chỉ dùng null khi không có Logical Session hoạt động. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -348,7 +346,7 @@ Liệt kê files và directories local hoặc trên remote machine.
 | `recursive` | `boolean` | `false` |  |
 | `max_entries` | `integer` | `500` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Luôn cung cấp field này. Dùng `null` khi không có logical Session đang hoạt động; sau start/resume của `session_manage`, truyền `active_run.run_id` được trả về và tiếp tục dùng nó qua các lần reconnect MCP transport. Sau resume/takeover rõ ràng, dùng giá trị mới. |
+| `logical_session_id` | `string \| null` | required | Logical Session cho lần gọi tool này. Khi làm việc trên task, truyền session_id do session_manage trả về. Chỉ dùng null khi không có Logical Session hoạt động. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -364,7 +362,7 @@ Trả về compact directory tree local hoặc trên remote machine.
 | `depth` | `integer` | `3` |  |
 | `max_entries` | `integer` | `500` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Luôn cung cấp field này. Dùng `null` khi không có logical Session đang hoạt động; sau start/resume của `session_manage`, truyền `active_run.run_id` được trả về và tiếp tục dùng nó qua các lần reconnect MCP transport. Sau resume/takeover rõ ràng, dùng giá trị mới. |
+| `logical_session_id` | `string \| null` | required | Logical Session cho lần gọi tool này. Khi làm việc trên task, truyền session_id do session_manage trả về. Chỉ dùng null khi không có Logical Session hoạt động. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -380,7 +378,7 @@ Tìm paths theo glob local hoặc trên remote machine.
 | `cwd` | `string` | `"."` |  |
 | `max_results` | `integer` | `500` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Luôn cung cấp field này. Dùng `null` khi không có logical Session đang hoạt động; sau start/resume của `session_manage`, truyền `active_run.run_id` được trả về và tiếp tục dùng nó qua các lần reconnect MCP transport. Sau resume/takeover rõ ràng, dùng giá trị mới. |
+| `logical_session_id` | `string \| null` | required | Logical Session cho lần gọi tool này. Khi làm việc trên task, truyền session_id do session_manage trả về. Chỉ dùng null khi không có Logical Session hoạt động. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -399,7 +397,7 @@ Tìm trong file contents local hoặc trên remote machine.
 | `case_sensitive` | `boolean` | `true` |  |
 | `max_results` | `integer \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Luôn cung cấp field này. Dùng `null` khi không có logical Session đang hoạt động; sau start/resume của `session_manage`, truyền `active_run.run_id` được trả về và tiếp tục dùng nó qua các lần reconnect MCP transport. Sau resume/takeover rõ ràng, dùng giá trị mới. |
+| `logical_session_id` | `string \| null` | required | Logical Session cho lần gọi tool này. Khi làm việc trên task, truyền session_id do session_manage trả về. Chỉ dùng null khi không có Logical Session hoạt động. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -417,7 +415,7 @@ Khi cung cấp `machine`, call cũng cần `remote:use` và chạy qua giao th�
 | `binary_preview` | `string \| null` | `null` |  |
 | `binary_preview_bytes` | `integer` | `256` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Luôn cung cấp field này. Dùng `null` khi không có logical Session đang hoạt động; sau start/resume của `session_manage`, truyền `active_run.run_id` được trả về và tiếp tục dùng nó qua các lần reconnect MCP transport. Sau resume/takeover rõ ràng, dùng giá trị mới. |
+| `logical_session_id` | `string \| null` | required | Logical Session cho lần gọi tool này. Khi làm việc trên task, truyền session_id do session_manage trả về. Chỉ dùng null khi không có Logical Session hoạt động. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -431,7 +429,7 @@ Hiển thị PNG, JPEG, GIF hoặc WebP dưới dạng native MCP image content 
 |---|---|---|---|
 | `path` | `string` | required |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Luôn cung cấp field này. Dùng `null` khi không có logical Session đang hoạt động; sau start/resume của `session_manage`, truyền `active_run.run_id` được trả về và tiếp tục dùng nó qua các lần reconnect MCP transport. Sau resume/takeover rõ ràng, dùng giá trị mới. |
+| `logical_session_id` | `string \| null` | required | Logical Session cho lần gọi tool này. Khi làm việc trên task, truyền session_id do session_manage trả về. Chỉ dùng null khi không có Logical Session hoạt động. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -449,7 +447,7 @@ Ghi UTF-8 text file local hoặc trên remote machine.
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Luôn cung cấp field này. Dùng `null` khi không có logical Session đang hoạt động; sau start/resume của `session_manage`, truyền `active_run.run_id` được trả về và tiếp tục dùng nó qua các lần reconnect MCP transport. Sau resume/takeover rõ ràng, dùng giá trị mới. |
+| `logical_session_id` | `string \| null` | required | Logical Session cho lần gọi tool này. Khi làm việc trên task, truyền session_id do session_manage trả về. Chỉ dùng null khi không có Logical Session hoạt động. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -466,7 +464,7 @@ Khi cung cấp `machine`, call cũng cần `remote:use` và chạy qua giao th�
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Luôn cung cấp field này. Dùng `null` khi không có logical Session đang hoạt động; sau start/resume của `session_manage`, truyền `active_run.run_id` được trả về và tiếp tục dùng nó qua các lần reconnect MCP transport. Sau resume/takeover rõ ràng, dùng giá trị mới. |
+| `logical_session_id` | `string \| null` | required | Logical Session cho lần gọi tool này. Khi làm việc trên task, truyền session_id do session_manage trả về. Chỉ dùng null khi không có Logical Session hoạt động. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -483,7 +481,7 @@ Xóa local/remote file hoặc directory. `recursive=false` xóa files hoặc emp
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Luôn cung cấp field này. Dùng `null` khi không có logical Session đang hoạt động; sau start/resume của `session_manage`, truyền `active_run.run_id` được trả về và tiếp tục dùng nó qua các lần reconnect MCP transport. Sau resume/takeover rõ ràng, dùng giá trị mới. |
+| `logical_session_id` | `string \| null` | required | Logical Session cho lần gọi tool này. Khi làm việc trên task, truyền session_id do session_manage trả về. Chỉ dùng null khi không có Logical Session hoạt động. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -500,7 +498,7 @@ Kiểm tra và áp dụng unified diff hoặc file_patch envelope local hoặc r
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Luôn cung cấp field này. Dùng `null` khi không có logical Session đang hoạt động; sau start/resume của `session_manage`, truyền `active_run.run_id` được trả về và tiếp tục dùng nó qua các lần reconnect MCP transport. Sau resume/takeover rõ ràng, dùng giá trị mới. |
+| `logical_session_id` | `string \| null` | required | Logical Session cho lần gọi tool này. Khi làm việc trên task, truyền session_id do session_manage trả về. Chỉ dùng null khi không có Logical Session hoạt động. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -520,7 +518,7 @@ Khởi chạy tracked job để copy file hoặc directory giữa controller và
 | `chunk_size` | `integer \| null` | `null` |  |
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Luôn cung cấp field này. Dùng `null` khi không có logical Session đang hoạt động; sau start/resume của `session_manage`, truyền `active_run.run_id` được trả về và tiếp tục dùng nó qua các lần reconnect MCP transport. Sau resume/takeover rõ ràng, dùng giá trị mới. |
+| `logical_session_id` | `string \| null` | required | Logical Session cho lần gọi tool này. Khi làm việc trên task, truyền session_id do session_manage trả về. Chỉ dùng null khi không có Logical Session hoạt động. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -537,7 +535,7 @@ Tạo temporary browser-accessible URL cho local file. Default response là atta
 | `filename` | `string \| null` | `null` |  |
 | `max_downloads` | `integer \| null` | `null` |  |
 | `inline` | `boolean` | `false` |  |
-| `session_run_id` | `string \| null` | required | Luôn cung cấp field này. Dùng `null` khi không có logical Session đang hoạt động; sau start/resume của `session_manage`, truyền `active_run.run_id` được trả về và tiếp tục dùng nó qua các lần reconnect MCP transport. Sau resume/takeover rõ ràng, dùng giá trị mới. |
+| `logical_session_id` | `string \| null` | required | Logical Session cho lần gọi tool này. Khi làm việc trên task, truyền session_id do session_manage trả về. Chỉ dùng null khi không có Logical Session hoạt động. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -548,7 +546,7 @@ Liệt kê generated local file download URLs.
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
 | `include_expired` | `boolean` | `false` |  |
-| `session_run_id` | `string \| null` | required | Luôn cung cấp field này. Dùng `null` khi không có logical Session đang hoạt động; sau start/resume của `session_manage`, truyền `active_run.run_id` được trả về và tiếp tục dùng nó qua các lần reconnect MCP transport. Sau resume/takeover rõ ràng, dùng giá trị mới. |
+| `logical_session_id` | `string \| null` | required | Logical Session cho lần gọi tool này. Khi làm việc trên task, truyền session_id do session_manage trả về. Chỉ dùng null khi không có Logical Session hoạt động. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -559,7 +557,7 @@ Revoke generated local file download URL.
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
 | `token` | `string` | required |  |
-| `session_run_id` | `string \| null` | required | Luôn cung cấp field này. Dùng `null` khi không có logical Session đang hoạt động; sau start/resume của `session_manage`, truyền `active_run.run_id` được trả về và tiếp tục dùng nó qua các lần reconnect MCP transport. Sau resume/takeover rõ ràng, dùng giá trị mới. |
+| `logical_session_id` | `string \| null` | required | Logical Session cho lần gọi tool này. Khi làm việc trên task, truyền session_id do session_manage trả về. Chỉ dùng null khi không có Logical Session hoạt động. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -585,7 +583,7 @@ Register, list, get, enable, disable, refresh, remove hoặc update isolated env
 | `refresh` | `boolean` | `true` |  |
 | `key` | `string \| null` | `null` |  |
 | `value` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Luôn cung cấp field này. Dùng `null` khi không có logical Session đang hoạt động; sau start/resume của `session_manage`, truyền `active_run.run_id` được trả về và tiếp tục dùng nó qua các lần reconnect MCP transport. Sau resume/takeover rõ ràng, dùng giá trị mới. |
+| `logical_session_id` | `string \| null` | required | Logical Session cho lần gọi tool này. Khi làm việc trên task, truyền session_id do session_manage trả về. Chỉ dùng null khi không có Logical Session hoạt động. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -598,7 +596,7 @@ Tìm cached lightweight tool summaries từ enabled dynamic MCP servers. Dynamic
 | `query` | `string` | `""` |  |
 | `server` | `string \| null` | `null` |  |
 | `limit` | `integer` | `20` |  |
-| `session_run_id` | `string \| null` | required | Luôn cung cấp field này. Dùng `null` khi không có logical Session đang hoạt động; sau start/resume của `session_manage`, truyền `active_run.run_id` được trả về và tiếp tục dùng nó qua các lần reconnect MCP transport. Sau resume/takeover rõ ràng, dùng giá trị mới. |
+| `logical_session_id` | `string \| null` | required | Logical Session cho lần gọi tool này. Khi làm việc trên task, truyền session_id do session_manage trả về. Chỉ dùng null khi không có Logical Session hoạt động. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -609,7 +607,7 @@ Trả về full cached schema của dynamic MCP tool tên `<server>:<tool>`. Ref
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
 | `name` | `string` | required |  |
-| `session_run_id` | `string \| null` | required | Luôn cung cấp field này. Dùng `null` khi không có logical Session đang hoạt động; sau start/resume của `session_manage`, truyền `active_run.run_id` được trả về và tiếp tục dùng nó qua các lần reconnect MCP transport. Sau resume/takeover rõ ràng, dùng giá trị mới. |
+| `logical_session_id` | `string \| null` | required | Logical Session cho lần gọi tool này. Khi làm việc trên task, truyền session_id do session_manage trả về. Chỉ dùng null khi không có Logical Session hoạt động. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -622,7 +620,7 @@ Call cached dynamic MCP tool tên `<server>:<tool>`. Discover bằng `mcp_tool_s
 | `name` | `string` | required |  |
 | `arguments` | `object \| null` | `null` |  |
 | `timeout_s` | `integer \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Luôn cung cấp field này. Dùng `null` khi không có logical Session đang hoạt động; sau start/resume của `session_manage`, truyền `active_run.run_id` được trả về và tiếp tục dùng nó qua các lần reconnect MCP transport. Sau resume/takeover rõ ràng, dùng giá trị mới. |
+| `logical_session_id` | `string \| null` | required | Logical Session cho lần gọi tool này. Khi làm việc trên task, truyền session_id do session_manage trả về. Chỉ dùng null khi không có Logical Session hoạt động. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -646,7 +644,7 @@ Start, list, close hoặc cleanup persistent high-level browser sessions local h
 | `storage_state_path` | `string \| null` | `null` |  |
 | `save_storage_state_path` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Luôn cung cấp field này. Dùng `null` khi không có logical Session đang hoạt động; sau start/resume của `session_manage`, truyền `active_run.run_id` được trả về và tiếp tục dùng nó qua các lần reconnect MCP transport. Sau resume/takeover rõ ràng, dùng giá trị mới. |
+| `logical_session_id` | `string \| null` | required | Logical Session cho lần gọi tool này. Khi làm việc trên task, truyền session_id do session_manage trả về. Chỉ dùng null khi không có Logical Session hoạt động. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -666,7 +664,7 @@ Capture persistent browser page: title, URL, bounded visible text, interactive e
 | `max_text_chars` | `integer` | `100000` |  |
 | `max_elements` | `integer` | `100` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Luôn cung cấp field này. Dùng `null` khi không có logical Session đang hoạt động; sau start/resume của `session_manage`, truyền `active_run.run_id` được trả về và tiếp tục dùng nó qua các lần reconnect MCP transport. Sau resume/takeover rõ ràng, dùng giá trị mới. |
+| `logical_session_id` | `string \| null` | required | Logical Session cho lần gọi tool này. Khi làm việc trên task, truyền session_id do session_manage trả về. Chỉ dùng null khi không có Logical Session hoạt động. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -683,7 +681,7 @@ Chạy structured actions trong persistent browser session. Hỗ trợ navigate,
 | `page_id` | `string \| null` | `null` |  |
 | `timeout_ms` | `integer` | `30000` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Luôn cung cấp field này. Dùng `null` khi không có logical Session đang hoạt động; sau start/resume của `session_manage`, truyền `active_run.run_id` được trả về và tiếp tục dùng nó qua các lần reconnect MCP transport. Sau resume/takeover rõ ràng, dùng giá trị mới. |
+| `logical_session_id` | `string \| null` | required | Logical Session cho lần gọi tool này. Khi làm việc trên task, truyền session_id do session_manage trả về. Chỉ dùng null khi không có Logical Session hoạt động. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -699,7 +697,7 @@ Chạy full Python Playwright script local hoặc trên remote machine.
 | `cwd` | `string` | `"."` |  |
 | `timeout_s` | `integer` | `60` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Luôn cung cấp field này. Dùng `null` khi không có logical Session đang hoạt động; sau start/resume của `session_manage`, truyền `active_run.run_id` được trả về và tiếp tục dùng nó qua các lần reconnect MCP transport. Sau resume/takeover rõ ràng, dùng giá trị mới. |
+| `logical_session_id` | `string \| null` | required | Logical Session cho lần gọi tool này. Khi làm việc trên task, truyền session_id do session_manage trả về. Chỉ dùng null khi không có Logical Session hoạt động. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -719,7 +717,7 @@ Quản lý remote workers bằng action=invite, list, revoke hoặc rename. invi
 | `ttl_s` | `integer \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
 | `new_name` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Luôn cung cấp field này. Dùng `null` khi không có logical Session đang hoạt động; sau start/resume của `session_manage`, truyền `active_run.run_id` được trả về và tiếp tục dùng nó qua các lần reconnect MCP transport. Sau resume/takeover rõ ràng, dùng giá trị mới. |
+| `logical_session_id` | `string \| null` | required | Logical Session cho lần gọi tool này. Khi làm việc trên task, truyền session_id do session_manage trả về. Chỉ dùng null khi không có Logical Session hoạt động. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 

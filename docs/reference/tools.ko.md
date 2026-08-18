@@ -1,4 +1,4 @@
-<!-- i18n-source-sha256: 9e104b7a893f61206aea6ed76b78bb04387fc5349535c46ffafd8f2e4c9ccd3e -->
+<!-- i18n-source-sha256: 784cf8286b0aba665f54b0b14b7467047ff618447663c4b354d92176796c4001 -->
 # Tools reference
 
 이 페이지는 실제 MCP tool schema에서 구성됩니다. Public tool surface를 변경한 뒤 `python scripts/generate-tools-reference.py`를 실행해 English reference를 갱신하십시오.
@@ -24,13 +24,13 @@
 
 ### `workspace_open`
 
-Real-time human/agent collaboration을 위해 interactive Live Workspace를 열거나 재사용합니다. Active task에서 한 번만 호출하고 반복해서 열지 말고 self-reconnecting floating workspace를 재사용하십시오. Terminal output, files/diffs, jobs, remotes, audit activity가 workflow를 실질적으로 개선할 때 사용합니다.
+명시적으로 지정한 Logical Session을 표시하는 Live Workspace를 열거나 재사용합니다. session_manage가 반환한 active session_id를 전달합니다. Workspace는 MCP transport에서 task identity를 추론하지 않으며, active Logical Session이 없을 때는 null을 명시적으로 전달합니다.
 
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
+| `session_id` | `string \| null` | required |  |
 | `machine` | `string \| null` | `null` |  |
 | `cwd` | `string` | `"."` |  |
-| `session_run_id` | `string \| null` | required | 이 field는 항상 제공하세요. 활성 logical Session이 없으면 `null`을 사용합니다. `session_manage` start/resume 후에는 반환된 `active_run.run_id`를 전달하고 MCP transport reconnect 동안 계속 사용합니다. 명시적 resume/takeover 후에는 새 값을 사용합니다. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -45,7 +45,7 @@ Local 또는 remote machine의 version, workspace, auth, policy, environment inf
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | 이 field는 항상 제공하세요. 활성 logical Session이 없으면 `null`을 사용합니다. `session_manage` start/resume 후에는 반환된 `active_run.run_id`를 전달하고 MCP transport reconnect 동안 계속 사용합니다. 명시적 resume/takeover 후에는 새 값을 사용합니다. |
+| `logical_session_id` | `string \| null` | required | 이 tool call이 속한 Logical Session입니다. task를 수행하는 동안 session_manage가 반환한 session_id를 전달합니다. active Logical Session이 없을 때만 null을 사용합니다. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -57,7 +57,7 @@ Instructions를 로드하지 않고 installed Agent Skills를 나열합니다. M
 
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
-| `session_run_id` | `string \| null` | required | 이 field는 항상 제공하세요. 활성 logical Session이 없으면 `null`을 사용합니다. `session_manage` start/resume 후에는 반환된 `active_run.run_id`를 전달하고 MCP transport reconnect 동안 계속 사용합니다. 명시적 resume/takeover 후에는 새 값을 사용합니다. |
+| `logical_session_id` | `string \| null` | required | 이 tool call이 속한 Logical Session입니다. task를 수행하는 동안 session_manage가 반환한 session_id를 전달합니다. active Logical Session이 없을 때만 null을 사용합니다. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -68,7 +68,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
 | `name` | `string` | required |  |
-| `session_run_id` | `string \| null` | required | 이 field는 항상 제공하세요. 활성 logical Session이 없으면 `null`을 사용합니다. `session_manage` start/resume 후에는 반환된 `active_run.run_id`를 전달하고 MCP transport reconnect 동안 계속 사용합니다. 명시적 resume/takeover 후에는 새 값을 사용합니다. |
+| `logical_session_id` | `string \| null` | required | 이 tool call이 속한 Logical Session입니다. task를 수행하는 동안 session_manage가 반환한 session_id를 전달합니다. active Logical Session이 없을 때만 null을 사용합니다. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -80,7 +80,7 @@ Installed Skill의 related text file 하나를 읽습니다.
 |---|---|---|---|
 | `name` | `string` | required |  |
 | `path` | `string` | required |  |
-| `session_run_id` | `string \| null` | required | 이 field는 항상 제공하세요. 활성 logical Session이 없으면 `null`을 사용합니다. `session_manage` start/resume 후에는 반환된 `active_run.run_id`를 전달하고 MCP transport reconnect 동안 계속 사용합니다. 명시적 resume/takeover 후에는 새 값을 사용합니다. |
+| `logical_session_id` | `string \| null` | required | 이 tool call이 속한 Logical Session입니다. task를 수행하는 동안 session_manage가 반환한 session_id를 전달합니다. active Logical Session이 없을 때만 null을 사용합니다. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -93,37 +93,35 @@ Commit/push 전에 local workspace text files에서 common secrets를 scan합니
 | `cwd` | `string` | `"."` |  |
 | `glob` | `string \| null` | `null` |  |
 | `max_results` | `integer` | `200` |  |
-| `session_run_id` | `string \| null` | required | 이 field는 항상 제공하세요. 활성 logical Session이 없으면 `null`을 사용합니다. `session_manage` start/resume 후에는 반환된 `active_run.run_id`를 전달하고 MCP transport reconnect 동안 계속 사용합니다. 명시적 resume/takeover 후에는 새 값을 사용합니다. |
+| `logical_session_id` | `string \| null` | required | 이 tool call이 속한 Logical Session입니다. task를 수행하는 동안 session_manage가 반환한 session_id를 전달합니다. active Logical Session이 없을 때만 null을 사용합니다. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
 ### `session_manage`
 
-machine과 cwd에 독립적인 durable logical task Session을 관리합니다. 실질적인 tool 작업 전에 start하고, 의미 있는 checkpoint에서 진행 상황을 report하며, 새 GPT/MCP run은 `session_id`로 resume하여 인계받습니다. `resume(takeover=true)`는 항상 새 agent run을 만들고 이전 run을 supersede합니다. 이후 report/finish/cancel 및 다른 tool에는 반환된 `active_run.run_id`를 `session_run_id`로 사용합니다. action: start, resume, get, report, list, finish, cancel, delete.
+하나의 durable Logical Session을 관리합니다. start는 새 task를 만들고 session_id를 반환합니다. resume은 사용자가 명시적으로 제공했거나 이 conversation에 이미 있는 session_id만 계속. start 이외의 모든 action에는 session_id가 필요합니다. Action: start, resume, get, report, finish, cancel, delete. report는 summary/findings/next/blockers/objective/label을 받고, delete에는 terminal Session이 필요합니다.
 
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
 | `action` | `string` | required |  |
 | `session_id` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | `null` |  |
 | `label` | `string \| null` | `null` |  |
 | `objective` | `string \| null` | `null` |  |
 | `summary` | `string \| null` | `null` |  |
 | `findings` | `array[string] \| null` | `null` |  |
 | `next` | `string \| null` | `null` |  |
 | `blockers` | `array[string] \| null` | `null` |  |
-| `takeover` | `boolean` | `false` |  |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
 ### `plan_manage`
 
-현재 logical Session이 소유하는 optional Goal Plan을 관리합니다. active Plan은 agent activity가 15분 없으면 자동 continuation을 활성화하며 최대 10회로 제한됩니다. 먼저 `session_manage`로 Session을 start/resume하고, 변경 action에는 해당 Session의 `active_run.run_id`를 `session_run_id`로 전달합니다. action: start, get, update, block, resume, finish, cancel. start에는 objective와 steps가 필요하고 finish는 모든 step이 completed 또는 skipped여야 합니다.
+명시적 Logical Session의 optional Goal mode를 관리합니다. active plan은 agent activity가 15분 없으면 automatic continuation을 활성화하며 최대 10회로 제한됩니다. session_id는 session_manage가 반환한 동일한 durable id여야 합니다. Action: start, get, update, block, resume, finish, cancel. start에는 objective와 steps가 필요하고 finish에는 모든 steps가 completed 또는 skipped여야 합니다.
 
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
 | `action` | `string` | required |  |
-| `session_run_id` | `string \| null` | `null` |  |
+| `session_id` | `string` | required |  |
 | `objective` | `string \| null` | `null` |  |
 | `steps` | `array[object] \| null` | `null` |  |
 | `step_id` | `string \| null` | `null` |  |
@@ -140,7 +138,7 @@ Recent local audit log entries를 읽습니다.
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
 | `lines` | `integer` | `100` |  |
-| `session_run_id` | `string \| null` | required | 이 field는 항상 제공하세요. 활성 logical Session이 없으면 `null`을 사용합니다. `session_manage` start/resume 후에는 반환된 `active_run.run_id`를 전달하고 MCP transport reconnect 동안 계속 사용합니다. 명시적 resume/takeover 후에는 새 값을 사용합니다. |
+| `logical_session_id` | `string \| null` | required | 이 tool call이 속한 Logical Session입니다. task를 수행하는 동안 session_manage가 반환한 session_id를 전달합니다. active Logical Session이 없을 때만 null을 사용합니다. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -159,7 +157,7 @@ Local 또는 remote machine에서 non-interactive shell command 하나를 실행
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | 이 field는 항상 제공하세요. 활성 logical Session이 없으면 `null`을 사용합니다. `session_manage` start/resume 후에는 반환된 `active_run.run_id`를 전달하고 MCP transport reconnect 동안 계속 사용합니다. 명시적 resume/takeover 후에는 새 값을 사용합니다. |
+| `logical_session_id` | `string \| null` | required | 이 tool call이 속한 Logical Session입니다. task를 수행하는 동안 session_manage가 반환한 session_id를 전달합니다. active Logical Session이 없을 때만 null을 사용합니다. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -177,7 +175,7 @@ Local 또는 remote machine에서 short Python script를 작성하고 실행합�
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | 이 field는 항상 제공하세요. 활성 logical Session이 없으면 `null`을 사용합니다. `session_manage` start/resume 후에는 반환된 `active_run.run_id`를 전달하고 MCP transport reconnect 동안 계속 사용합니다. 명시적 resume/takeover 후에는 새 값을 사용합니다. |
+| `logical_session_id` | `string \| null` | required | 이 tool call이 속한 Logical Session입니다. task를 수행하는 동안 session_manage가 반환한 session_id를 전달합니다. active Logical Session이 없을 때만 null을 사용합니다. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -195,7 +193,7 @@ Local 또는 remote machine에서 persistent interactive shell을 시작합니�
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | 이 field는 항상 제공하세요. 활성 logical Session이 없으면 `null`을 사용합니다. `session_manage` start/resume 후에는 반환된 `active_run.run_id`를 전달하고 MCP transport reconnect 동안 계속 사용합니다. 명시적 resume/takeover 후에는 새 값을 사용합니다. |
+| `logical_session_id` | `string \| null` | required | 이 tool call이 속한 Logical Session입니다. task를 수행하는 동안 session_manage가 반환한 session_id를 전달합니다. active Logical Session이 없을 때만 null을 사용합니다. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -211,7 +209,7 @@ Persistent local/remote shell session에 input을 보냅니다.
 | `input_text` | `string` | required |  |
 | `enter` | `boolean` | `true` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | 이 field는 항상 제공하세요. 활성 logical Session이 없으면 `null`을 사용합니다. `session_manage` start/resume 후에는 반환된 `active_run.run_id`를 전달하고 MCP transport reconnect 동안 계속 사용합니다. 명시적 resume/takeover 후에는 새 값을 사용합니다. |
+| `logical_session_id` | `string \| null` | required | 이 tool call이 속한 Logical Session입니다. task를 수행하는 동안 session_manage가 반환한 session_id를 전달합니다. active Logical Session이 없을 때만 null을 사용합니다. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -226,7 +224,7 @@ Persistent local/remote shell session의 recent output을 읽습니다.
 | `session_id` | `string` | required |  |
 | `lines` | `integer` | `200` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | 이 field는 항상 제공하세요. 활성 logical Session이 없으면 `null`을 사용합니다. `session_manage` start/resume 후에는 반환된 `active_run.run_id`를 전달하고 MCP transport reconnect 동안 계속 사용합니다. 명시적 resume/takeover 후에는 새 값을 사용합니다. |
+| `logical_session_id` | `string \| null` | required | 이 tool call이 속한 Logical Session입니다. task를 수행하는 동안 session_manage가 반환한 session_id를 전달합니다. active Logical Session이 없을 때만 null을 사용합니다. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -240,7 +238,7 @@ Persistent local/remote shell session을 종료합니다.
 |---|---|---|---|
 | `session_id` | `string` | required |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | 이 field는 항상 제공하세요. 활성 logical Session이 없으면 `null`을 사용합니다. `session_manage` start/resume 후에는 반환된 `active_run.run_id`를 전달하고 MCP transport reconnect 동안 계속 사용합니다. 명시적 resume/takeover 후에는 새 값을 사용합니다. |
+| `logical_session_id` | `string \| null` | required | 이 tool call이 속한 Logical Session입니다. task를 수행하는 동안 session_manage가 반환한 session_id를 전달합니다. active Logical Session이 없을 때만 null을 사용합니다. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -253,7 +251,7 @@ Local 또는 remote machine의 persistent shell sessions를 나열합니다.
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | 이 field는 항상 제공하세요. 활성 logical Session이 없으면 `null`을 사용합니다. `session_manage` start/resume 후에는 반환된 `active_run.run_id`를 전달하고 MCP transport reconnect 동안 계속 사용합니다. 명시적 resume/takeover 후에는 새 값을 사용합니다. |
+| `logical_session_id` | `string \| null` | required | 이 tool call이 속한 Logical Session입니다. task를 수행하는 동안 session_manage가 반환한 session_id를 전달합니다. active Logical Session이 없을 때만 null을 사용합니다. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -271,7 +269,7 @@ Local 또는 remote machine에서 tracked long-running job을 시작합니다.
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | 이 field는 항상 제공하세요. 활성 logical Session이 없으면 `null`을 사용합니다. `session_manage` start/resume 후에는 반환된 `active_run.run_id`를 전달하고 MCP transport reconnect 동안 계속 사용합니다. 명시적 resume/takeover 후에는 새 값을 사용합니다. |
+| `logical_session_id` | `string \| null` | required | 이 tool call이 속한 Logical Session입니다. task를 수행하는 동안 session_manage가 반환한 session_id를 전달합니다. active Logical Session이 없을 때만 null을 사용합니다. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -285,7 +283,7 @@ Local 또는 remote machine의 tracked jobs를 나열합니다.
 |---|---|---|---|
 | `include_finished` | `boolean` | `true` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | 이 field는 항상 제공하세요. 활성 logical Session이 없으면 `null`을 사용합니다. `session_manage` start/resume 후에는 반환된 `active_run.run_id`를 전달하고 MCP transport reconnect 동안 계속 사용합니다. 명시적 resume/takeover 후에는 새 값을 사용합니다. |
+| `logical_session_id` | `string \| null` | required | 이 tool call이 속한 Logical Session입니다. task를 수행하는 동안 session_manage가 반환한 session_id를 전달합니다. active Logical Session이 없을 때만 null을 사용합니다. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -300,7 +298,7 @@ Tracked local/remote job의 recent output을 읽습니다.
 | `job_id` | `string` | required |  |
 | `lines` | `integer` | `200` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | 이 field는 항상 제공하세요. 활성 logical Session이 없으면 `null`을 사용합니다. `session_manage` start/resume 후에는 반환된 `active_run.run_id`를 전달하고 MCP transport reconnect 동안 계속 사용합니다. 명시적 resume/takeover 후에는 새 값을 사용합니다. |
+| `logical_session_id` | `string \| null` | required | 이 tool call이 속한 Logical Session입니다. task를 수행하는 동안 session_manage가 반환한 session_id를 전달합니다. active Logical Session이 없을 때만 null을 사용합니다. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -314,7 +312,7 @@ Tracked local/remote job을 중지합니다.
 |---|---|---|---|
 | `job_id` | `string` | required |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | 이 field는 항상 제공하세요. 활성 logical Session이 없으면 `null`을 사용합니다. `session_manage` start/resume 후에는 반환된 `active_run.run_id`를 전달하고 MCP transport reconnect 동안 계속 사용합니다. 명시적 resume/takeover 후에는 새 값을 사용합니다. |
+| `logical_session_id` | `string \| null` | required | 이 tool call이 속한 Logical Session입니다. task를 수행하는 동안 session_manage가 반환한 session_id를 전달합니다. active Logical Session이 없을 때만 null을 사용합니다. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -330,7 +328,7 @@ Stopped/exited tracked local/remote job을 다시 시작합니다.
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | 이 field는 항상 제공하세요. 활성 logical Session이 없으면 `null`을 사용합니다. `session_manage` start/resume 후에는 반환된 `active_run.run_id`를 전달하고 MCP transport reconnect 동안 계속 사용합니다. 명시적 resume/takeover 후에는 새 값을 사용합니다. |
+| `logical_session_id` | `string \| null` | required | 이 tool call이 속한 Logical Session입니다. task를 수행하는 동안 session_manage가 반환한 session_id를 전달합니다. active Logical Session이 없을 때만 null을 사용합니다. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -348,7 +346,7 @@ Local 또는 remote machine의 files/directories를 나열합니다.
 | `recursive` | `boolean` | `false` |  |
 | `max_entries` | `integer` | `500` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | 이 field는 항상 제공하세요. 활성 logical Session이 없으면 `null`을 사용합니다. `session_manage` start/resume 후에는 반환된 `active_run.run_id`를 전달하고 MCP transport reconnect 동안 계속 사용합니다. 명시적 resume/takeover 후에는 새 값을 사용합니다. |
+| `logical_session_id` | `string \| null` | required | 이 tool call이 속한 Logical Session입니다. task를 수행하는 동안 session_manage가 반환한 session_id를 전달합니다. active Logical Session이 없을 때만 null을 사용합니다. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -364,7 +362,7 @@ Local 또는 remote machine의 compact directory tree를 반환합니다.
 | `depth` | `integer` | `3` |  |
 | `max_entries` | `integer` | `500` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | 이 field는 항상 제공하세요. 활성 logical Session이 없으면 `null`을 사용합니다. `session_manage` start/resume 후에는 반환된 `active_run.run_id`를 전달하고 MCP transport reconnect 동안 계속 사용합니다. 명시적 resume/takeover 후에는 새 값을 사용합니다. |
+| `logical_session_id` | `string \| null` | required | 이 tool call이 속한 Logical Session입니다. task를 수행하는 동안 session_manage가 반환한 session_id를 전달합니다. active Logical Session이 없을 때만 null을 사용합니다. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -380,7 +378,7 @@ Local 또는 remote machine에서 glob으로 paths를 찾습니다.
 | `cwd` | `string` | `"."` |  |
 | `max_results` | `integer` | `500` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | 이 field는 항상 제공하세요. 활성 logical Session이 없으면 `null`을 사용합니다. `session_manage` start/resume 후에는 반환된 `active_run.run_id`를 전달하고 MCP transport reconnect 동안 계속 사용합니다. 명시적 resume/takeover 후에는 새 값을 사용합니다. |
+| `logical_session_id` | `string \| null` | required | 이 tool call이 속한 Logical Session입니다. task를 수행하는 동안 session_manage가 반환한 session_id를 전달합니다. active Logical Session이 없을 때만 null을 사용합니다. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -399,7 +397,7 @@ Local 또는 remote machine의 file contents를 검색합니다.
 | `case_sensitive` | `boolean` | `true` |  |
 | `max_results` | `integer \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | 이 field는 항상 제공하세요. 활성 logical Session이 없으면 `null`을 사용합니다. `session_manage` start/resume 후에는 반환된 `active_run.run_id`를 전달하고 MCP transport reconnect 동안 계속 사용합니다. 명시적 resume/takeover 후에는 새 값을 사용합니다. |
+| `logical_session_id` | `string \| null` | required | 이 tool call이 속한 Logical Session입니다. task를 수행하는 동안 session_manage가 반환한 session_id를 전달합니다. active Logical Session이 없을 때만 null을 사용합니다. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -417,7 +415,7 @@ Local 또는 remote machine의 file 하나 또는 file list를 읽습니다.
 | `binary_preview` | `string \| null` | `null` |  |
 | `binary_preview_bytes` | `integer` | `256` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | 이 field는 항상 제공하세요. 활성 logical Session이 없으면 `null`을 사용합니다. `session_manage` start/resume 후에는 반환된 `active_run.run_id`를 전달하고 MCP transport reconnect 동안 계속 사용합니다. 명시적 resume/takeover 후에는 새 값을 사용합니다. |
+| `logical_session_id` | `string \| null` | required | 이 tool call이 속한 Logical Session입니다. task를 수행하는 동안 session_manage가 반환한 session_id를 전달합니다. active Logical Session이 없을 때만 null을 사용합니다. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -431,7 +429,7 @@ PNG, JPEG, GIF, WebP file을 native MCP image content로 표시합니다. Visual
 |---|---|---|---|
 | `path` | `string` | required |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | 이 field는 항상 제공하세요. 활성 logical Session이 없으면 `null`을 사용합니다. `session_manage` start/resume 후에는 반환된 `active_run.run_id`를 전달하고 MCP transport reconnect 동안 계속 사용합니다. 명시적 resume/takeover 후에는 새 값을 사용합니다. |
+| `logical_session_id` | `string \| null` | required | 이 tool call이 속한 Logical Session입니다. task를 수행하는 동안 session_manage가 반환한 session_id를 전달합니다. active Logical Session이 없을 때만 null을 사용합니다. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -449,7 +447,7 @@ Local 또는 remote machine에 UTF-8 text file을 씁니다.
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | 이 field는 항상 제공하세요. 활성 logical Session이 없으면 `null`을 사용합니다. `session_manage` start/resume 후에는 반환된 `active_run.run_id`를 전달하고 MCP transport reconnect 동안 계속 사용합니다. 명시적 resume/takeover 후에는 새 값을 사용합니다. |
+| `logical_session_id` | `string \| null` | required | 이 tool call이 속한 Logical Session입니다. task를 수행하는 동안 session_manage가 반환한 session_id를 전달합니다. active Logical Session이 없을 때만 null을 사용합니다. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -466,7 +464,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | 이 field는 항상 제공하세요. 활성 logical Session이 없으면 `null`을 사용합니다. `session_manage` start/resume 후에는 반환된 `active_run.run_id`를 전달하고 MCP transport reconnect 동안 계속 사용합니다. 명시적 resume/takeover 후에는 새 값을 사용합니다. |
+| `logical_session_id` | `string \| null` | required | 이 tool call이 속한 Logical Session입니다. task를 수행하는 동안 session_manage가 반환한 session_id를 전달합니다. active Logical Session이 없을 때만 null을 사용합니다. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -483,7 +481,7 @@ Local/remote file 또는 directory를 삭제합니다. `recursive=false`는 file
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | 이 field는 항상 제공하세요. 활성 logical Session이 없으면 `null`을 사용합니다. `session_manage` start/resume 후에는 반환된 `active_run.run_id`를 전달하고 MCP transport reconnect 동안 계속 사용합니다. 명시적 resume/takeover 후에는 새 값을 사용합니다. |
+| `logical_session_id` | `string \| null` | required | 이 tool call이 속한 Logical Session입니다. task를 수행하는 동안 session_manage가 반환한 session_id를 전달합니다. active Logical Session이 없을 때만 null을 사용합니다. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -500,7 +498,7 @@ Local 또는 remote에서 unified diff 또는 file_patch envelope를 검사하�
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | 이 field는 항상 제공하세요. 활성 logical Session이 없으면 `null`을 사용합니다. `session_manage` start/resume 후에는 반환된 `active_run.run_id`를 전달하고 MCP transport reconnect 동안 계속 사용합니다. 명시적 resume/takeover 후에는 새 값을 사용합니다. |
+| `logical_session_id` | `string \| null` | required | 이 tool call이 속한 Logical Session입니다. task를 수행하는 동안 session_manage가 반환한 session_id를 전달합니다. active Logical Session이 없을 때만 null을 사용합니다. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -520,7 +518,7 @@ controller와 remote machine 사이에서 file/directory를 복사하는 tracked
 | `chunk_size` | `integer \| null` | `null` |  |
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | 이 field는 항상 제공하세요. 활성 logical Session이 없으면 `null`을 사용합니다. `session_manage` start/resume 후에는 반환된 `active_run.run_id`를 전달하고 MCP transport reconnect 동안 계속 사용합니다. 명시적 resume/takeover 후에는 새 값을 사용합니다. |
+| `logical_session_id` | `string \| null` | required | 이 tool call이 속한 Logical Session입니다. task를 수행하는 동안 session_manage가 반환한 session_id를 전달합니다. active Logical Session이 없을 때만 null을 사용합니다. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -537,7 +535,7 @@ Local file용 temporary browser-accessible URL을 생성합니다. Default는 at
 | `filename` | `string \| null` | `null` |  |
 | `max_downloads` | `integer \| null` | `null` |  |
 | `inline` | `boolean` | `false` |  |
-| `session_run_id` | `string \| null` | required | 이 field는 항상 제공하세요. 활성 logical Session이 없으면 `null`을 사용합니다. `session_manage` start/resume 후에는 반환된 `active_run.run_id`를 전달하고 MCP transport reconnect 동안 계속 사용합니다. 명시적 resume/takeover 후에는 새 값을 사용합니다. |
+| `logical_session_id` | `string \| null` | required | 이 tool call이 속한 Logical Session입니다. task를 수행하는 동안 session_manage가 반환한 session_id를 전달합니다. active Logical Session이 없을 때만 null을 사용합니다. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -548,7 +546,7 @@ Generated local file download URLs를 나열합니다.
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
 | `include_expired` | `boolean` | `false` |  |
-| `session_run_id` | `string \| null` | required | 이 field는 항상 제공하세요. 활성 logical Session이 없으면 `null`을 사용합니다. `session_manage` start/resume 후에는 반환된 `active_run.run_id`를 전달하고 MCP transport reconnect 동안 계속 사용합니다. 명시적 resume/takeover 후에는 새 값을 사용합니다. |
+| `logical_session_id` | `string \| null` | required | 이 tool call이 속한 Logical Session입니다. task를 수행하는 동안 session_manage가 반환한 session_id를 전달합니다. active Logical Session이 없을 때만 null을 사용합니다. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -559,7 +557,7 @@ Generated local file download URL을 revoke합니다.
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
 | `token` | `string` | required |  |
-| `session_run_id` | `string \| null` | required | 이 field는 항상 제공하세요. 활성 logical Session이 없으면 `null`을 사용합니다. `session_manage` start/resume 후에는 반환된 `active_run.run_id`를 전달하고 MCP transport reconnect 동안 계속 사용합니다. 명시적 resume/takeover 후에는 새 값을 사용합니다. |
+| `logical_session_id` | `string \| null` | required | 이 tool call이 속한 Logical Session입니다. task를 수행하는 동안 session_manage가 반환한 session_id를 전달합니다. active Logical Session이 없을 때만 null을 사용합니다. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -585,7 +583,7 @@ Dynamic MCP servers의 isolated environment/headers를 register, list, get, enab
 | `refresh` | `boolean` | `true` |  |
 | `key` | `string \| null` | `null` |  |
 | `value` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | 이 field는 항상 제공하세요. 활성 logical Session이 없으면 `null`을 사용합니다. `session_manage` start/resume 후에는 반환된 `active_run.run_id`를 전달하고 MCP transport reconnect 동안 계속 사용합니다. 명시적 resume/takeover 후에는 새 값을 사용합니다. |
+| `logical_session_id` | `string \| null` | required | 이 tool call이 속한 Logical Session입니다. task를 수행하는 동안 session_manage가 반환한 session_id를 전달합니다. active Logical Session이 없을 때만 null을 사용합니다. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -598,7 +596,7 @@ Enabled dynamic MCP servers의 cached lightweight tool summaries를 검색합니
 | `query` | `string` | `""` |  |
 | `server` | `string \| null` | `null` |  |
 | `limit` | `integer` | `20` |  |
-| `session_run_id` | `string \| null` | required | 이 field는 항상 제공하세요. 활성 logical Session이 없으면 `null`을 사용합니다. `session_manage` start/resume 후에는 반환된 `active_run.run_id`를 전달하고 MCP transport reconnect 동안 계속 사용합니다. 명시적 resume/takeover 후에는 새 값을 사용합니다. |
+| `logical_session_id` | `string \| null` | required | 이 tool call이 속한 Logical Session입니다. task를 수행하는 동안 session_manage가 반환한 session_id를 전달합니다. active Logical Session이 없을 때만 null을 사용합니다. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -609,7 +607,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
 | `name` | `string` | required |  |
-| `session_run_id` | `string \| null` | required | 이 field는 항상 제공하세요. 활성 logical Session이 없으면 `null`을 사용합니다. `session_manage` start/resume 후에는 반환된 `active_run.run_id`를 전달하고 MCP transport reconnect 동안 계속 사용합니다. 명시적 resume/takeover 후에는 새 값을 사용합니다. |
+| `logical_session_id` | `string \| null` | required | 이 tool call이 속한 Logical Session입니다. task를 수행하는 동안 session_manage가 반환한 session_id를 전달합니다. active Logical Session이 없을 때만 null을 사용합니다. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -622,7 +620,7 @@ Cached dynamic MCP tool `<server>:<tool>`을 call합니다. `mcp_tool_search`로
 | `name` | `string` | required |  |
 | `arguments` | `object \| null` | `null` |  |
 | `timeout_s` | `integer \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | 이 field는 항상 제공하세요. 활성 logical Session이 없으면 `null`을 사용합니다. `session_manage` start/resume 후에는 반환된 `active_run.run_id`를 전달하고 MCP transport reconnect 동안 계속 사용합니다. 명시적 resume/takeover 후에는 새 값을 사용합니다. |
+| `logical_session_id` | `string \| null` | required | 이 tool call이 속한 Logical Session입니다. task를 수행하는 동안 session_manage가 반환한 session_id를 전달합니다. active Logical Session이 없을 때만 null을 사용합니다. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -646,7 +644,7 @@ Local/remote persistent high-level browser sessions를 start, list, close, clean
 | `storage_state_path` | `string \| null` | `null` |  |
 | `save_storage_state_path` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | 이 field는 항상 제공하세요. 활성 logical Session이 없으면 `null`을 사용합니다. `session_manage` start/resume 후에는 반환된 `active_run.run_id`를 전달하고 MCP transport reconnect 동안 계속 사용합니다. 명시적 resume/takeover 후에는 새 값을 사용합니다. |
+| `logical_session_id` | `string \| null` | required | 이 tool call이 속한 Logical Session입니다. task를 수행하는 동안 session_manage가 반환한 session_id를 전달합니다. active Logical Session이 없을 때만 null을 사용합니다. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -666,7 +664,7 @@ Persistent browser page의 title, URL, bounded visible text, `e1` 같은 stable 
 | `max_text_chars` | `integer` | `100000` |  |
 | `max_elements` | `integer` | `100` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | 이 field는 항상 제공하세요. 활성 logical Session이 없으면 `null`을 사용합니다. `session_manage` start/resume 후에는 반환된 `active_run.run_id`를 전달하고 MCP transport reconnect 동안 계속 사용합니다. 명시적 resume/takeover 후에는 새 값을 사용합니다. |
+| `logical_session_id` | `string \| null` | required | 이 tool call이 속한 Logical Session입니다. task를 수행하는 동안 session_manage가 반환한 session_id를 전달합니다. active Logical Session이 없을 때만 null을 사용합니다. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -683,7 +681,7 @@ Persistent browser session에서 structured actions를 실행합니다. navigate
 | `page_id` | `string \| null` | `null` |  |
 | `timeout_ms` | `integer` | `30000` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | 이 field는 항상 제공하세요. 활성 logical Session이 없으면 `null`을 사용합니다. `session_manage` start/resume 후에는 반환된 `active_run.run_id`를 전달하고 MCP transport reconnect 동안 계속 사용합니다. 명시적 resume/takeover 후에는 새 값을 사용합니다. |
+| `logical_session_id` | `string \| null` | required | 이 tool call이 속한 Logical Session입니다. task를 수행하는 동안 session_manage가 반환한 session_id를 전달합니다. active Logical Session이 없을 때만 null을 사용합니다. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -699,7 +697,7 @@ Local 또는 remote machine에서 full Python Playwright script를 실행합니�
 | `cwd` | `string` | `"."` |  |
 | `timeout_s` | `integer` | `60` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | 이 field는 항상 제공하세요. 활성 logical Session이 없으면 `null`을 사용합니다. `session_manage` start/resume 후에는 반환된 `active_run.run_id`를 전달하고 MCP transport reconnect 동안 계속 사용합니다. 명시적 resume/takeover 후에는 새 값을 사용합니다. |
+| `logical_session_id` | `string \| null` | required | 이 tool call이 속한 Logical Session입니다. task를 수행하는 동안 session_manage가 반환한 session_id를 전달합니다. active Logical Session이 없을 때만 null을 사용합니다. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -719,7 +717,7 @@ action=invite, list, revoke, rename으로 remote workers를 관리합니다. inv
 | `ttl_s` | `integer \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
 | `new_name` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | 이 field는 항상 제공하세요. 활성 logical Session이 없으면 `null`을 사용합니다. `session_manage` start/resume 후에는 반환된 `active_run.run_id`를 전달하고 MCP transport reconnect 동안 계속 사용합니다. 명시적 resume/takeover 후에는 새 값을 사용합니다. |
+| `logical_session_id` | `string \| null` | required | 이 tool call이 속한 Logical Session입니다. task를 수행하는 동안 session_manage가 반환한 session_id를 전달합니다. active Logical Session이 없을 때만 null을 사용합니다. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 

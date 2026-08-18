@@ -1,4 +1,4 @@
-<!-- i18n-source-sha256: 8c683835be3adb3bf08d9d69b1731f61a39753bf255170fc663cf9456a0df54f -->
+<!-- i18n-source-sha256: 1cb4dc6f53744372145fad4e03a3d413bf105033e13844fea7684ea5f601d6ca -->
 # 人机界面
 
 `local-shell-mcp` 在同一个服务 API、工作区、持久终端注册表、远程 worker 注册表和 MCP 审计日志之上提供两种兼容的人机界面：
@@ -18,24 +18,26 @@ local-shell-mcp --mode mcp
 
 ## ChatGPT Live Workspace
 
-当 ChatGPT 支持渲染 MCP Apps 时，`workspace_open` 会为当前附着的 logical Session 打开悬浮式协作视图。Session 持有持久任务状态；Live Workspace 只负责展示实时活动和人类控制。因此 App 重连或 ChatGPT/MCP transport 发生变化都不会重置 Session。
+当 ChatGPT 支持渲染 MCP Apps 时，`workspace_open(session_id=...)` 会为**明确指定的 Logical Session** 打开悬浮式协作视图。Session 持有持久任务状态——objective、progress、Plan 和 Activity；Live Workspace 只负责展示这些状态、实时活动和人类控制。它不会从 MCP transport 推断任务身份。
 
-典型交接流程如下：
+典型的显式交接流程如下：
 
 ```text
 session_manage(action="start", objective=...)
         -> session_id
-... tool work + session_manage(action="report", ...) ...
-new agent run
-session_manage(action="resume", session_id=..., takeover=true)
-        -> inherited progress, Plan, and recent activity
-workspace_open()
-        -> reconnectable view of that Session
+... 工具调用统一传 logical_session_id=session_id
+... session_manage(action="report", session_id=...) ...
+新建 ChatGPT 对话
+用户把之前的 session_id 传给新对话
+session_manage(action="resume", session_id=...)
+        -> 原有 progress、Plan 和近期 Activity
+workspace_open(session_id=...)
+        -> 查看同一个 Session
 ```
 
-`takeover=true` 会取代仍处于 active 状态的旧 agent run。被取代 run 之后发出的任何工具调用都会被拒绝，直到该 agent 明确再次 resume Session。Session 不绑定 machine 或 working directory；普通工具参数仍决定本地/远程目标和路径。
+`session_id` 是唯一的持久任务身份。Agent 不得列出、推断或自动选择其它对话中的 Session。要在新对话继续工作，由用户明确传入已有的 `session_id`。Agent 应在 start/resume 后、重要进度汇报时以及结束当前 turn 前告知用户正在使用的 `session_id`，以便人工交接。Session 不绑定 machine 或 working directory；普通工具参数仍决定本地/远程目标和路径。
 
-可选的 `plan_manage` Plan 会为 Session 启用 Goal mode。Plan active 且 15 分钟没有 agent activity 时，已附着的 Live Workspace 可以要求 ChatGPT 继续；续跑会先 resume 同一个 `session_id`，并限制为最多 10 次 continuation attempt（无论接受还是拒绝）。blocked、completed、cancelled Plan 不自动续跑；如果 active Plan 的所有 step 都已 completed/skipped，仍可触发一次用于收尾的 continuation，让 resumed agent 正式 finish Plan。人类的 pause/resume/cancel 控制修改的是 Session 持有的 Plan，而不是临时 Live Workspace state。
+可选的 `plan_manage` Plan 会为 Session 启用 Goal mode。Plan active 且 15 分钟没有 agent activity 时，已关联的 Live Workspace 可以要求 ChatGPT 继续；续跑会 resume 同一个明确的 `session_id`，并限制为最多 10 次 continuation attempt（无论接受还是拒绝）。blocked、completed、cancelled Plan 不自动续跑；如果 active Plan 的所有 step 都已 completed/skipped，仍可触发一次用于收尾的 continuation，让 resumed agent 正式 finish Plan。人类的 pause/resume/cancel 控制修改的是 Session 持有的 Plan，而不是临时 Live Workspace state。
 
 ## 浏览器界面
 

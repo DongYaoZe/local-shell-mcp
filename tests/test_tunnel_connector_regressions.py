@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import pytest
 
+import local_shell_mcp.live_channel as live_channel_module
+import local_shell_mcp.session_runtime as session_runtime_module
 import local_shell_mcp.tools as tools
+from local_shell_mcp.live_channel import LiveChannelManager
 from local_shell_mcp.models import CommandResult
 from local_shell_mcp.session_runtime import SessionRuntimeManager
 from local_shell_mcp.settings import get_settings
@@ -33,9 +36,7 @@ async def test_noauth_mode_advertises_noauth_security_scheme(tmp_path, monkeypat
 async def test_run_python_uses_executable_quoting_for_powershell(tmp_path, monkeypatch):
     _configure(tmp_path, monkeypatch)
     monkeypatch.setenv("LOCAL_SHELL_MCP_SHELL_EXECUTABLE", "powershell.exe")
-    monkeypatch.setenv(
-        "LOCAL_SHELL_MCP_PYTHON_BIN", r"C:\Program Files\Python\python.exe"
-    )
+    monkeypatch.setenv("LOCAL_SHELL_MCP_PYTHON_BIN", r"C:\Program Files\Python\python.exe")
     get_settings.cache_clear()
     commands: list[str] = []
 
@@ -62,152 +63,95 @@ async def test_run_python_uses_executable_quoting_for_powershell(tmp_path, monke
     assert commands[0].startswith("& 'C:\\Program Files\\Python\\python.exe' '")
 
 
-def test_multiplexed_stdio_routes_logical_sessions_by_durable_run_id(tmp_path):
+@pytest.mark.asyncio
+async def test_multiplexed_stdio_keeps_explicit_logical_sessions_isolated(tmp_path, monkeypatch):
+    _configure(tmp_path, monkeypatch)
+    monkeypatch.setenv("LOCAL_SHELL_MCP_MODE", "http")
+    monkeypatch.setenv("LOCAL_SHELL_MCP_UI_ENABLED", "true")
+    get_settings.cache_clear()
+
+    sessions = SessionRuntimeManager(tmp_path / ".state")
+    live = LiveChannelManager()
+    monkeypatch.setattr(session_runtime_module, "_MANAGER", sessions)
+    monkeypatch.setattr(live_channel_module, "_MANAGER", live)
+    # There is deliberately no transport-to-Session routing hook anymore. Both
+    # logical tasks share this MCP server instance and remain isolated solely by
+    # their explicit session_id values.
+    assert not hasattr(tools, "mcp_session_key")
+
+    mcp = tools.build_mcp()
+    raw = lambda name: mcp._tool_manager._tools[name].fn  # noqa: E731, SLF001
+
+    started_a = await raw("session_manage")(action="start", objective="A")
+    started_b = await raw("session_manage")(action="start", objective="B")
+    session_a = started_a["data"]["session_id"]
+    session_b = started_b["data"]["session_id"]
+    assert session_a != session_b
+
+    workspace_a = await raw("workspace_open")(session_id=session_a)
+    workspace_b = await raw("workspace_open")(session_id=session_b)
+    live_a = workspace_a.structuredContent["live_id"]
+    live_b = workspace_b.structuredContent["live_id"]
+    assert live_a != live_b
+
+    result_a = await raw("run_shell")(command="printf A", logical_session_id=session_a)
+    result_b = await raw("run_shell")(command="printf B", logical_session_id=session_b)
+    assert result_a["ok"] is True
+    assert result_b["ok"] is True
+
+    channel_a = live.by_id(live_a)
+    channel_b = live.by_id(live_b)
+    assert channel_a is not None and channel_b is not None
+    commands_a = [
+        event.get("data", {}).get("command")
+        for event in channel_a.events
+        if event["type"] == "tool.started"
+    ]
+    commands_b = [
+        event.get("data", {}).get("command")
+        for event in channel_b.events
+        if event["type"] == "tool.started"
+    ]
+    assert "printf A" in commands_a
+    assert "printf B" not in commands_a
+    assert "printf B" in commands_b
+    assert "printf A" not in commands_b
+
+    state_a = sessions.get(session_a, subject="local-mcp-client")
+    state_b = sessions.get(session_b, subject="local-mcp-client")
+    assert any(
+        event.get("data", {}).get("command") == "printf A" for event in state_a["recent_activity"]
+    )
+    assert not any(
+        event.get("data", {}).get("command") == "printf B" for event in state_a["recent_activity"]
+    )
+    assert any(
+        event.get("data", {}).get("command") == "printf B" for event in state_b["recent_activity"]
+    )
+
+    # A new agent turn that explicitly resumes the same Logical Session must keep
+    # both the durable Activity history and the existing Session workspace.
+    await raw("session_manage")(action="resume", session_id=session_a)
+    reopened_a = await raw("workspace_open")(session_id=session_a)
+    assert reopened_a.structuredContent["live_id"] == live_a
+    resumed_a = sessions.get(session_a, subject="local-mcp-client")
+    assert any(
+        event.get("data", {}).get("command") == "printf A" for event in resumed_a["recent_activity"]
+    )
+    assert resumed_a["recent_activity"][-1]["type"] == "session.resumed"
+
+
+def test_resume_uses_only_explicit_session_id(tmp_path):
     manager = SessionRuntimeManager(tmp_path / ".state")
-    subject = "user"
-    transport_key = "mcp-session:shared-tunnel"
+    started = manager.manage("user", action="start", objective="Task")
+    session_id = started["session_id"]
 
-    start_a_key = tools._logical_session_routing_key(
-        transport_key,
-        tool_name="session_manage",
-        session_run_id=None,
-        action="start",
-    )
-    start_b_key = tools._logical_session_routing_key(
-        transport_key,
-        tool_name="session_manage",
-        session_run_id=None,
-        action="start",
-    )
-    assert start_a_key != start_b_key
+    resumed = manager.manage("user", action="resume", session_id=session_id)
 
-    session_a = manager.manage(start_a_key, subject, action="start", objective="A")
-    session_b = manager.manage(start_b_key, subject, action="start", objective="B")
-    session_a_id = session_a["session_id"]
-    session_b_id = session_b["session_id"]
-    run_a = session_a["active_run"]["run_id"]
-    run_b = session_b["active_run"]["run_id"]
-
-    route_a = tools._logical_session_routing_key(
-        transport_key,
-        tool_name="session_manage",
-        session_run_id=run_a,
-        action="report",
-    )
-    route_b = tools._logical_session_routing_key(
-        transport_key,
-        tool_name="session_manage",
-        session_run_id=run_b,
-        action="report",
-    )
-    assert route_a != route_b
-
-    manager.manage(
-        route_a,
-        subject,
-        action="report",
-        session_run_id=run_a,
-        summary="A-report",
-    )
-    manager.manage(
-        route_b,
-        subject,
-        action="report",
-        session_run_id=run_b,
-        summary="B-report",
-    )
-
-    lease_a = manager.begin_tool_call(
-        route_a,
-        "call-a",
-        expected_run_id=run_a,
-        subject=subject,
-        data={"tool": "run_shell"},
-    )
-    lease_b = manager.begin_tool_call(
-        route_b,
-        "call-b",
-        expected_run_id=run_b,
-        subject=subject,
-        data={"tool": "run_shell"},
-    )
-    assert lease_a is not None
-    assert lease_b is not None
-    manager.finish_tool_call(lease_a, "tool.completed")
-    manager.finish_tool_call(lease_b, "tool.completed")
-
-    plan_a_key = tools._logical_session_routing_key(
-        transport_key,
-        tool_name="plan_manage",
-        session_run_id=run_a,
-        action="start",
-    )
-    plan_b_key = tools._logical_session_routing_key(
-        transport_key,
-        tool_name="plan_manage",
-        session_run_id=run_b,
-        action="start",
-    )
-    manager.manage_plan(
-        plan_a_key,
-        action="start",
-        session_run_id=run_a,
-        objective="Goal A",
-        steps=[{"id": "a1", "text": "A"}],
-    )
-    manager.manage_plan(
-        plan_b_key,
-        action="start",
-        session_run_id=run_b,
-        objective="Goal B",
-        steps=[{"id": "b1", "text": "B"}],
-    )
-
-    state_a = manager.get(session_a_id, subject=subject)
-    state_b = manager.get(session_b_id, subject=subject)
-    assert state_a["active_run"]["run_id"] == run_a
-    assert state_b["active_run"]["run_id"] == run_b
-    assert state_a["progress"]["summary"] == "A-report"
-    assert state_b["progress"]["summary"] == "B-report"
-    assert state_a["plan"]["objective"] == "Goal A"
-    assert state_b["plan"]["objective"] == "Goal B"
-
-    # Header-backed transports already have real client affinity and must retain
-    # the existing one-session-per-transport routing semantics.
-    assert (
-        tools._logical_session_routing_key(
-            "mcp-http:real-client",
-            tool_name="session_manage",
-            session_run_id=None,
-            action="start",
-        )
-        == "mcp-http:real-client"
-    )
-
-
-def test_multiplexed_resume_routes_by_target_session_id():
-    base = "mcp-session:shared-tunnel"
-    first = tools._logical_session_routing_key(
-        base,
-        tool_name="session_manage",
-        session_run_id=None,
-        action="resume",
-        session_id="s_first",
-    )
-    first_again = tools._logical_session_routing_key(
-        base,
-        tool_name="session_manage",
-        session_run_id=None,
-        action="resume",
-        session_id="s_first",
-    )
-    second = tools._logical_session_routing_key(
-        base,
-        tool_name="session_manage",
-        session_run_id=None,
-        action="resume",
-        session_id="s_second",
-    )
-    assert first == first_again == f"{base}:session:s_first"
-    assert second == f"{base}:session:s_second"
-    assert first != second
+    assert resumed["session_id"] == session_id
+    assert "active_run" not in resumed
+    assert resumed["recent_activity"][-1]["type"] == "session.resumed"
+    with pytest.raises(ValueError, match="session_id is required"):
+        manager.manage("user", action="resume")
+    with pytest.raises(ValueError, match="action must be one of"):
+        manager.manage("user", action="list")

@@ -212,7 +212,7 @@ async def live_plan_control(request: Request) -> Response:
             kwargs["note"] = str(body.get("note") or default_note).strip() or default_note
 
         result = await asyncio.to_thread(
-            session_manager.manage_plan_for_session,
+            session_manager.manage_plan,
             session_id,
             **kwargs,
         )
@@ -283,7 +283,7 @@ async def live_plan_continuation(request: Request) -> Response:
                 )
                 require_same_binding()
             if claimed is None:
-                plan = await asyncio.to_thread(session_manager.plan_state, session_id)
+                plan = await asyncio.to_thread(session_manager.plan_state, session_id, subject=channel.subject)
                 require_same_binding()
                 return _ok(
                     {
@@ -321,13 +321,13 @@ async def live_plan_continuation(request: Request) -> Response:
                 raise HTTPException(status_code=400, detail="claim_id is required")
             try:
                 plan = await asyncio.to_thread(
-                        session_manager.report_plan_continuation,
-                        session_id,
-                        accepted=accepted,
-                        error=error,
-                        claim_id=claim_id,
-                        subject=channel.subject,
-                    )
+                    session_manager.report_plan_continuation,
+                    session_id,
+                    accepted=accepted,
+                    error=error,
+                    claim_id=claim_id,
+                    subject=channel.subject,
+                )
             except Exception:
                 if not live_manager.binding_matches(channel, session_id, binding_generation):
                     await abandon_if_stale(claim_id)

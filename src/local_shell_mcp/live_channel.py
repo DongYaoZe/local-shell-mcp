@@ -7,7 +7,6 @@ import secrets
 import threading
 import time
 import uuid
-import weakref
 from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -70,15 +69,11 @@ def _compat_live_resource_uris() -> tuple[str, ...]:
 LIVE_RESOURCE_COMPAT_URIS = _compat_live_resource_uris()
 LIVE_RESOURCE_MIME = "text/html;profile=mcp-app"
 LIVE_API_PREFIX = "/api/live"
-MCP_SESSION_AFFINITY_HEADER = "x-local-shell-mcp-session-affinity"
 LIVE_TOKEN_TTL_S = 12 * 60 * 60
 LIVE_EVENT_LIMIT = 2_000
 LIVE_EVENT_BATCH = 300
 LIVE_LONG_POLL_S = 25.0
-LIVE_RECOVERY_CLAIM_TTL_S = 60.0
 LIVE_APP_REATTACH_CLAIM_TTL_S = 2 * 60.0
-_SESSION_KEYS: weakref.WeakKeyDictionary[Any, str] = weakref.WeakKeyDictionary()
-_SESSION_KEYS_LOCK = threading.Lock()
 
 
 @dataclass(slots=True)
@@ -125,11 +120,8 @@ class LiveChannelManager:
     def __init__(self) -> None:
         self._lock = threading.RLock()
         self._channels: dict[str, LiveChannel] = {}
-        self._session_channels: dict[str, str] = {}
-        self._app_session_keys: set[str] = set()
         self._logical_session_channels: dict[str, str] = {}
         self._recovered_live_ids: dict[str, str] = {}
-        self._recovery_claims: dict[str, dict[str, float]] = {}
         self._app_reattach_claims: dict[str, dict[str, float]] = {}
         self._credentials: dict[str, dict[str, Any]] = {}
 
@@ -190,9 +182,9 @@ class LiveChannelManager:
             and self._logical_session_channels.get(previous_session_id) == channel.live_id
         ):
             self._logical_session_channels.pop(previous_session_id, None)
-        # A LiveChannel represents the lifetime of one rendered workspace, not
-        # one Logical Session. Keep its bounded activity history when the task
-        # binding changes so a new user turn can continue the same feed.
+        # App recovery may explicitly attach an existing rendered channel to a
+        # Session. Preserve its bounded UI event history across that rebind; the
+        # durable Activity history itself remains owned by SessionRuntime.
         channel.binding_generation += 1
         channel.logical_session_id = logical_session_id
         self._logical_session_channels[logical_session_id] = channel.live_id
@@ -213,12 +205,6 @@ class LiveChannelManager:
             self._channels.pop(live_id, None)
         if expired:
             expired_ids = set(expired)
-            self._session_channels = {
-                session_key: live_id
-                for session_key, live_id in self._session_channels.items()
-                if live_id not in expired_ids
-            }
-            self._app_session_keys.intersection_update(self._session_channels)
             self._logical_session_channels = {
                 session_id: live_id
                 for session_id, live_id in self._logical_session_channels.items()
@@ -234,17 +220,6 @@ class LiveChannelManager:
                 for digest, credential in self._credentials.items()
                 if credential["live_id"] not in expired_ids
             }
-        self._recovery_claims = {
-            subject: {
-                live_id: deadline
-                for live_id, deadline in claims.items()
-                if deadline > current and live_id in self._channels
-            }
-            for subject, claims in self._recovery_claims.items()
-        }
-        self._recovery_claims = {
-            subject: claims for subject, claims in self._recovery_claims.items() if claims
-        }
         self._app_reattach_claims = {
             subject: {
                 live_id: deadline
@@ -262,7 +237,6 @@ class LiveChannelManager:
     def open(
         self,
         *,
-        session_key: str,
         subject: str,
         scopes: tuple[str, ...],
         parent_expires_at: float | None = None,
@@ -278,7 +252,6 @@ class LiveChannelManager:
             expires_at = min(expires_at, parent_expires_at)
         with self._lock:
             self._prune_locked(now)
-            session_live_id = self._session_channels.get(session_key)
             logical_live_id = (
                 self._logical_session_channels.get(logical_session_id)
                 if logical_session_id
@@ -313,8 +286,6 @@ class LiveChannelManager:
                         data={"session_id": logical_session_id},
                     )
                 channel = canonical_channel
-            if channel is None:
-                channel = self._channels.get(session_live_id or "")
             if (
                 channel is not None
                 and logical_session_id
@@ -363,9 +334,6 @@ class LiveChannelManager:
                 }
                 if requested_live_id:
                     self._recovered_live_ids[requested_live_id] = channel.live_id
-                    self._recovery_claims.setdefault(subject, {})[channel.live_id] = (
-                        now + LIVE_RECOVERY_CLAIM_TTL_S
-                    )
             elif app_reattach:
                 token = self._issue_credential_locked(
                     channel,
@@ -390,18 +358,12 @@ class LiveChannelManager:
                     channel.machine = machine
                 if cwd:
                     channel.cwd = cwd
-            self._session_channels[session_key] = channel.live_id
-            if app_reattach:
-                self._app_session_keys.add(session_key)
-            else:
-                self._app_session_keys.discard(session_key)
+            if not app_reattach:
                 self._app_reattach_claims.setdefault(subject, {})[channel.live_id] = (
                     now + LIVE_APP_REATTACH_CLAIM_TTL_S
                 )
             if logical_session_id:
                 self._set_logical_session_locked(channel, logical_session_id)
-                if not app_reattach:
-                    self._consume_recovery_claim_locked(subject, channel.live_id)
             channel.subject = subject
             channel.scopes = scopes
             self._prune_credentials_locked(now)
@@ -439,124 +401,18 @@ class LiveChannelManager:
             )
         return None
 
-    def active_for_session(self, session_key: str) -> LiveChannel | None:
-        with self._lock:
-            self._prune_locked()
-            live_id = self._session_channels.get(session_key)
-            return self._channels.get(live_id or "")
-
-    def _drop_other_model_session_mappings_locked(
-        self, live_id: str, *, keep_session_key: str
-    ) -> None:
-        for key, mapped_live_id in list(self._session_channels.items()):
-            if (
-                key != keep_session_key
-                and key not in self._app_session_keys
-                and mapped_live_id == live_id
-            ):
-                self._session_channels.pop(key, None)
-
-    def bind_logical_session(
-        self,
-        session_key: str,
-        logical_session_id: str,
-        subject: str,
-        *,
-        exclusive_model_owner: bool = False,
+    def active_for_logical_session(
+        self, logical_session_id: str, *, subject: str | None = None
     ) -> LiveChannel | None:
         with self._lock:
             self._prune_locked()
-            self._app_session_keys.discard(session_key)
-            current_live_id = self._session_channels.get(session_key)
-            target_live_id = self._logical_session_channels.get(logical_session_id)
-            channel = self._channels.get(current_live_id or "")
-            target_channel = self._channels.get(target_live_id or "")
-            if target_live_id and target_channel is None:
-                self._logical_session_channels.pop(logical_session_id, None)
-            if target_channel is not None:
-                if target_channel.subject != subject:
-                    return None
-                if channel is not None and channel is not target_channel:
-                    # A Logical Session has one canonical LiveChannel. When a
-                    # transport switches to a Session that already has one,
-                    # move only that transport onto the canonical channel and
-                    # leave its previous workspace attached to its old task.
-                    if channel.logical_session_id == logical_session_id:
-                        channel.logical_session_id = None
-                        channel.events.clear()
-                        channel.binding_generation += 1
-                        self._publish_locked(
-                            channel,
-                            "session.detached",
-                            actor="system",
-                            data={"session_id": logical_session_id},
-                        )
-                    self._session_channels[session_key] = target_channel.live_id
-                    if exclusive_model_owner:
-                        self._drop_other_model_session_mappings_locked(
-                            target_channel.live_id, keep_session_key=session_key
-                        )
-                    target_channel.logical_session_id = logical_session_id
-                    self._consume_recovery_claim_locked(subject, target_channel.live_id)
-                    self._publish_locked(
-                        target_channel,
-                        "session.attached",
-                        actor="system",
-                        data={"session_id": logical_session_id},
-                    )
-                    return target_channel
-                channel = target_channel
+            live_id = self._logical_session_channels.get(logical_session_id)
+            channel = self._channels.get(live_id or "")
             if channel is None:
                 return None
-            if channel.subject != subject:
-                if self._session_channels.get(session_key) == channel.live_id:
-                    self._session_channels.pop(session_key, None)
+            if subject is not None and channel.subject != subject:
                 return None
-            already_bound = (
-                current_live_id == channel.live_id
-                and channel.logical_session_id == logical_session_id
-            )
-            if exclusive_model_owner:
-                self._drop_other_model_session_mappings_locked(
-                    channel.live_id, keep_session_key=session_key
-                )
-            previous_session_id = channel.logical_session_id
-            if (
-                previous_session_id
-                and previous_session_id != logical_session_id
-                and any(
-                    key != session_key
-                    and key not in self._app_session_keys
-                    and mapped_live_id == channel.live_id
-                    for key, mapped_live_id in self._session_channels.items()
-                )
-            ):
-                # This transport is switching tasks, but another transport still
-                # owns the existing task view. Do not move their shared channel.
-                self._session_channels.pop(session_key, None)
-                target_live_id = self._logical_session_channels.get(logical_session_id)
-                channel = self._channels.get(target_live_id or "")
-                if channel is None or channel.subject != subject:
-                    return None
-            self._session_channels[session_key] = channel.live_id
-            self._set_logical_session_locked(channel, logical_session_id)
-            self._consume_recovery_claim_locked(subject, channel.live_id)
-            if not already_bound:
-                self._publish_locked(
-                    channel,
-                    "session.attached",
-                    actor="system",
-                    data={"session_id": logical_session_id},
-                )
             return channel
-
-    def _consume_recovery_claim_locked(self, subject: str, live_id: str) -> None:
-        claims = self._recovery_claims.get(subject)
-        if not claims:
-            return
-        claims.pop(live_id, None)
-        if not claims:
-            self._recovery_claims.pop(subject, None)
 
     def detach_logical_session(self, logical_session_id: str) -> list[LiveChannel]:
         with self._lock:
@@ -576,31 +432,6 @@ class LiveChannelManager:
                     data={"session_id": logical_session_id},
                 )
             return detached
-
-    def claim_recovery_session(self, session_key: str, subject: str) -> LiveChannel | None:
-        """Attach one fresh model MCP session after a backend restart recovery."""
-        with self._lock:
-            self._prune_locked()
-            existing = self.active_for_session(session_key)
-            if existing is not None:
-                return existing
-            claims = self._recovery_claims.get(subject)
-            if not claims or len(claims) != 1:
-                # Multiple recovered chats for the same OAuth subject cannot be
-                # correlated safely from a fresh model MCP session alone. Keep
-                # every claim rather than guessing and leaking one chat's live
-                # activity into another.
-                return None
-            live_id, deadline = next(iter(claims.items()))
-            if deadline <= time.time():
-                return None
-            channel = self._channels.get(live_id)
-            if channel is None:
-                return None
-            self._consume_recovery_claim_locked(subject, live_id)
-            self._app_session_keys.discard(session_key)
-            self._session_channels[session_key] = channel.live_id
-            return channel
 
     def by_id(self, live_id: str) -> LiveChannel | None:
         with self._lock:
@@ -627,20 +458,6 @@ class LiveChannelManager:
         channel.events.append(event)
         channel.signal.set()
         return event
-
-    def publish_for_session(
-        self,
-        session_key: str,
-        event_type: str,
-        *,
-        actor: str = "agent",
-        data: dict[str, Any] | None = None,
-    ) -> dict[str, Any] | None:
-        with self._lock:
-            channel = self.active_for_session(session_key)
-            if channel is None:
-                return None
-            return self._publish_locked(channel, event_type, actor=actor, data=data)
 
     def publish_channel(
         self,
@@ -749,52 +566,6 @@ _MANAGER = LiveChannelManager()
 def get_live_channel_manager() -> LiveChannelManager:
     return _MANAGER
 
-
-def mcp_session_key(mcp: Any) -> str:
-    try:
-        context = mcp.get_context()
-        request_context = context.request_context
-        session = request_context.session
-    except (AttributeError, LookupError, ValueError):
-        return "direct"
-
-    request = getattr(request_context, "request", None)
-    headers = getattr(request, "headers", None)
-    if headers is not None:
-        affinity = headers.get(MCP_SESSION_AFFINITY_HEADER)
-        if affinity:
-            # The affinity value is client-controlled, so scope it to the
-            # authenticated principal before it becomes an attachment key.
-            # Import lazily to keep auth's error-path import of live_channel acyclic.
-            from .auth import current_principal
-
-            principal = current_principal()
-            principal_namespace = (
-                (principal.subject or principal.email)
-                if principal is not None
-                else "anonymous"
-            ) or "anonymous"
-            digest = hashlib.sha256(
-                f"{principal_namespace}\0{affinity}".encode()
-            ).hexdigest()
-            return f"mcp-affinity:{digest}"
-        session_id = headers.get("mcp-session-id")
-        if session_id:
-            return f"mcp-http:{session_id}"
-
-    with _SESSION_KEYS_LOCK:
-        try:
-            key = _SESSION_KEYS.get(session)
-        except TypeError:
-            key = getattr(session, "_lsm_live_session_key", None)
-            if key is None:
-                key = uuid.uuid4().hex
-                session._lsm_live_session_key = key
-            return f"mcp-session:{key}"
-        if key is None:
-            key = uuid.uuid4().hex
-            _SESSION_KEYS[session] = key
-    return f"mcp-session:{key}"
 
 
 def live_id_from_claims(claims: dict[str, Any]) -> str | None:

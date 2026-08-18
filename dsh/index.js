@@ -206,7 +206,7 @@ export async function apply(ctx, rawConfig = {}) {
 
   async function connectClient(label, onClose, configure, extraHeaders) {
     const client = new Client(
-      { name: `local-shell-mcp-dsh-${label}`, version: '4.0.2' },
+      { name: `local-shell-mcp-dsh-${label}`, version: '4.1.0' },
       { capabilities: {} },
     )
     if (configure) configure(client)

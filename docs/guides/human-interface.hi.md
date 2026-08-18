@@ -1,4 +1,4 @@
-<!-- i18n-source-sha256: 8c683835be3adb3bf08d9d69b1731f61a39753bf255170fc663cf9456a0df54f -->
+<!-- i18n-source-sha256: 1cb4dc6f53744372145fad4e03a3d413bf105033e13844fea7684ea5f601d6ca -->
 # मानव इंटरफ़ेस
 
 `local-shell-mcp` एक ही service API, workspace, persistent terminal registry, remote-worker registry और MCP audit log पर दो compatible human interfaces देता है:
@@ -18,24 +18,26 @@ local-shell-mcp --mode mcp
 
 ## ChatGPT Live Workspace
 
-जब ChatGPT MCP Apps render कर सकता है, `workspace_open` वर्तमान attached logical Session के लिए floating collaborative view खोलता है। Durable task state Session की होती है; Live Workspace केवल live activity और human controls दिखाता है। इसलिए app reconnect या ChatGPT/MCP transport बदलने से Session reset नहीं होती।
+जब ChatGPT MCP Apps render करता है, `workspace_open(session_id=...)` **स्पष्ट रूप से चुने गए Logical Session** का floating collaborative view खोलता है। durable task state—objective, progress, Plan और Activity—Session में रहता है; Live Workspace केवल उस state, live activity और human controls को दिखाता है। यह MCP transport से task identity का अनुमान कभी नहीं लगाता।
 
-एक सामान्य handoff इस प्रकार है:
+एक सामान्य explicit handoff इस प्रकार है:
 
 ```text
 session_manage(action="start", objective=...)
         -> session_id
-... tool work + session_manage(action="report", ...) ...
-new agent run
-session_manage(action="resume", session_id=..., takeover=true)
-        -> inherited progress, Plan, and recent activity
-workspace_open()
-        -> reconnectable view of that Session
+... logical_session_id=session_id के साथ tool calls
+... session_manage(action="report", session_id=...) ...
+नई ChatGPT conversation
+user पिछला session_id देता है
+session_manage(action="resume", session_id=...)
+        -> मौजूदा progress, Plan और recent Activity
+workspace_open(session_id=...)
+        -> उसी Session का view
 ```
 
-`takeover=true` अभी active पुराने agent run को supersede करता है। Superseded run से बाद की कोई भी tool call तब तक reject होती है जब तक वह agent Session को explicitly फिर resume न करे। Sessions machine या working directory से bind नहीं होतीं; सामान्य tool parameters local/remote targets और paths चुनते रहते हैं।
+`session_id` एकमात्र durable task identity है। Agent को दूसरी conversation की Session को list, infer या automatically select नहीं करना चाहिए। नई conversation में काम जारी रखने के लिए user मौजूदा `session_id` स्पष्ट रूप से देता है। Agent को start/resume के बाद, महत्वपूर्ण progress checkpoints पर और turn समाप्त करने से पहले active `session_id` बताना चाहिए ताकि manual handoff हो सके। Sessions machine या working directory से bind नहीं होतीं; सामान्य tool parameters local/remote targets और paths चुनते रहते हैं।
 
-Optional `plan_manage` Plan Session के लिए Goal mode सक्षम करता है। Plan active हो और 15 मिनट agent activity न हो तो attached Live Workspace ChatGPT से continue करने को कह सकता है। Continuation पहले उसी `session_id` को resume करती है और accepted/rejected मिलाकर अधिकतम 10 attempts तक सीमित है। blocked, completed और cancelled Plans auto-continue नहीं होते; जिस active Plan के सभी steps completed/skipped हों वह cleanup continuation के लिए eligible रहता है ताकि resumed agent Plan को finish कर सके। Human pause/resume/cancel controls ephemeral Live Workspace state की जगह Session-owned Plan update करते हैं।
+वैकल्पिक `plan_manage` Plan Session के लिए Goal mode चालू करता है। यदि Plan active है और 15 मिनट तक agent activity नहीं होती, तो जुड़ा हुआ Live Workspace ChatGPT से जारी रखने को कह सकता है। Continuation उसी explicit `session_id` को resume करता है और accepted/rejected दोनों को मिलाकर अधिकतम 10 attempts तक सीमित है। blocked, completed और cancelled Plan auto-continue नहीं होते; ऐसा active Plan जिसके सभी steps completed या skipped हैं, cleanup continuation के लिए eligible रहता है ताकि resumed agent Plan को finish कर सके। Human pause/resume/cancel controls अस्थायी Live Workspace state की जगह Session-owned Plan को update करते हैं।
 
 ## Browser interface
 

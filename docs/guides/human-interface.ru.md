@@ -1,4 +1,4 @@
-<!-- i18n-source-sha256: 8c683835be3adb3bf08d9d69b1731f61a39753bf255170fc663cf9456a0df54f -->
+<!-- i18n-source-sha256: 1cb4dc6f53744372145fad4e03a3d413bf105033e13844fea7684ea5f601d6ca -->
 # Пользовательский интерфейс
 
 `local-shell-mcp` предоставляет два совместимых пользовательских интерфейса поверх одного service API, workspace, реестра persistent terminals, реестра remote workers и MCP audit log:
@@ -18,24 +18,26 @@ local-shell-mcp --mode mcp
 
 ## ChatGPT Live Workspace
 
-Когда ChatGPT умеет рендерить MCP Apps, `workspace_open` открывает плавающее совместное представление для текущей logical Session. Durable task state принадлежит Session; Live Workspace лишь показывает live activity и human controls. Поэтому reconnect приложения или смена ChatGPT/MCP transport не сбрасывают Session.
+Когда ChatGPT отображает MCP Apps, `workspace_open(session_id=...)` открывает плавающее совместное представление **явно выбранной Logical Session**. Session хранит долговечное состояние задачи — objective, progress, Plan и Activity, — а Live Workspace только показывает это состояние, текущую активность и элементы управления для человека. Он никогда не выводит идентичность задачи из MCP transport.
 
-Типичная передача работы выглядит так:
+Типичная явная передача работы выглядит так:
 
 ```text
 session_manage(action="start", objective=...)
         -> session_id
-... tool work + session_manage(action="report", ...) ...
-new agent run
-session_manage(action="resume", session_id=..., takeover=true)
-        -> inherited progress, Plan, and recent activity
-workspace_open()
-        -> reconnectable view of that Session
+... вызовы инструментов с logical_session_id=session_id
+... session_manage(action="report", session_id=...) ...
+новый разговор ChatGPT
+пользователь передаёт прежний session_id
+session_manage(action="resume", session_id=...)
+        -> существующие progress, Plan и недавняя Activity
+workspace_open(session_id=...)
+        -> представление той же Session
 ```
 
-`takeover=true` заменяет всё ещё активный старый agent run. Любой последующий tool call из заменённого run отклоняется, пока этот агент явно снова не выполнит resume Session. Sessions не привязаны к machine или working directory; обычные параметры инструментов по-прежнему выбирают local/remote targets и paths.
+`session_id` — единственная долговечная идентичность задачи. Agent не должен перечислять, угадывать или автоматически выбирать Session из другого разговора. Чтобы продолжить работу в новом разговоре, пользователь явно передаёт существующий `session_id`. Agent должен сообщать активный `session_id` после start/resume, на значимых checkpoints прогресса и перед завершением turn, чтобы его можно было передать вручную. Sessions не привязаны к machine или working directory; обычные параметры инструментов по-прежнему выбирают local/remote targets и paths.
 
-Необязательный Plan `plan_manage` включает Goal mode для Session. Если Plan active и 15 минут нет agent activity, подключённый Live Workspace может попросить ChatGPT продолжить. Continuation сначала делает resume того же `session_id` и ограничена 10 попытками независимо от принятия или отклонения. Plans со статусом blocked, completed или cancelled автоматически не продолжаются; active Plan, у которого все steps completed/skipped, остаётся пригодным для cleanup continuation, чтобы resumed agent мог finish Plan. Human controls pause/resume/cancel обновляют Plan, принадлежащий Session, а не временный Live Workspace state.
+Необязательный Plan `plan_manage` включает Goal mode для Session. Если Plan active и в течение 15 минут нет agent activity, связанный Live Workspace может попросить ChatGPT продолжить работу. Continuation возобновляет тот же явный `session_id` и ограничена 10 попытками, независимо от принятия или отказа. Plans со статусом blocked, completed или cancelled не продолжаются автоматически; active Plan, у которого все steps completed или skipped, остаётся доступен для завершающей continuation, чтобы возобновлённый agent мог закончить Plan. Человеческие элементы pause/resume/cancel изменяют Plan, принадлежащий Session, а не временное состояние Live Workspace.
 
 ## Браузерный интерфейс
 

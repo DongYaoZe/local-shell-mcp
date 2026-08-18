@@ -96,8 +96,15 @@ async def test_mcp_metadata_for_chatgpt_developer_mode(tmp_path, monkeypatch):
     assert initialization.server_version == __version__
     assert initialization.website_url == "https://fwerkor.github.io/local-shell-mcp/"
     assert initialization.icons
-    assert initialization.icons[0].src == "https://fwerkor.github.io/local-shell-mcp/assets/logo.svg"
+    assert (
+        initialization.icons[0].src == "https://fwerkor.github.io/local-shell-mcp/assets/logo.svg"
+    )
     assert initialization.icons[0].mimeType == "image/svg+xml"
+    instructions = mcp.instructions or ""
+    assert "Never discover, infer, or auto-select a Session from other conversations" in instructions
+    assert "clearly tell the user the active session_id" in instructions
+    assert "before ending the turn" in instructions
+    assert "workspace_open take the same session_id explicitly" in instructions
 
     tools = {tool.name: tool for tool in await mcp.list_tools()}
     assert tools["environment_get"].meta["securitySchemes"][0]["type"] == "oauth2"
@@ -119,7 +126,6 @@ async def test_mcp_metadata_for_chatgpt_developer_mode(tmp_path, monkeypatch):
     assert structured["ok"] is True
     assert structured["data"]["settings"]["default_timeout_s"] == 10
     assert structured["data"]["settings"]["max_timeout_s"] == 120
-
 
 
 @pytest.mark.asyncio
@@ -149,9 +155,7 @@ async def test_mcp_tool_execution_uses_one_full_scope_bundle(tmp_path, monkeypat
         content, structured = await mcp.call_tool("file_read", {"path": "readable.txt"})
         assert content
         assert structured["ok"] is True
-        _, written = await mcp.call_tool(
-            "file_write", {"path": "written.txt", "content": "yes"}
-        )
+        _, written = await mcp.call_tool("file_write", {"path": "written.txt", "content": "yes"})
         assert written["ok"] is True
     finally:
         _CURRENT_PRINCIPAL.reset(full_token)
@@ -175,10 +179,9 @@ async def test_machine_argument_requires_remote_scope(tmp_path, monkeypatch):
     finally:
         _CURRENT_PRINCIPAL.reset(principal_token)
 
+
 @pytest.mark.asyncio
-async def test_tool_annotations_are_conservative_and_mode_independent(
-    tmp_path, monkeypatch
-):
+async def test_tool_annotations_are_conservative_and_mode_independent(tmp_path, monkeypatch):
     monkeypatch.setenv("LOCAL_SHELL_MCP_WORKSPACE_ROOT", str(tmp_path))
     monkeypatch.setenv("LOCAL_SHELL_MCP_ALLOW_FULL_CONTAINER", "true")
     get_settings.cache_clear()
@@ -218,9 +221,13 @@ async def test_tool_annotations_are_conservative_and_mode_independent(
     assert tools["file_read"].annotations.openWorldHint is True
     assert tools["image_view"].annotations.readOnlyHint is True
     assert tools["image_view"].annotations.openWorldHint is True
-    assert "session_run_id" in tools["run_shell"].inputSchema["properties"]
-    assert "session_run_id" in tools["plan_manage"].inputSchema["properties"]
-    assert "session_run_id" in tools["session_manage"].inputSchema["properties"]
+    assert "logical_session_id" in tools["run_shell"].inputSchema["properties"]
+    assert "logical_session_id" in tools["run_shell"].inputSchema["required"]
+    assert "session_run_id" not in tools["run_shell"].inputSchema["properties"]
+    assert "session_id" in tools["plan_manage"].inputSchema["properties"]
+    assert "session_run_id" not in tools["plan_manage"].inputSchema["properties"]
+    assert "session_id" in tools["session_manage"].inputSchema["properties"]
+    assert "session_run_id" not in tools["session_manage"].inputSchema["properties"]
     assert all(tool.annotations is not None for tool in tools.values())
 
     monkeypatch.setenv("LOCAL_SHELL_MCP_ALLOW_FULL_CONTAINER", "false")
@@ -380,7 +387,6 @@ async def test_read_only_tools_have_read_only_hint(tmp_path, monkeypatch):
         assert tools[name].annotations.readOnlyHint is True, name
 
 
-
 def _mcp_initialize_payload() -> dict:
     return {
         "jsonrpc": "2.0",
@@ -456,7 +462,7 @@ def test_cached_open_live_workspace_recipient_executes_over_http(tmp_path, monke
                 "method": "tools/call",
                 "params": {
                     "name": "open_live_workspace",
-                    "arguments": {"cwd": ".", "session_run_id": None},
+                    "arguments": {"cwd": ".", "session_id": None},
                 },
             },
             headers=_mcp_headers(**session_headers),

@@ -1,4 +1,4 @@
-<!-- i18n-source-sha256: 9e104b7a893f61206aea6ed76b78bb04387fc5349535c46ffafd8f2e4c9ccd3e -->
+<!-- i18n-source-sha256: 784cf8286b0aba665f54b0b14b7467047ff618447663c4b354d92176796c4001 -->
 # 工具參考
 
 本頁由實際 MCP tool schema 產生。公開工具介面變更後，執行 `python scripts/generate-tools-reference.py` 更新 English 參考頁。
@@ -24,13 +24,13 @@
 
 ### `workspace_open`
 
-開啟或重用互動式 Live Workspace，支援人類與 agent 即時協作。Active task 只需呼叫一次，後續重用可自動重連的浮動 workspace，不要反覆重新開啟；當 terminal output、files/diffs、jobs、remotes 或 audit activity 能明顯改善工作流程時使用。
+開啟或重用顯示明確指定 Logical Session 的 Live Workspace。傳入 session_manage 回傳的目前 session_id。Workspace 不會從 MCP transport 推斷任務身分；沒有活動 Logical Session 時必須明確傳入 null。
 
 | 參數 | 類型 | 必填/預設值 | 說明 |
 |---|---|---|---|
+| `session_id` | `string \| null` | required |  |
 | `machine` | `string \| null` | `null` |  |
 | `cwd` | `string` | `"."` |  |
-| `session_run_id` | `string \| null` | required | 一律提供此欄位。沒有活動 logical Session 時傳 `null`；在 `session_manage` start/resume 後，傳回傳的 `active_run.run_id`，並在 MCP transport 重連期間持續重用。明確 resume/takeover 後改用新值。 |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -45,7 +45,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | 參數 | 類型 | 必填/預設值 | 說明 |
 |---|---|---|---|
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | 一律提供此欄位。沒有活動 logical Session 時傳 `null`；在 `session_manage` start/resume 後，傳回傳的 `active_run.run_id`，並在 MCP transport 重連期間持續重用。明確 resume/takeover 後改用新值。 |
+| `logical_session_id` | `string \| null` | required | 這次工具呼叫所屬的 Logical Session。處理該任務時，傳入 session_manage 回傳的 session_id。只有在沒有活動 Logical Session 時才使用 null。 |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -57,7 +57,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 
 | 參數 | 類型 | 必填/預設值 | 說明 |
 |---|---|---|---|
-| `session_run_id` | `string \| null` | required | 一律提供此欄位。沒有活動 logical Session 時傳 `null`；在 `session_manage` start/resume 後，傳回傳的 `active_run.run_id`，並在 MCP transport 重連期間持續重用。明確 resume/takeover 後改用新值。 |
+| `logical_session_id` | `string \| null` | required | 這次工具呼叫所屬的 Logical Session。處理該任務時，傳入 session_manage 回傳的 session_id。只有在沒有活動 Logical Session 時才使用 null。 |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -68,7 +68,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | 參數 | 類型 | 必填/預設值 | 說明 |
 |---|---|---|---|
 | `name` | `string` | required |  |
-| `session_run_id` | `string \| null` | required | 一律提供此欄位。沒有活動 logical Session 時傳 `null`；在 `session_manage` start/resume 後，傳回傳的 `active_run.run_id`，並在 MCP transport 重連期間持續重用。明確 resume/takeover 後改用新值。 |
+| `logical_session_id` | `string \| null` | required | 這次工具呼叫所屬的 Logical Session。處理該任務時，傳入 session_manage 回傳的 session_id。只有在沒有活動 Logical Session 時才使用 null。 |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -80,7 +80,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 |---|---|---|---|
 | `name` | `string` | required |  |
 | `path` | `string` | required |  |
-| `session_run_id` | `string \| null` | required | 一律提供此欄位。沒有活動 logical Session 時傳 `null`；在 `session_manage` start/resume 後，傳回傳的 `active_run.run_id`，並在 MCP transport 重連期間持續重用。明確 resume/takeover 後改用新值。 |
+| `logical_session_id` | `string \| null` | required | 這次工具呼叫所屬的 Logical Session。處理該任務時，傳入 session_manage 回傳的 session_id。只有在沒有活動 Logical Session 時才使用 null。 |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -93,37 +93,35 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `cwd` | `string` | `"."` |  |
 | `glob` | `string \| null` | `null` |  |
 | `max_results` | `integer` | `200` |  |
-| `session_run_id` | `string \| null` | required | 一律提供此欄位。沒有活動 logical Session 時傳 `null`；在 `session_manage` start/resume 後，傳回傳的 `active_run.run_id`，並在 MCP transport 重連期間持續重用。明確 resume/takeover 後改用新值。 |
+| `logical_session_id` | `string \| null` | required | 這次工具呼叫所屬的 Logical Session。處理該任務時，傳入 session_manage 回傳的 session_id。只有在沒有活動 Logical Session 時才使用 null。 |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
 ### `session_manage`
 
-管理與機器和 cwd 無關的持久 logical task Session。實質性工具工作前先 start；在有意義的檢查點 report 語義進度；新的 GPT/MCP run 可依 `session_id` resume 接手。`resume(takeover=true)` 一律建立新的 agent run 並取代舊 run。後續 report/finish/cancel 與其他工具使用回傳的 `active_run.run_id` 作為 `session_run_id`。動作：start、resume、get、report、list、finish、cancel、delete。
+管理單一持久 Logical Session。start 建立新任務並回傳其 session_id。resume 只會繼續使用者明確提供、或本對話中已經存在的 session_id。除 start 外的所有 action 都必須提供 session_id。Action：start、resume、get、report、finish、cancel、delete。report 接受 summary/findings/next/blockers/objective/label；delete 需要 terminal Session。
 
 | 參數 | 類型 | 必填/預設值 | 說明 |
 |---|---|---|---|
 | `action` | `string` | required |  |
 | `session_id` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | `null` |  |
 | `label` | `string \| null` | `null` |  |
 | `objective` | `string \| null` | `null` |  |
 | `summary` | `string \| null` | `null` |  |
 | `findings` | `array[string] \| null` | `null` |  |
 | `next` | `string \| null` | `null` |  |
 | `blockers` | `array[string] \| null` | `null` |  |
-| `takeover` | `boolean` | `false` |  |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
 ### `plan_manage`
 
-管理目前 logical Session 擁有的可選 Goal Plan。active Plan 會在 15 分鐘無 agent 活動後啟用自動續跑，最多 10 次 continuation attempt。先用 `session_manage` start/resume Session；修改類動作必須把該 Session 的 `active_run.run_id` 作為 `session_run_id`。動作：start、get、update、block、resume、finish、cancel；start 需要 objective 和 steps，finish 要求所有 step 已 completed 或 skipped。
+管理明確 Logical Session 的可選 Goal mode。活動 plan 在 15 分鐘沒有 agent activity 後啟用自動 continuation，最多 10 次。session_id 必須是 session_manage 回傳的同一個持久 id。Action：start、get、update、block、resume、finish、cancel。start 需要 objective 與 steps；finish 要求所有 steps 都是 completed 或 skipped。
 
 | 參數 | 類型 | 必填/預設值 | 說明 |
 |---|---|---|---|
 | `action` | `string` | required |  |
-| `session_run_id` | `string \| null` | `null` |  |
+| `session_id` | `string` | required |  |
 | `objective` | `string \| null` | `null` |  |
 | `steps` | `array[object] \| null` | `null` |  |
 | `step_id` | `string \| null` | `null` |  |
@@ -140,7 +138,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | 參數 | 類型 | 必填/預設值 | 說明 |
 |---|---|---|---|
 | `lines` | `integer` | `100` |  |
-| `session_run_id` | `string \| null` | required | 一律提供此欄位。沒有活動 logical Session 時傳 `null`；在 `session_manage` start/resume 後，傳回傳的 `active_run.run_id`，並在 MCP transport 重連期間持續重用。明確 resume/takeover 後改用新值。 |
+| `logical_session_id` | `string \| null` | required | 這次工具呼叫所屬的 Logical Session。處理該任務時，傳入 session_manage 回傳的 session_id。只有在沒有活動 Logical Session 時才使用 null。 |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -159,7 +157,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | 一律提供此欄位。沒有活動 logical Session 時傳 `null`；在 `session_manage` start/resume 後，傳回傳的 `active_run.run_id`，並在 MCP transport 重連期間持續重用。明確 resume/takeover 後改用新值。 |
+| `logical_session_id` | `string \| null` | required | 這次工具呼叫所屬的 Logical Session。處理該任務時，傳入 session_manage 回傳的 session_id。只有在沒有活動 Logical Session 時才使用 null。 |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -177,7 +175,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | 一律提供此欄位。沒有活動 logical Session 時傳 `null`；在 `session_manage` start/resume 後，傳回傳的 `active_run.run_id`，並在 MCP transport 重連期間持續重用。明確 resume/takeover 後改用新值。 |
+| `logical_session_id` | `string \| null` | required | 這次工具呼叫所屬的 Logical Session。處理該任務時，傳入 session_manage 回傳的 session_id。只有在沒有活動 Logical Session 時才使用 null。 |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -195,7 +193,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | 一律提供此欄位。沒有活動 logical Session 時傳 `null`；在 `session_manage` start/resume 後，傳回傳的 `active_run.run_id`，並在 MCP transport 重連期間持續重用。明確 resume/takeover 後改用新值。 |
+| `logical_session_id` | `string \| null` | required | 這次工具呼叫所屬的 Logical Session。處理該任務時，傳入 session_manage 回傳的 session_id。只有在沒有活動 Logical Session 時才使用 null。 |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -211,7 +209,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `input_text` | `string` | required |  |
 | `enter` | `boolean` | `true` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | 一律提供此欄位。沒有活動 logical Session 時傳 `null`；在 `session_manage` start/resume 後，傳回傳的 `active_run.run_id`，並在 MCP transport 重連期間持續重用。明確 resume/takeover 後改用新值。 |
+| `logical_session_id` | `string \| null` | required | 這次工具呼叫所屬的 Logical Session。處理該任務時，傳入 session_manage 回傳的 session_id。只有在沒有活動 Logical Session 時才使用 null。 |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -226,7 +224,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `session_id` | `string` | required |  |
 | `lines` | `integer` | `200` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | 一律提供此欄位。沒有活動 logical Session 時傳 `null`；在 `session_manage` start/resume 後，傳回傳的 `active_run.run_id`，並在 MCP transport 重連期間持續重用。明確 resume/takeover 後改用新值。 |
+| `logical_session_id` | `string \| null` | required | 這次工具呼叫所屬的 Logical Session。處理該任務時，傳入 session_manage 回傳的 session_id。只有在沒有活動 Logical Session 時才使用 null。 |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -240,7 +238,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 |---|---|---|---|
 | `session_id` | `string` | required |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | 一律提供此欄位。沒有活動 logical Session 時傳 `null`；在 `session_manage` start/resume 後，傳回傳的 `active_run.run_id`，並在 MCP transport 重連期間持續重用。明確 resume/takeover 後改用新值。 |
+| `logical_session_id` | `string \| null` | required | 這次工具呼叫所屬的 Logical Session。處理該任務時，傳入 session_manage 回傳的 session_id。只有在沒有活動 Logical Session 時才使用 null。 |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -253,7 +251,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | 參數 | 類型 | 必填/預設值 | 說明 |
 |---|---|---|---|
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | 一律提供此欄位。沒有活動 logical Session 時傳 `null`；在 `session_manage` start/resume 後，傳回傳的 `active_run.run_id`，並在 MCP transport 重連期間持續重用。明確 resume/takeover 後改用新值。 |
+| `logical_session_id` | `string \| null` | required | 這次工具呼叫所屬的 Logical Session。處理該任務時，傳入 session_manage 回傳的 session_id。只有在沒有活動 Logical Session 時才使用 null。 |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -271,7 +269,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | 一律提供此欄位。沒有活動 logical Session 時傳 `null`；在 `session_manage` start/resume 後，傳回傳的 `active_run.run_id`，並在 MCP transport 重連期間持續重用。明確 resume/takeover 後改用新值。 |
+| `logical_session_id` | `string \| null` | required | 這次工具呼叫所屬的 Logical Session。處理該任務時，傳入 session_manage 回傳的 session_id。只有在沒有活動 Logical Session 時才使用 null。 |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -285,7 +283,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 |---|---|---|---|
 | `include_finished` | `boolean` | `true` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | 一律提供此欄位。沒有活動 logical Session 時傳 `null`；在 `session_manage` start/resume 後，傳回傳的 `active_run.run_id`，並在 MCP transport 重連期間持續重用。明確 resume/takeover 後改用新值。 |
+| `logical_session_id` | `string \| null` | required | 這次工具呼叫所屬的 Logical Session。處理該任務時，傳入 session_manage 回傳的 session_id。只有在沒有活動 Logical Session 時才使用 null。 |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -300,7 +298,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `job_id` | `string` | required |  |
 | `lines` | `integer` | `200` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | 一律提供此欄位。沒有活動 logical Session 時傳 `null`；在 `session_manage` start/resume 後，傳回傳的 `active_run.run_id`，並在 MCP transport 重連期間持續重用。明確 resume/takeover 後改用新值。 |
+| `logical_session_id` | `string \| null` | required | 這次工具呼叫所屬的 Logical Session。處理該任務時，傳入 session_manage 回傳的 session_id。只有在沒有活動 Logical Session 時才使用 null。 |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -314,7 +312,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 |---|---|---|---|
 | `job_id` | `string` | required |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | 一律提供此欄位。沒有活動 logical Session 時傳 `null`；在 `session_manage` start/resume 後，傳回傳的 `active_run.run_id`，並在 MCP transport 重連期間持續重用。明確 resume/takeover 後改用新值。 |
+| `logical_session_id` | `string \| null` | required | 這次工具呼叫所屬的 Logical Session。處理該任務時，傳入 session_manage 回傳的 session_id。只有在沒有活動 Logical Session 時才使用 null。 |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -330,7 +328,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | 一律提供此欄位。沒有活動 logical Session 時傳 `null`；在 `session_manage` start/resume 後，傳回傳的 `active_run.run_id`，並在 MCP transport 重連期間持續重用。明確 resume/takeover 後改用新值。 |
+| `logical_session_id` | `string \| null` | required | 這次工具呼叫所屬的 Logical Session。處理該任務時，傳入 session_manage 回傳的 session_id。只有在沒有活動 Logical Session 時才使用 null。 |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -348,7 +346,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `recursive` | `boolean` | `false` |  |
 | `max_entries` | `integer` | `500` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | 一律提供此欄位。沒有活動 logical Session 時傳 `null`；在 `session_manage` start/resume 後，傳回傳的 `active_run.run_id`，並在 MCP transport 重連期間持續重用。明確 resume/takeover 後改用新值。 |
+| `logical_session_id` | `string \| null` | required | 這次工具呼叫所屬的 Logical Session。處理該任務時，傳入 session_manage 回傳的 session_id。只有在沒有活動 Logical Session 時才使用 null。 |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -364,7 +362,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `depth` | `integer` | `3` |  |
 | `max_entries` | `integer` | `500` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | 一律提供此欄位。沒有活動 logical Session 時傳 `null`；在 `session_manage` start/resume 後，傳回傳的 `active_run.run_id`，並在 MCP transport 重連期間持續重用。明確 resume/takeover 後改用新值。 |
+| `logical_session_id` | `string \| null` | required | 這次工具呼叫所屬的 Logical Session。處理該任務時，傳入 session_manage 回傳的 session_id。只有在沒有活動 Logical Session 時才使用 null。 |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -380,7 +378,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `cwd` | `string` | `"."` |  |
 | `max_results` | `integer` | `500` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | 一律提供此欄位。沒有活動 logical Session 時傳 `null`；在 `session_manage` start/resume 後，傳回傳的 `active_run.run_id`，並在 MCP transport 重連期間持續重用。明確 resume/takeover 後改用新值。 |
+| `logical_session_id` | `string \| null` | required | 這次工具呼叫所屬的 Logical Session。處理該任務時，傳入 session_manage 回傳的 session_id。只有在沒有活動 Logical Session 時才使用 null。 |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -399,7 +397,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `case_sensitive` | `boolean` | `true` |  |
 | `max_results` | `integer \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | 一律提供此欄位。沒有活動 logical Session 時傳 `null`；在 `session_manage` start/resume 後，傳回傳的 `active_run.run_id`，並在 MCP transport 重連期間持續重用。明確 resume/takeover 後改用新值。 |
+| `logical_session_id` | `string \| null` | required | 這次工具呼叫所屬的 Logical Session。處理該任務時，傳入 session_manage 回傳的 session_id。只有在沒有活動 Logical Session 時才使用 null。 |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -417,7 +415,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `binary_preview` | `string \| null` | `null` |  |
 | `binary_preview_bytes` | `integer` | `256` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | 一律提供此欄位。沒有活動 logical Session 時傳 `null`；在 `session_manage` start/resume 後，傳回傳的 `active_run.run_id`，並在 MCP transport 重連期間持續重用。明確 resume/takeover 後改用新值。 |
+| `logical_session_id` | `string \| null` | required | 這次工具呼叫所屬的 Logical Session。處理該任務時，傳入 session_manage 回傳的 session_id。只有在沒有活動 Logical Session 時才使用 null。 |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -431,7 +429,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 |---|---|---|---|
 | `path` | `string` | required |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | 一律提供此欄位。沒有活動 logical Session 時傳 `null`；在 `session_manage` start/resume 後，傳回傳的 `active_run.run_id`，並在 MCP transport 重連期間持續重用。明確 resume/takeover 後改用新值。 |
+| `logical_session_id` | `string \| null` | required | 這次工具呼叫所屬的 Logical Session。處理該任務時，傳入 session_manage 回傳的 session_id。只有在沒有活動 Logical Session 時才使用 null。 |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -449,7 +447,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | 一律提供此欄位。沒有活動 logical Session 時傳 `null`；在 `session_manage` start/resume 後，傳回傳的 `active_run.run_id`，並在 MCP transport 重連期間持續重用。明確 resume/takeover 後改用新值。 |
+| `logical_session_id` | `string \| null` | required | 這次工具呼叫所屬的 Logical Session。處理該任務時，傳入 session_manage 回傳的 session_id。只有在沒有活動 Logical Session 時才使用 null。 |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -466,7 +464,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | 一律提供此欄位。沒有活動 logical Session 時傳 `null`；在 `session_manage` start/resume 後，傳回傳的 `active_run.run_id`，並在 MCP transport 重連期間持續重用。明確 resume/takeover 後改用新值。 |
+| `logical_session_id` | `string \| null` | required | 這次工具呼叫所屬的 Logical Session。處理該任務時，傳入 session_manage 回傳的 session_id。只有在沒有活動 Logical Session 時才使用 null。 |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -483,7 +481,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | 一律提供此欄位。沒有活動 logical Session 時傳 `null`；在 `session_manage` start/resume 後，傳回傳的 `active_run.run_id`，並在 MCP transport 重連期間持續重用。明確 resume/takeover 後改用新值。 |
+| `logical_session_id` | `string \| null` | required | 這次工具呼叫所屬的 Logical Session。處理該任務時，傳入 session_manage 回傳的 session_id。只有在沒有活動 Logical Session 時才使用 null。 |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -500,7 +498,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | 一律提供此欄位。沒有活動 logical Session 時傳 `null`；在 `session_manage` start/resume 後，傳回傳的 `active_run.run_id`，並在 MCP transport 重連期間持續重用。明確 resume/takeover 後改用新值。 |
+| `logical_session_id` | `string \| null` | required | 這次工具呼叫所屬的 Logical Session。處理該任務時，傳入 session_manage 回傳的 session_id。只有在沒有活動 Logical Session 時才使用 null。 |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -520,7 +518,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `chunk_size` | `integer \| null` | `null` |  |
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | 一律提供此欄位。沒有活動 logical Session 時傳 `null`；在 `session_manage` start/resume 後，傳回傳的 `active_run.run_id`，並在 MCP transport 重連期間持續重用。明確 resume/takeover 後改用新值。 |
+| `logical_session_id` | `string \| null` | required | 這次工具呼叫所屬的 Logical Session。處理該任務時，傳入 session_manage 回傳的 session_id。只有在沒有活動 Logical Session 時才使用 null。 |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -537,7 +535,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `filename` | `string \| null` | `null` |  |
 | `max_downloads` | `integer \| null` | `null` |  |
 | `inline` | `boolean` | `false` |  |
-| `session_run_id` | `string \| null` | required | 一律提供此欄位。沒有活動 logical Session 時傳 `null`；在 `session_manage` start/resume 後，傳回傳的 `active_run.run_id`，並在 MCP transport 重連期間持續重用。明確 resume/takeover 後改用新值。 |
+| `logical_session_id` | `string \| null` | required | 這次工具呼叫所屬的 Logical Session。處理該任務時，傳入 session_manage 回傳的 session_id。只有在沒有活動 Logical Session 時才使用 null。 |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -548,7 +546,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | 參數 | 類型 | 必填/預設值 | 說明 |
 |---|---|---|---|
 | `include_expired` | `boolean` | `false` |  |
-| `session_run_id` | `string \| null` | required | 一律提供此欄位。沒有活動 logical Session 時傳 `null`；在 `session_manage` start/resume 後，傳回傳的 `active_run.run_id`，並在 MCP transport 重連期間持續重用。明確 resume/takeover 後改用新值。 |
+| `logical_session_id` | `string \| null` | required | 這次工具呼叫所屬的 Logical Session。處理該任務時，傳入 session_manage 回傳的 session_id。只有在沒有活動 Logical Session 時才使用 null。 |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -559,7 +557,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | 參數 | 類型 | 必填/預設值 | 說明 |
 |---|---|---|---|
 | `token` | `string` | required |  |
-| `session_run_id` | `string \| null` | required | 一律提供此欄位。沒有活動 logical Session 時傳 `null`；在 `session_manage` start/resume 後，傳回傳的 `active_run.run_id`，並在 MCP transport 重連期間持續重用。明確 resume/takeover 後改用新值。 |
+| `logical_session_id` | `string \| null` | required | 這次工具呼叫所屬的 Logical Session。處理該任務時，傳入 session_manage 回傳的 session_id。只有在沒有活動 Logical Session 時才使用 null。 |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -585,7 +583,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `refresh` | `boolean` | `true` |  |
 | `key` | `string \| null` | `null` |  |
 | `value` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | 一律提供此欄位。沒有活動 logical Session 時傳 `null`；在 `session_manage` start/resume 後，傳回傳的 `active_run.run_id`，並在 MCP transport 重連期間持續重用。明確 resume/takeover 後改用新值。 |
+| `logical_session_id` | `string \| null` | required | 這次工具呼叫所屬的 Logical Session。處理該任務時，傳入 session_manage 回傳的 session_id。只有在沒有活動 Logical Session 時才使用 null。 |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -598,7 +596,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `query` | `string` | `""` |  |
 | `server` | `string \| null` | `null` |  |
 | `limit` | `integer` | `20` |  |
-| `session_run_id` | `string \| null` | required | 一律提供此欄位。沒有活動 logical Session 時傳 `null`；在 `session_manage` start/resume 後，傳回傳的 `active_run.run_id`，並在 MCP transport 重連期間持續重用。明確 resume/takeover 後改用新值。 |
+| `logical_session_id` | `string \| null` | required | 這次工具呼叫所屬的 Logical Session。處理該任務時，傳入 session_manage 回傳的 session_id。只有在沒有活動 Logical Session 時才使用 null。 |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -609,7 +607,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | 參數 | 類型 | 必填/預設值 | 說明 |
 |---|---|---|---|
 | `name` | `string` | required |  |
-| `session_run_id` | `string \| null` | required | 一律提供此欄位。沒有活動 logical Session 時傳 `null`；在 `session_manage` start/resume 後，傳回傳的 `active_run.run_id`，並在 MCP transport 重連期間持續重用。明確 resume/takeover 後改用新值。 |
+| `logical_session_id` | `string \| null` | required | 這次工具呼叫所屬的 Logical Session。處理該任務時，傳入 session_manage 回傳的 session_id。只有在沒有活動 Logical Session 時才使用 null。 |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -622,7 +620,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `name` | `string` | required |  |
 | `arguments` | `object \| null` | `null` |  |
 | `timeout_s` | `integer \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | 一律提供此欄位。沒有活動 logical Session 時傳 `null`；在 `session_manage` start/resume 後，傳回傳的 `active_run.run_id`，並在 MCP transport 重連期間持續重用。明確 resume/takeover 後改用新值。 |
+| `logical_session_id` | `string \| null` | required | 這次工具呼叫所屬的 Logical Session。處理該任務時，傳入 session_manage 回傳的 session_id。只有在沒有活動 Logical Session 時才使用 null。 |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -646,7 +644,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `storage_state_path` | `string \| null` | `null` |  |
 | `save_storage_state_path` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | 一律提供此欄位。沒有活動 logical Session 時傳 `null`；在 `session_manage` start/resume 後，傳回傳的 `active_run.run_id`，並在 MCP transport 重連期間持續重用。明確 resume/takeover 後改用新值。 |
+| `logical_session_id` | `string \| null` | required | 這次工具呼叫所屬的 Logical Session。處理該任務時，傳入 session_manage 回傳的 session_id。只有在沒有活動 Logical Session 時才使用 null。 |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -666,7 +664,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `max_text_chars` | `integer` | `100000` |  |
 | `max_elements` | `integer` | `100` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | 一律提供此欄位。沒有活動 logical Session 時傳 `null`；在 `session_manage` start/resume 後，傳回傳的 `active_run.run_id`，並在 MCP transport 重連期間持續重用。明確 resume/takeover 後改用新值。 |
+| `logical_session_id` | `string \| null` | required | 這次工具呼叫所屬的 Logical Session。處理該任務時，傳入 session_manage 回傳的 session_id。只有在沒有活動 Logical Session 時才使用 null。 |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -683,7 +681,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `page_id` | `string \| null` | `null` |  |
 | `timeout_ms` | `integer` | `30000` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | 一律提供此欄位。沒有活動 logical Session 時傳 `null`；在 `session_manage` start/resume 後，傳回傳的 `active_run.run_id`，並在 MCP transport 重連期間持續重用。明確 resume/takeover 後改用新值。 |
+| `logical_session_id` | `string \| null` | required | 這次工具呼叫所屬的 Logical Session。處理該任務時，傳入 session_manage 回傳的 session_id。只有在沒有活動 Logical Session 時才使用 null。 |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -699,7 +697,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `cwd` | `string` | `"."` |  |
 | `timeout_s` | `integer` | `60` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | 一律提供此欄位。沒有活動 logical Session 時傳 `null`；在 `session_manage` start/resume 後，傳回傳的 `active_run.run_id`，並在 MCP transport 重連期間持續重用。明確 resume/takeover 後改用新值。 |
+| `logical_session_id` | `string \| null` | required | 這次工具呼叫所屬的 Logical Session。處理該任務時，傳入 session_manage 回傳的 session_id。只有在沒有活動 Logical Session 時才使用 null。 |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -719,7 +717,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `ttl_s` | `integer \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
 | `new_name` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | 一律提供此欄位。沒有活動 logical Session 時傳 `null`；在 `session_manage` start/resume 後，傳回傳的 `active_run.run_id`，並在 MCP transport 重連期間持續重用。明確 resume/takeover 後改用新值。 |
+| `logical_session_id` | `string \| null` | required | 這次工具呼叫所屬的 Logical Session。處理該任務時，傳入 session_manage 回傳的 session_id。只有在沒有活動 Logical Session 時才使用 null。 |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 

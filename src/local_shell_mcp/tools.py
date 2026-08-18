@@ -62,7 +62,6 @@ from .live_channel import (
     LIVE_RESOURCE_URI,
     LIVE_RESOURCE_VERSIONED_URI,
     get_live_channel_manager,
-    mcp_session_key,
 )
 from .models import ToolResult
 from .models import ok_result as _ok
@@ -302,22 +301,23 @@ MCP_INSTRUCTIONS = (
     "surface; do not expect per-Skill MCP tools. When a registered external MCP may "
     "provide a capability, use mcp_tool_search, then mcp_tool_inspect, then mcp_tool_call; "
     "dynamic MCP tools never appear directly in tools/list. For substantive tool-driven work, "
-    "create a durable logical task context first with session_manage(action='start', objective=...). "
-    "Ordinary tools expose a required nullable session_run_id: pass null before entering a logical session, "
-    "then pass its active_run.run_id on subsequent tool calls; after resume/takeover, switch to the newly "
-    "returned run id. "
-    "Keep that session current with session_manage(action='report', ...) at meaningful checkpoints and "
-    "before handing work off. A replacement MCP transport within the same agent run should keep the same "
-    "session_run_id and reattaches automatically. When a different ChatGPT/agent run takes over, call "
-    "session_manage(action='resume', session_id=..., takeover=true) and use its new run id. "
-    "Logical sessions are not bound to machines or working directories. plan_manage is optional Goal mode "
-    "owned by the current logical session, not by Live Workspace."
+    "use exactly one durable Logical Session. Start a new task with session_manage(action='start', ...). "
+    "Only continue an existing Session when its session_id is already present in this conversation or the "
+    "user explicitly provides that session_id; then call session_manage(action='resume', session_id=...). "
+    "Never discover, infer, or auto-select a Session from other conversations. After start or resume, clearly "
+    "tell the user the active session_id. Include it again at meaningful progress checkpoints and before ending "
+    "the turn so the user can hand it to another conversation. Ordinary tools expose a required nullable "
+    "logical_session_id; while working in a Session, pass the exact session_id returned by session_manage. "
+    "Use null only when no Logical Session is active. Keep progress current with session_manage(action='report', "
+    "session_id=...) at meaningful checkpoints. Logical Sessions are independent of MCP transports, machines, "
+    "and working directories. plan_manage and workspace_open take the same session_id explicitly and never infer it "
+    "from the transport. plan_manage is optional Goal mode owned by the Logical Session."
 )
 
-SESSION_RUN_ARGUMENT_DESCRIPTION = (
-    "Always provide this field. Use null when no logical session is active; after session_manage start/resume, "
-    "pass the returned active_run.run_id and keep using it across MCP transport reconnects. Use the new value "
-    "after an explicit resume/takeover."
+LOGICAL_SESSION_ARGUMENT_DESCRIPTION = (
+    "Logical Session for this tool call. Pass the session_id returned by session_manage while working in that "
+    "task. Use null only when no Logical Session is active. This is the same durable session_id used by "
+    "session_manage."
 )
 
 
@@ -350,7 +350,6 @@ def _oauth_meta(scopes: list[str]) -> dict[str, Any]:
     if get_settings().auth_mode == "none":
         return _security_meta([*NOAUTH_SECURITY_SCHEMES])
     return _security_meta([_oauth_security_scheme(scopes)])
-
 
 
 def _live_workspace_api_base() -> str:
@@ -587,32 +586,36 @@ def _timeout_payload_for_tool(_tool_name: str, exc: Exception) -> CallToolResult
     return _handled_error(exc)
 
 
-def _install_session_run_arguments(mcp: FastMCP) -> None:
-    """Expose a run lease on every tool without duplicating it in each function signature."""
+def _install_logical_session_arguments(mcp: FastMCP) -> None:
+    """Expose the active Logical Session id on tools that do not own a session_id field."""
 
+    explicit_session_tools = {
+        "session_manage",
+        "plan_manage",
+        "workspace_open",
+        "open_live_workspace",
+        "live_workspace_reconnect",
+    }
     for name, tool in mcp._tool_manager._tools.items():  # noqa: SLF001
-        if name in {"session_manage", "plan_manage", "live_workspace_reconnect"}:
+        if name in explicit_session_tools:
             continue
         argument_model = tool.fn_metadata.arg_model
         extended_model = create_model(
-            f"{argument_model.__name__}WithSessionRun",
+            f"{argument_model.__name__}WithLogicalSession",
             __base__=argument_model,
-            session_run_id=(
+            logical_session_id=(
                 str | None,
-                Field(default=None, description=SESSION_RUN_ARGUMENT_DESCRIPTION),
+                Field(default=None, description=LOGICAL_SESSION_ARGUMENT_DESCRIPTION),
             ),
         )
         tool.fn_metadata.arg_model = extended_model
         parameters = extended_model.model_json_schema()
-        # Advertise the field as required so model clients keep carrying the run
-        # capability across transport replacement. The validator still accepts an
-        # omitted field as None for backwards compatibility with older MCP clients.
-        session_run_schema = (parameters.get("properties") or {}).get("session_run_id")
-        if isinstance(session_run_schema, dict):
-            session_run_schema.pop("default", None)
+        session_schema = (parameters.get("properties") or {}).get("logical_session_id")
+        if isinstance(session_schema, dict):
+            session_schema.pop("default", None)
         required = list(parameters.get("required") or [])
-        if "session_run_id" not in required:
-            required.append("session_run_id")
+        if "logical_session_id" not in required:
+            required.append("logical_session_id")
         parameters["required"] = required
         tool.parameters = parameters
 
@@ -643,7 +646,7 @@ async def _retry_session_tool_cleanups(
                     continue
                 try:
                     cleaned = await asyncio.to_thread(manager.retry_tool_call_cleanup, lease)
-                except Exception as exc:  # noqa: BLE001 - retry while the lease can still block takeover.
+                except Exception as exc:  # noqa: BLE001 - retry while the durable in-flight marker remains active.
                     with suppress(Exception):
                         audit(
                             "session_lease_cleanup_retry_failed",
@@ -676,7 +679,7 @@ def _schedule_session_tool_cleanup_retry(
     # controller can use to distinguish "completed, then crashed" from "crashed
     # while the external operation was still running". In that failure mode the
     # persisted in-flight lease intentionally falls back to its bounded stale
-    # timeout rather than permitting an unsafe early takeover.
+    # timeout rather than leaving stale in-flight state indefinitely.
     session_id = str(lease.get("session_id") or "")
     if not session_id:
         return
@@ -719,7 +722,7 @@ async def _finish_session_tool_activity(
         persistence_error = f"{type(exc).__name__}: {exc}"
     if persistence_error:
         # Completion persistence must never mask the original tool result, but
-        # leaving the durable in-flight lease behind can block takeover for the
+        # leaving the durable in-flight marker behind can block terminal Session actions for the
         # full stale window. Keep retrying only the lease removal in background.
         with suppress(Exception):
             audit(
@@ -792,47 +795,6 @@ async def _renew_session_tool_lease(
             return
 
 
-def _logical_session_routing_key(
-    base_session_key: str,
-    *,
-    tool_name: str,
-    session_run_id: str | None,
-    action: str | None = None,
-    session_id: str | None = None,
-) -> str:
-    """Route logical Sessions safely when one stdio MCP session is multiplexed.
-
-    HTTP transports already provide an affinity or MCP session id. Headerless stdio
-    transports do not, and a tunnel process may reuse one MCP session object for
-    multiple ChatGPT conversations. Once a durable run id exists it becomes the
-    authoritative routing capability. Session starts use a one-shot routing key,
-    while resume/get calls with a session id route by that durable session id, so
-    they cannot detach a different logical Session sharing the same transport key.
-    """
-    # Headerless MCP sessions are represented by a process-local mcp-session key.
-    # OpenAI's stdio tunnel can multiplex several ChatGPT conversations through
-    # one such underlying session object. The legacy "direct" key is kept on its
-    # existing single-client semantics for internal/direct callers.
-    multiplexed = base_session_key.startswith("mcp-session:")
-    if not multiplexed:
-        return base_session_key
-    if session_run_id:
-        return f"{base_session_key}:run:{session_run_id}"
-
-    normalized_tool = str(tool_name or "").strip().lower()
-    normalized_action = str(action or "").strip().lower()
-    if normalized_tool == "session_manage":
-        if normalized_action == "start":
-            return f"{base_session_key}:start:{uuid.uuid4().hex}"
-        if normalized_action in {"resume", "get"} and session_id:
-            return f"{base_session_key}:session:{session_id}"
-        if normalized_action == "get":
-            return f"{base_session_key}:unbound-get:{uuid.uuid4().hex}"
-    if normalized_tool == "plan_manage":
-        return f"{base_session_key}:unbound-plan:{uuid.uuid4().hex}"
-    return base_session_key
-
-
 def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
     for tool in mcp._tool_manager._tools.values():  # noqa: SLF001
         original = tool.fn
@@ -854,17 +816,35 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
             **kwargs,
         ):
             require_current_scopes(__required_scopes)
-            session_run_id = kwargs.get("session_run_id")
             invoke_kwargs = dict(kwargs)
-            if __tool_name not in {"session_manage", "plan_manage"}:
-                invoke_kwargs.pop("session_run_id", None)
+            explicit_session_tools = {
+                "session_manage",
+                "plan_manage",
+                "workspace_open",
+                "open_live_workspace",
+                "live_workspace_reconnect",
+            }
+            injected_session_id = kwargs.get("logical_session_id")
+            if __tool_name not in explicit_session_tools:
+                invoke_kwargs.pop("logical_session_id", None)
             try:
                 bound = __signature.bind_partial(*args, **invoke_kwargs)
                 call_arguments = dict(bound.arguments)
             except TypeError:
                 call_arguments = dict(invoke_kwargs)
-            if session_run_id is not None:
-                call_arguments["session_run_id"] = session_run_id
+            if __tool_name not in explicit_session_tools and injected_session_id is not None:
+                call_arguments["logical_session_id"] = injected_session_id
+
+            if __tool_name in {"plan_manage", "workspace_open", "open_live_workspace"}:
+                logical_session_id = call_arguments.get("session_id")
+            elif __tool_name in {"live_workspace_reconnect", "session_manage"}:
+                logical_session_id = None
+            else:
+                logical_session_id = injected_session_id
+            logical_session_id = (
+                str(logical_session_id).strip() if logical_session_id is not None else ""
+            ) or None
+
             local_access_error = _disabled_local_access_error(__tool_name, call_arguments)
             if any(call_arguments.get(name) for name in REMOTE_MACHINE_ARGUMENTS):
                 require_current_scopes(("remote:use",))
@@ -878,56 +858,35 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
                 for name in REMOTE_MACHINE_ARGUMENTS
                 if call_arguments.get(name)
             }
+            # Preserve tool-specific session identifiers (shell/browser/etc.) in the
+            # established audit field. Logical Session identity is recorded separately.
             if call_arguments.get("session_id"):
                 audit_context["session"] = call_arguments["session_id"]
+            if logical_session_id:
+                audit_context["logical_session"] = logical_session_id
+            elif __tool_name == "session_manage" and call_arguments.get("session_id"):
+                audit_context["logical_session"] = call_arguments["session_id"]
             call_id = uuid.uuid4().hex
             started_at = time.monotonic()
-            live_session_key = mcp_session_key(mcp)
-            logical_session_key = _logical_session_routing_key(
-                live_session_key,
-                tool_name=__tool_name,
-                session_run_id=(
-                    str(session_run_id) if session_run_id is not None else None
-                ),
-                action=call_arguments.get("action"),
-                session_id=call_arguments.get("session_id"),
-            )
             live_manager = get_live_channel_manager()
             logical_manager = get_session_runtime_manager()
             principal_subject = _current_principal_subject()
             live_arguments = _live_event_arguments(__tool_name, safe_call_arguments)
             logical_lease = None
             normalized_tool_action = str(call_arguments.get("action") or "").strip().lower()
-            session_get_tracks_activity = False
-            if __tool_name == "session_manage" and normalized_tool_action == "get":
-                current_session_id = await asyncio.to_thread(
-                    logical_manager.current_session_id,
-                    logical_session_key,
-                    subject=principal_subject,
-                )
-                requested_session_id = str(call_arguments.get("session_id") or "").strip()
-                session_get_tracks_activity = bool(
-                    current_session_id
-                    and (not requested_session_id or requested_session_id == current_session_id)
-                )
-            if (
-                __tool_name not in {"session_manage", "live_workspace_reconnect"}
-                or session_get_tracks_activity
-            ):
-                require_run_token = not (
-                    (__tool_name == "plan_manage" and normalized_tool_action == "get")
-                    or session_get_tracks_activity
-                )
+            tracks_session_activity = __tool_name not in {
+                "session_manage",
+                "workspace_open",
+                "open_live_workspace",
+                "live_workspace_reconnect",
+            } and not (__tool_name == "plan_manage" and normalized_tool_action == "get")
+            if tracks_session_activity:
                 try:
                     logical_lease = await asyncio.to_thread(
                         logical_manager.begin_tool_call,
-                        logical_session_key,
+                        logical_session_id,
                         call_id,
-                        expected_run_id=(
-                            str(session_run_id) if session_run_id is not None else None
-                        ),
                         subject=principal_subject,
-                        require_run_token=require_run_token,
                         data=live_arguments,
                     )
                 except SessionToolLeaseStartPersistenceError as exc:
@@ -961,29 +920,13 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
                         stage="started",
                         error=str(logical_lease["persistence_error"]),
                     )
-                if __tool_name not in {
-                    "workspace_open",
-                    "open_live_workspace",
-                    "live_workspace_reconnect",
-                }:
-                    live_subject = _current_principal_subject()
-                    attached_live = None
-                    if logical_lease and logical_lease.get("session_id"):
-                        attached_live = live_manager.bind_logical_session(
-                            live_session_key,
-                            str(logical_lease["session_id"]),
-                            live_subject,
-                            exclusive_model_owner=True,
-                        )
-                    if attached_live is None:
-                        live_manager.claim_recovery_session(live_session_key, live_subject)
-                # Session lifecycle controls can rebind or detach the transport's
-                # channel while they execute. Their semantic session.* events are
-                # already durable, so keep them out of the ephemeral running-tool
-                # stream. For every other tool, pin start/end events to the same
-                # captured channel even if the transport is rebound concurrently.
-                if __tool_name != "session_manage":
-                    lifecycle_channel = live_manager.active_for_session(live_session_key)
+                # Live Workspace follows the explicit Logical Session id. MCP transport
+                # identity is irrelevant, so multiplexed ChatGPT conversations cannot rebind
+                # one another's workspace or activity stream.
+                if logical_lease and logical_lease.get("session_id"):
+                    lifecycle_channel = live_manager.active_for_logical_session(
+                        str(logical_lease["session_id"]), subject=principal_subject
+                    )
                     if lifecycle_channel is not None:
                         live_lifecycle_channel_id = lifecycle_channel.live_id
                         live_manager.publish_channel(
@@ -1286,6 +1229,7 @@ def _remove_local_only_tools_when_disabled(mcp: FastMCP) -> None:
     tools = mcp._tool_manager._tools  # noqa: SLF001
     for name in LOCAL_ONLY_TOOL_NAMES:
         tools.pop(name, None)
+
 
 OPEN_WORLD_TOOL_NAMES = {
     *MACHINE_CAPABLE_TOOL_NAMES,
@@ -3020,59 +2964,51 @@ def _register_maintenance_tools(mcp: FastMCP, read_only_tool: ToolAnnotations) -
     async def session_manage(
         action: str,
         session_id: str | None = None,
-        session_run_id: str | None = None,
         label: str | None = None,
         objective: str | None = None,
         summary: str | None = None,
         findings: list[str] | None = None,
         next: str | None = None,
         blockers: list[str] | None = None,
-        takeover: bool = False,
     ) -> ToolResult:
-        """Manage a durable logical task session independent of machine and cwd. Start one before substantive tool-driven work; report semantic progress at meaningful checkpoints; resume by session_id to hand work to a new GPT/MCP run. resume with takeover=true always creates a new agent run and supersedes the old one. Use the returned active_run.run_id as session_run_id for report/finish/cancel and subsequent tools. Actions: start, resume, get, report, list, finish, cancel, delete. start may include label/objective; report accepts summary/findings/next/blockers/objective/label. delete permanently removes a detached or terminal Session and frees retained history capacity."""
-        live_session_key = mcp_session_key(mcp)
-        session_key = _logical_session_routing_key(
-            live_session_key,
-            tool_name="session_manage",
-            session_run_id=session_run_id,
-            action=action,
-            session_id=session_id,
-        )
+        """Manage one durable Logical Session. Start creates a new task and returns its session_id. Resume continues only the explicit session_id supplied by the user or already present in this conversation. All non-start actions require session_id. Actions: start, resume, get, report, finish, cancel, delete. report accepts summary/findings/next/blockers/objective/label. delete requires a terminal Session."""
         subject = _current_principal_subject()
         result = await _tool_call(
             asyncio.to_thread,
             get_session_runtime_manager().manage,
-            session_key,
             subject,
             action=action,
             session_id=session_id,
-            session_run_id=session_run_id,
             label=label,
             objective=objective,
             summary=summary,
             findings=findings,
             next=next,
             blockers=blockers,
-            takeover=takeover,
-            require_run_token=True,
         )
         if isinstance(result, dict) and result.get("ok"):
             data = result.get("data")
             normalized_action = action.strip().lower()
-            if isinstance(data, dict) and data.get("session_id") and normalized_action in {
-                "start",
-                "resume",
-            }:
-                get_live_channel_manager().bind_logical_session(
-                    live_session_key,
-                    str(data["session_id"]),
-                    subject,
-                    exclusive_model_owner=True,
-                )
-            if isinstance(data, dict) and normalized_action in {"finish", "cancel", "delete"}:
-                terminal_session_id = str(data.get("session_id") or session_id or "")
-                if terminal_session_id:
-                    get_live_channel_manager().detach_logical_session(terminal_session_id)
+            if isinstance(data, dict):
+                changed_session_id = str(data.get("session_id") or session_id or "")
+                if changed_session_id and normalized_action == "delete":
+                    get_live_channel_manager().detach_logical_session(changed_session_id)
+                elif changed_session_id and normalized_action in {
+                    "resume",
+                    "report",
+                    "finish",
+                    "cancel",
+                }:
+                    channel = get_live_channel_manager().active_for_logical_session(
+                        changed_session_id, subject=subject
+                    )
+                    if channel is not None:
+                        get_live_channel_manager().publish_channel(
+                            channel.live_id,
+                            "session.updated",
+                            actor="agent",
+                            data={"session_id": changed_session_id, "action": normalized_action},
+                        )
         return result
 
     @mcp.tool(structured_output=True, annotations=read_only_tool, meta=shell_read_meta)
@@ -3087,7 +3023,7 @@ def _register_maintenance_tools(mcp: FastMCP, read_only_tool: ToolAnnotations) -
     @mcp.tool(structured_output=True, meta=shell_write_meta)
     async def plan_manage(
         action: str,
-        session_run_id: str | None = None,
+        session_id: str,
         objective: str | None = None,
         steps: list[dict[str, Any]] | None = None,
         step_id: str | None = None,
@@ -3095,19 +3031,13 @@ def _register_maintenance_tools(mcp: FastMCP, read_only_tool: ToolAnnotations) -
         text: str | None = None,
         note: str | None = None,
     ) -> ToolResult:
-        """Manage the optional Goal plan owned by the current logical session. An active plan enables automatic continuation after 15 minutes without agent activity, capped at 10 continuation attempts. Start or resume a logical session with session_manage first. Mutating actions require that session's active_run.run_id as session_run_id. Actions: start, get, update, block, resume, finish, cancel. start requires objective and steps; finish requires every step to be completed or skipped."""
+        """Manage optional Goal mode for the explicit Logical Session. An active plan enables automatic continuation after 15 minutes without agent activity, capped at 10 continuation attempts. session_id must be the same durable id returned by session_manage. Actions: start, get, update, block, resume, finish, cancel. start requires objective and steps; finish requires every step to be completed or skipped."""
         return await _tool_call(
             asyncio.to_thread,
             get_session_runtime_manager().manage_plan,
-            _logical_session_routing_key(
-                mcp_session_key(mcp),
-                tool_name="plan_manage",
-                session_run_id=session_run_id,
-                action=action,
-            ),
+            session_id,
             action=action,
-            session_run_id=session_run_id,
-            require_run_token=True,
+            subject=_current_principal_subject(),
             objective=objective,
             steps=steps,
             step_id=step_id,
@@ -3398,26 +3328,19 @@ def _register_live_workspace_tools(
             if principal is None
             else tuple(sorted(principal_scopes(principal))) or tuple(ALL_OAUTH_SCOPES)
         )
-        session_key = mcp_session_key(mcp)
         session_manager = get_session_runtime_manager()
-        logical_session_id = await asyncio.to_thread(
-            session_manager.current_session_id,
-            session_key,
-            subject=subject,
-        )
-        if logical_session_id is None and session_id:
+        logical_session_id = None
+        if session_id:
             try:
                 await asyncio.to_thread(session_manager.get, session_id, subject=subject)
             except ValueError as exc:
                 if not app_reattach or not str(exc).startswith("Unknown logical session:"):
                     raise
-                # A suspended app can miss the detach/delete event. Treat only a
-                # missing Session as stale; ownership errors still propagate.
+                # A suspended app can reconnect after the Session was deleted.
                 get_live_channel_manager().detach_logical_session(session_id)
             else:
                 logical_session_id = session_id
         channel, live_token = get_live_channel_manager().open(
-            session_key=session_key,
             subject=subject,
             scopes=scopes,
             live_id=live_id,
@@ -3466,15 +3389,16 @@ def _register_live_workspace_tools(
         meta=tool_meta,
     )
     async def workspace_open(
+        session_id: str | None,
         machine: str | None = None,
         cwd: str = ".",
     ) -> LiveChannelResult:
-        """Open or reuse the interactive Live Workspace for real-time human/agent collaboration. Call it once for an active task and reuse the self-reconnecting floating workspace instead of reopening it repeatedly. Use it when terminal output, files/diffs, jobs, remotes, or audit activity would materially improve the workflow."""
+        """Open or reuse a Live Workspace that displays the explicitly supplied Logical Session. Pass the active session_id returned by session_manage. The Workspace never infers task identity from the MCP transport; pass null explicitly when no Logical Session is active."""
         return await build_live_channel_result(
             machine=machine,
             cwd=cwd,
             live_id=None,
-            session_id=None,
+            session_id=session_id,
             app_reattach=False,
         )
 
@@ -3489,11 +3413,12 @@ def _register_live_workspace_tools(
         meta=tool_meta,
     )
     async def open_live_workspace(
+        session_id: str | None = None,
         machine: str | None = None,
         cwd: str = ".",
     ) -> LiveChannelResult:
-        """Compatibility alias for workspace_open used by cached ChatGPT tool recipients. Open or reuse the same interactive Live Workspace; new clients should call workspace_open."""
-        return await workspace_open(machine=machine, cwd=cwd)
+        """Compatibility alias for workspace_open used by cached ChatGPT tool recipients."""
+        return await workspace_open(session_id=session_id, machine=machine, cwd=cwd)
 
     @mcp.tool(
         structured_output=True,
@@ -3567,6 +3492,6 @@ def build_mcp() -> FastMCP:
     _remove_remote_tools_when_disabled(mcp)
     _remove_local_only_tools_when_disabled(mcp)
     _install_tool_annotations(mcp)
-    _install_session_run_arguments(mcp)
+    _install_logical_session_arguments(mcp)
     _install_mcp_tool_watchdogs(mcp)
     return mcp

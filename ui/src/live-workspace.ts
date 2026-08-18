@@ -85,7 +85,6 @@ type LogicalSessionState = {
   label?: string | null
   objective?: string | null
   status: string
-  active_run?: { run_id?: string; status?: string } | null
   progress?: {
     summary?: string | null
     findings?: string[]
@@ -1640,7 +1639,7 @@ async function checkPlanContinuation(): Promise<void> {
       continuationDispatch = dispatch
       const dispatchWatcher = watchContinuationDispatch(dispatch)
       const resumeInstruction = !isDshHost && sessionId
-        ? `First call session_manage(action="resume", session_id="${sessionId}", takeover=true) so this agent run inherits the durable task context. `
+        ? `First call session_manage(action="resume", session_id="${sessionId}") to continue this durable task context. `
         : ""
       try {
         const response = await sendHostMessage({
