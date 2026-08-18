@@ -84,6 +84,26 @@ describe("live workspace utilities", () => {
     expect(css).toContain(".timeline-purpose { color: var(--ls-text-2); font-family: var(--ls-font); font-weight: 500; }")
   })
 
+  test("workspace tabs distinguish initial loading from confirmed empty states", async () => {
+    const source = await Bun.file(new URL("./live-workspace.ts", import.meta.url)).text()
+    const css = await Bun.file(new URL("./live-workspace.css", import.meta.url)).text()
+    expect(source).toContain('let activityLoaded = false')
+    expect(source).toContain('let terminalsLoaded = false')
+    expect(source).toContain('let filesLoaded = false')
+    expect(source).toContain('let auditLoaded = false')
+    expect(source).toContain('Loading activity…')
+    expect(source).toContain('Loading terminals…')
+    expect(source).toContain('Loading files…')
+    expect(source).toContain('Loading jobs and sessions…')
+    expect(source).toContain('Loading remote machines…')
+    expect(source).toContain('Loading audit stream…')
+    expect(source).toContain('filesLoaded = true')
+    expect(source).toContain('terminalsLoaded = true')
+    expect(source).toContain('activityLoaded = true')
+    expect(source).toContain('auditLoaded = true')
+    expect(css).toContain('.loading.view-loading { flex: 1 1 auto; min-height: 0; }')
+  })
+
   test("remote machine cards keep their intrinsic height inside the full-height grid", async () => {
     const styles = await Bun.file(new URL("./live-workspace.css", import.meta.url)).text()
     const remoteGridRule = styles.match(/\.remote-grid\s*\{([^}]*)\}/)?.[1] ?? ""

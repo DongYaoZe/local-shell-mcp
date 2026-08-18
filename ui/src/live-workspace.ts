@@ -159,6 +159,7 @@ let passiveRefreshing = false
 let coreRefreshQueued = false
 let plan: PlanState | null = null
 let logicalSession: LogicalSessionState | null = null
+let activityLoaded = false
 let continuationChecking = false
 let continuationClaimId = ""
 type ContinuationDispatch = {
@@ -193,6 +194,7 @@ let terminalResizeObserver: ResizeObserver | null = null
 let terminalMachine = "local"
 let terminalSessions: TerminalSession[] = []
 let selectedSession = ""
+let terminalsLoaded = false
 
 let fileMachine = "local"
 let filePath = "."
@@ -202,9 +204,11 @@ let filePreview: JsonRecord | null = null
 let fileEditing = false
 let fileEditContent = ""
 let fileEditSha = ""
+let filesLoaded = false
 
 let workloadMachine = "local"
 let auditEntries: JsonRecord[] = []
+let auditLoaded = false
 let remoteSnapshot: JsonRecord | null = null
 
 function icon(name: string): string {
@@ -518,7 +522,11 @@ async function handleAction(action: string, target: HTMLElement): Promise<void> 
     else if (action === "terminal-copy") await copyTerminal()
     else if (action === "terminal-ctrl-c") sendTerminal("\u0003")
     else if (action === "terminal-reconnect") connectTerminal()
-    else if (action === "file-up") { filePath = parentPath(filePath); selectedFile = ""; await refreshFiles() }
+    else if (action === "file-up") {
+      resetFileTarget(fileMachine, parentPath(filePath))
+      if (activeTab === "files") renderFiles()
+      await refreshFiles()
+    }
     else if (action === "file-new") await createFile(false)
     else if (action === "file-new-dir") await createFile(true)
     else if (action === "file-delete") await deleteSelectedFile()
@@ -657,6 +665,10 @@ function planProgress(): { completed: number; total: number; percent: number; ac
 }
 
 function renderActivity(): void {
+  if (!activityLoaded) {
+    mainNode().innerHTML = '<section class="view activity-view task-monitor-view"><div class="loading view-loading"><span></span>Loading activity…</div></section>'
+    return
+  }
   const previousTimeline = qs<HTMLElement>(".session-timeline")
   const timelineScrollState = previousTimeline
     ? captureReverseFeedScrollState(previousTimeline.scrollTop, previousTimeline.scrollHeight, previousTimeline.clientHeight)
@@ -915,6 +927,10 @@ async function askAboutActivity(eventKey: string, callId: string): Promise<void>
 }
 
 function renderTerminal(): void {
+  if (!terminalsLoaded) {
+    mainNode().innerHTML = '<section class="view terminal-view"><div class="loading view-loading"><span></span>Loading terminals…</div></section>'
+    return
+  }
   const session = terminalSessions.find((item) => item.session_id === selectedSession)
   mainNode().innerHTML = `
     <section class="view terminal-view">
@@ -938,8 +954,8 @@ function wireTerminalControls(): void {
   const machineSelect = qs<HTMLSelectElement>("[data-role=terminal-machine]")
   const sessionSelect = qs<HTMLSelectElement>("[data-role=terminal-session]")
   machineSelect?.addEventListener("change", () => {
-    terminalMachine = machineSelect.value
-    selectedSession = ""
+    resetTerminalTarget(machineSelect.value)
+    if (activeTab === "terminal") renderTerminal()
     void refreshTerminals()
   })
   sessionSelect?.addEventListener("change", () => {
@@ -1053,6 +1069,7 @@ async function refreshTerminals(): Promise<void> {
   const payload = await api<{ machine: string; sessions: TerminalSession[] }>(`/api/ui/terminals?machine=${encodeURIComponent(requestMachine)}`)
   if (terminalMachine !== requestMachine) return
   terminalSessions = payload.sessions || []
+  terminalsLoaded = true
   if (!terminalSessions.some((item) => item.session_id === selectedSession)) selectedSession = terminalSessions[0]?.session_id || ""
   if (activeTab === "terminal") renderTerminal()
 }
@@ -1086,6 +1103,10 @@ async function copyTerminal(): Promise<void> {
 }
 
 function renderFiles(): void {
+  if (!filesLoaded) {
+    mainNode().innerHTML = '<section class="view files-view"><div class="loading view-loading"><span></span>Loading files…</div></section>'
+    return
+  }
   const selected = fileEntries.find((entry) => entry.path === selectedFile)
   mainNode().innerHTML = `
     <section class="view files-view">
@@ -1134,13 +1155,26 @@ function drawFileImage(): void {
 function wireFileControls(): void {
   const machine = qs<HTMLSelectElement>("[data-role=file-machine]")
   const path = qs<HTMLInputElement>("[data-role=file-path]")
-  machine?.addEventListener("change", () => { fileMachine = machine.value; filePath = "."; selectedFile = ""; void refreshFiles() })
-  path?.addEventListener("keydown", (event) => { if (event.key === "Enter") { filePath = path.value || "."; selectedFile = ""; void refreshFiles() } })
+  machine?.addEventListener("change", () => {
+    resetFileTarget(machine.value, ".")
+    if (activeTab === "files") renderFiles()
+    void refreshFiles()
+  })
+  path?.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter") return
+    resetFileTarget(fileMachine, path.value || ".")
+    if (activeTab === "files") renderFiles()
+    void refreshFiles()
+  })
   root.querySelectorAll<HTMLButtonElement>("[data-file]").forEach((row) => {
     row.addEventListener("click", () => void selectFile(row.dataset.file || ""))
     row.addEventListener("dblclick", () => {
       const entry = fileEntries.find((item) => item.path === row.dataset.file)
-      if (entry?.type === "dir") { filePath = entry.path; selectedFile = ""; void refreshFiles() }
+      if (entry?.type === "dir") {
+        resetFileTarget(fileMachine, entry.path)
+        if (activeTab === "files") renderFiles()
+        void refreshFiles()
+      }
     })
   })
 }
@@ -1168,6 +1202,7 @@ async function refreshFiles(): Promise<void> {
   if (fileMachine !== requestMachine || filePath !== requestPath) return
   fileEntries = payload.entries || []
   filePath = payload.path || filePath
+  filesLoaded = true
   if (!fileEntries.some((item) => item.path === selectedFile)) selectedFile = ""
   filePreview = null
   fileEditing = false
@@ -1239,7 +1274,11 @@ async function shareSelectedFile(ask: boolean): Promise<void> {
 }
 
 function renderJobs(): void {
-  const jobs = dashboard?.jobs || []
+  if (!dashboard) {
+    mainNode().innerHTML = '<section class="view jobs-view"><div class="loading view-loading"><span></span>Loading jobs and sessions…</div></section>'
+    return
+  }
+  const jobs = dashboard.jobs || []
   const sessions = dashboard?.sessions || []
   mainNode().innerHTML = `
     <section class="view jobs-view"><div class="view-toolbar"><div><h2>Jobs & sessions</h2><p>Active managed work and persistent shells across the workspace.</p></div><button class="button" data-action="refresh">${icon("refresh")}Refresh</button></div>
@@ -1295,6 +1334,10 @@ function trackActivityDiscoveries(next: Dashboard): void {
 }
 
 function renderRemotes(): void {
+  if (!remoteSnapshot) {
+    mainNode().innerHTML = '<section class="view remotes-view"><div class="loading view-loading"><span></span>Loading remote machines…</div></section>'
+    return
+  }
   const enabled = bootstrap ? Boolean((bootstrap.features as JsonRecord | undefined)?.remote) : true
   const rows = (remoteSnapshot?.machines as Machine[] | undefined) || []
   mainNode().innerHTML = `
@@ -1329,6 +1372,7 @@ function resetFileTarget(machine: string, path: string): void {
   fileMachine = machine
   filePath = path
   fileEntries = []
+  filesLoaded = false
   selectedFile = ""
   filePreview = null
   fileEditing = false
@@ -1339,6 +1383,7 @@ function resetFileTarget(machine: string, path: string): void {
 function resetTerminalTarget(machine: string): void {
   terminalMachine = machine
   terminalSessions = []
+  terminalsLoaded = false
   selectedSession = ""
   terminalSocket?.close()
   terminalSocket = null
@@ -1392,6 +1437,10 @@ async function revokeRemote(machine: string): Promise<void> {
 }
 
 function renderAudit(): void {
+  if (!auditLoaded) {
+    mainNode().innerHTML = '<section class="view audit-view"><div class="loading view-loading"><span></span>Loading audit stream…</div></section>'
+    return
+  }
   mainNode().innerHTML = `
     <section class="view audit-view"><div class="view-toolbar"><div><h2>Audit stream</h2><p>Structured MCP activity retained by local-shell-mcp.</p></div><button class="button" data-action="refresh">${icon("refresh")}Refresh</button></div>
       <div class="panel audit-panel"><div class="panel-head"><strong>Recent entries</strong><span>${auditEntries.length} loaded</span></div><div class="audit-table"><div class="audit-header"><span>Time</span><span>Operation</span><span>Node</span><span>Status</span><span></span></div>${auditEntries.length ? auditEntries.map(auditRow).join("") : '<div class="empty-state">No audit entries.</div>'}</div></div>
@@ -1407,6 +1456,7 @@ function auditRow(entry: JsonRecord): string {
 async function refreshAudit(): Promise<void> {
   const payload = await api<JsonRecord>("/api/ui/audit?limit=150&sort=desc")
   auditEntries = (payload.entries as JsonRecord[] | undefined) || []
+  auditLoaded = true
   if (activeTab === "audit") renderAudit()
 }
 
@@ -1542,6 +1592,7 @@ function mergeEvents(incoming: LiveEvent[]): void {
 
 function resetActivityForChannelBoundary(): void {
   events = []
+  activityLoaded = false
   activityExpandedEventKey = ""
   activityAuditDetails.clear()
   activityDetailRevision += 1
@@ -1561,6 +1612,7 @@ async function loadSnapshot(generation: number): Promise<boolean> {
   applyLogicalSessionId(payload.channel.session_id)
   plan = payload.channel.plan || null
   logicalSession = payload.channel.session || null
+  activityLoaded = true
   activityAuditDetails.clear()
   activityDetailRevision += 1
   events = payload.events || []

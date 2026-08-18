@@ -119,6 +119,7 @@ select:hover, input:hover, textarea:hover { border-color: var(--ls-border-strong
 .empty-state { display: grid; place-items: center; min-height: 110px; padding: 20px; color: var(--ls-text-3); font-size: 10.5px; text-align: center; }
 .loading { display: flex; align-items: center; justify-content: center; gap: 9px; min-height: 340px; color: var(--ls-text-3); font-size: 11px; }
 .loading.small { min-height: 110px; }
+.loading.view-loading { flex: 1 1 auto; min-height: 0; }
 .loading span { width: 13px; height: 13px; border: 2px solid var(--ls-border-strong); border-top-color: var(--ls-accent); border-radius: 999px; animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
