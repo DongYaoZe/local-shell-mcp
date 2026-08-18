@@ -94,6 +94,34 @@ def test_webui_logical_sessions_api_is_principal_scoped(tmp_path, monkeypatch):
     assert hidden.status_code == 404
 
 
+def test_webui_logical_session_lifecycle_accepts_preentered_prompt(tmp_path, monkeypatch):
+    _configure(tmp_path, monkeypatch)
+    client = TestClient(build_http_app())
+
+    created = client.post(
+        "/api/ui/logical-sessions/start",
+        json={"label": "Prepared task", "prompt": "Review the next PR and report risks."},
+    )
+    assert created.status_code == 200
+    session = created.json()["data"]
+    session_id = session["session_id"]
+    assert session["objective"] == "Review the next PR and report risks."
+    assert session["recent_activity"][-1]["actor"] == "human"
+
+    cancelled = client.post(
+        "/api/ui/logical-sessions/cancel", json={"session_id": session_id}
+    )
+    assert cancelled.status_code == 200
+    assert cancelled.json()["data"]["status"] == "cancelled"
+    assert cancelled.json()["data"]["recent_activity"][-1]["actor"] == "human"
+
+    deleted = client.post(
+        "/api/ui/logical-sessions/delete", json={"session_id": session_id}
+    )
+    assert deleted.status_code == 200
+    assert deleted.json()["data"] == {"session_id": session_id, "deleted": True}
+
+
 def test_webui_shell_uses_available_viewport_without_fixed_desktop_cap():
     css_path = Path(__file__).parents[1] / "src/local_shell_mcp/ui_static/web.css"
     css = css_path.read_text(encoding="utf-8")

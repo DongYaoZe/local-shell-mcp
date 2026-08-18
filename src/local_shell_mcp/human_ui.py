@@ -325,9 +325,18 @@ def _request_principal(request: Request) -> Principal:
     return principal if isinstance(principal, Principal) else verify_request(request)
 
 
-def _logical_session_subject(request: Request) -> str:
+def _logical_session_subject(request: Request, *, create: bool = False) -> str | None:
     principal = _request_principal(request)
-    return principal.subject or principal.email or "mcp-client"
+    if principal.claims.get("auth") not in {"native-tui", "localhost-bypass"}:
+        return principal.subject or principal.email or "mcp-client"
+    if not create:
+        return None
+    settings = get_settings()
+    if settings.auth_mode == "none":
+        return "anonymous"
+    if settings.auth_mode == "oauth":
+        return "local-user"
+    return "local-mcp-client"
 
 
 def _require_ui_scopes(
@@ -1256,6 +1265,59 @@ async def api_logical_session_detail(request: Request) -> Response:
         return _json_ok(session)
     except (ValueError, PermissionError) as exc:
         return _json_error(exc, status_code=404)
+    except Exception as exc:
+        return _json_error(exc)
+
+
+async def api_logical_session_action(request: Request) -> Response:
+    action = str(request.path_params.get("action") or "").strip().lower()
+    try:
+        _require_ui_scopes(request, "shell:write")
+        if action not in {"start", "finish", "cancel", "delete"}:
+            raise ValueError("Unsupported logical session action")
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise ValueError("JSON object required")
+        manager = get_session_runtime_manager()
+        if action == "start":
+            subject = _logical_session_subject(request, create=True)
+            if not subject:
+                raise PermissionError("Unable to determine logical session principal")
+            result = await asyncio.to_thread(
+                manager.manage,
+                subject,
+                action="start",
+                label=str(body.get("label") or "").strip() or None,
+                objective=str(body.get("prompt") or body.get("objective") or "").strip() or None,
+                actor="human",
+            )
+        else:
+            session_id = str(body.get("session_id") or "").strip()
+            if not session_id:
+                raise ValueError("session_id is required")
+            subject = _logical_session_subject(request)
+            result = await asyncio.to_thread(
+                manager.manage,
+                subject,
+                action=action,
+                session_id=session_id,
+                actor="human",
+            )
+            if action == "delete":
+                get_live_channel_manager().detach_logical_session(session_id)
+            elif action in {"finish", "cancel"}:
+                channel = get_live_channel_manager().active_for_logical_session(
+                    session_id,
+                    subject=subject,
+                )
+                if channel is not None:
+                    get_live_channel_manager().publish_channel(
+                        channel.live_id,
+                        "session.updated",
+                        actor="human",
+                        data={"session_id": session_id, "action": action},
+                    )
+        return _json_ok(result)
     except Exception as exc:
         return _json_error(exc)
 
@@ -2662,6 +2724,7 @@ def ui_routes() -> list[Any]:
         Route(UI_API_PREFIX + "/terminals/{action}", api_terminal_action, methods=["POST"]),
         Route(UI_API_PREFIX + "/logical-sessions", api_logical_sessions, methods=["GET"]),
         Route(UI_API_PREFIX + "/logical-sessions/detail", api_logical_session_detail, methods=["GET"]),
+        Route(UI_API_PREFIX + "/logical-sessions/{action}", api_logical_session_action, methods=["POST"]),
         Route(UI_API_PREFIX + "/audit", api_audit, methods=["GET"]),
         Route(UI_API_PREFIX + "/audit/detail", api_audit_detail, methods=["GET"]),
         Route(UI_API_PREFIX + "/remotes", api_remotes, methods=["GET", "POST"]),

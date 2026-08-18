@@ -8,7 +8,7 @@ import { clampIndex } from "./state-utils"
 import type { Machine, ScreenName } from "./types"
 import { screenTheme, theme } from "./theme"
 
-export const SCREENS: ScreenName[] = ["Dashboard", "Files", "Terminals", "Remotes", "Audit"]
+export const SCREENS: ScreenName[] = ["Dashboard", "Files", "Terminals", "Sessions", "Remotes", "Audit"]
 
 export function TopNav({
   active,

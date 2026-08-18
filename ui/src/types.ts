@@ -1,4 +1,4 @@
-export type ScreenName = "Dashboard" | "Files" | "Terminals" | "Remotes" | "Audit"
+export type ScreenName = "Dashboard" | "Files" | "Terminals" | "Sessions" | "Remotes" | "Audit"
 
 export interface Machine {
   name: string

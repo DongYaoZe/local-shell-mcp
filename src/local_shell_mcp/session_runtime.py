@@ -594,7 +594,7 @@ class SessionRuntimeManager:
 
     def manage(
         self,
-        subject: str,
+        subject: str | None,
         *,
         action: str,
         session_id: str | None = None,
@@ -604,6 +604,7 @@ class SessionRuntimeManager:
         findings: list[str] | None = None,
         next: str | None = None,
         blockers: list[str] | None = None,
+        actor: str = "agent",
         _state_lock_held: bool = False,
     ) -> dict[str, Any]:
         normalized_action = str(action).strip().lower()
@@ -628,14 +629,18 @@ class SessionRuntimeManager:
                             findings=findings,
                             next=next,
                             blockers=blockers,
+                            actor=actor,
                             _state_lock_held=True,
                         )
                 if self._uses_shared_state_backend():
                     self._refresh_all_sessions_locked()
                 now = time.time()
+                normalized_subject = str(subject or "").strip()
+                if not normalized_subject:
+                    raise ValueError("subject is required for action=start")
                 logical = LogicalSession(
                     session_id=self._new_session_id(),
-                    subject=subject,
+                    subject=normalized_subject,
                     created_at=now,
                     updated_at=now,
                     label=self._bounded_text(label),
@@ -646,7 +651,7 @@ class SessionRuntimeManager:
                     self._append_activity_locked(
                         logical,
                         "session.started",
-                        actor="agent",
+                        actor=actor,
                     )
                 except Exception as exc:
                     self._sessions.pop(logical.session_id, None)
@@ -654,7 +659,7 @@ class SessionRuntimeManager:
                         self._state_store().delete(f"sessions/{logical.session_id}.json")
                     raise exc
                 with contextlib.suppress(Exception):
-                    self._prune_session_history_locked(subject)
+                    self._prune_session_history_locked(normalized_subject)
                 return self._public_state_locked(logical)
 
             if not session_id:
@@ -676,6 +681,7 @@ class SessionRuntimeManager:
                         findings=findings,
                         next=next,
                         blockers=blockers,
+                        actor=actor,
                         _state_lock_held=True,
                     )
 
@@ -703,7 +709,7 @@ class SessionRuntimeManager:
                     self._append_activity_locked(
                         logical,
                         "session.resumed",
-                        actor="agent",
+                        actor=actor,
                         touch_plan=True,
                     )
                 except Exception as exc:
@@ -744,7 +750,7 @@ class SessionRuntimeManager:
                     self._append_activity_locked(
                         logical,
                         "session.reported",
-                        actor="agent",
+                        actor=actor,
                         data={
                             "summary": logical.progress.summary,
                             "next": logical.progress.next,
@@ -792,7 +798,7 @@ class SessionRuntimeManager:
                     self._append_activity_locked(
                         logical,
                         "session.completed" if normalized_action == "finish" else "session.cancelled",
-                        actor="agent",
+                        actor=actor,
                     )
                 except Exception as exc:
                     self._restore_snapshot_locked(snapshot, exc, context="Session terminal")
@@ -806,17 +812,19 @@ class SessionRuntimeManager:
             logical = self._require_session_locked(session_id, subject)
             return self._public_state_locked(logical)
 
-    def list_sessions(self, *, subject: str) -> list[dict[str, Any]]:
-        """Return principal-scoped Logical Session summaries, newest first."""
-        normalized_subject = str(subject).strip()
-        if not normalized_subject:
+    def list_sessions(self, *, subject: str | None) -> list[dict[str, Any]]:
+        """Return Logical Session summaries, optionally scoped to one principal."""
+        normalized_subject = str(subject).strip() if subject is not None else None
+        if subject is not None and not normalized_subject:
             raise ValueError("subject is required")
         with self._lock:
             self._ensure_loaded_locked()
             if self._uses_shared_state_backend():
                 self._refresh_all_sessions_locked()
             logical_sessions = [
-                session for session in self._sessions.values() if session.subject == normalized_subject
+                session
+                for session in self._sessions.values()
+                if normalized_subject is None or session.subject == normalized_subject
             ]
             logical_sessions.sort(
                 key=lambda session: (session.updated_at, session.created_at), reverse=True

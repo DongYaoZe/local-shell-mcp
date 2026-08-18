@@ -43,6 +43,11 @@ export const screenTheme = {
     selected: "#352846",
     panel: "#1d1829",
   },
+  Sessions: {
+    accent: theme.yellow,
+    selected: "#44351f",
+    panel: "#261f14",
+  },
   Audit: {
     accent: theme.pink,
     selected: "#46283b",
