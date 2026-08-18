@@ -287,6 +287,39 @@ def test_wallpaper_disabled_returns_no_content(tmp_path, monkeypatch):
     assert response.status_code == 204
 
 
+def test_wallpaper_rejects_invalid_bing_url(tmp_path, monkeypatch):
+    _configure(tmp_path, monkeypatch)
+    monkeypatch.setenv("LOCAL_SHELL_MCP_UI_WALLPAPER", "bing")
+    get_settings.cache_clear()
+
+    class Response:
+        content = b""
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"images": [{"url": "https://invalid.example/wallpaper.jpg"}]}
+
+    class Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def get(self, url, **kwargs):  # noqa: ARG002
+            return Response()
+
+    import httpx
+
+    monkeypatch.setattr(httpx, "AsyncClient", lambda *args, **kwargs: Client())
+
+    response = asyncio.run(ui.ui_wallpaper(_request()))
+
+    assert response.status_code == 204
+
+
 def test_asset_cache_and_wallpaper_branches(tmp_path, monkeypatch):
     _configure(tmp_path, monkeypatch)
     assets = tmp_path / "assets"
