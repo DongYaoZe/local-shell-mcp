@@ -8,6 +8,7 @@ on:
   workflow_dispatch:
 
 permissions:
+  actions: read
   contents: read
 
 concurrency:
@@ -738,8 +739,8 @@ jobs:
         working-directory: npm
         run: npm pack --dry-run
 
-  ci-summary:
-    name: CI / all matrix jobs passed
+  ci-summary-result:
+    name: CI / aggregate evaluation
     runs-on: ubuntu-24.04
     needs:
       - static
@@ -758,29 +759,124 @@ jobs:
       - npm-launcher
     if: always()
     steps:
-      - name: Check aggregate result
+      - name: Evaluate aggregate result
+        id: evaluate
         env:
           NEEDS_JSON: ${{ toJson(needs) }}
         run: |
           python - <<'PY'
           import json
           import os
-          import sys
 
           needs = json.loads(os.environ["NEEDS_JSON"])
           failed = {name: data["result"] for name, data in needs.items() if data["result"] == "failure"}
+          incomplete = {name: data["result"] for name, data in needs.items() if data["result"] != "success"}
+
           if failed:
+              state = "failure"
               print("Failed jobs:")
               for name, result in failed.items():
                   print(f"- {name}: {result}")
-              sys.exit(1)
-
-          incomplete = {name: data["result"] for name, data in needs.items() if data["result"] != "success"}
-          if incomplete:
-              print("CI run did not complete, but no job failed:")
+          elif incomplete:
+              state = "incomplete"
+              print("CI run did not complete:")
               for name, result in incomplete.items():
                   print(f"- {name}: {result}")
-              sys.exit(0)
+          else:
+              state = "success"
+              print("All CI matrix jobs passed.")
 
-          print("All CI matrix jobs passed.")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              print(f"state={state}", file=output)
+          PY
+
+      - name: Mark aggregate success
+        if: steps.evaluate.outputs.state == 'success'
+        run: echo "Aggregate result is success."
+
+      - name: Mark aggregate failure
+        if: steps.evaluate.outputs.state == 'failure'
+        run: echo "Aggregate result is failure."
+
+      - name: Mark aggregate incomplete
+        if: steps.evaluate.outputs.state == 'incomplete'
+        run: echo "Aggregate result is incomplete."
+
+  ci-summary:
+    name: CI / all matrix jobs passed
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Wait for aggregate evaluation
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import sys
+          import time
+          import urllib.request
+
+          repository = os.environ["REPOSITORY"]
+          run_id = os.environ["RUN_ID"]
+          run_attempt = os.environ["RUN_ATTEMPT"]
+          token = os.environ["GH_TOKEN"]
+          target_name = "CI / aggregate evaluation"
+          marker_names = {
+              "Mark aggregate success": "success",
+              "Mark aggregate failure": "failure",
+              "Mark aggregate incomplete": "incomplete",
+          }
+          base_url = (
+              f"https://api.github.com/repos/{repository}/actions/runs/{run_id}"
+              f"/attempts/{run_attempt}/jobs"
+          )
+          headers = {
+              "Accept": "application/vnd.github+json",
+              "Authorization": f"Bearer {token}",
+              "X-GitHub-Api-Version": "2022-11-28",
+          }
+
+          def fetch_jobs():
+              jobs = []
+              page = 1
+              while True:
+                  request = urllib.request.Request(
+                      f"{base_url}?per_page=100&page={page}",
+                      headers=headers,
+                  )
+                  with urllib.request.urlopen(request, timeout=30) as response:
+                      batch = json.load(response)["jobs"]
+                  jobs.extend(batch)
+                  if len(batch) < 100:
+                      return jobs
+                  page += 1
+
+          while True:
+              jobs = fetch_jobs()
+              target = next((job for job in jobs if job["name"] == target_name), None)
+              if target is None or target["status"] != "completed":
+                  print("Waiting for aggregate evaluation to complete...", flush=True)
+                  time.sleep(10)
+                  continue
+
+              steps = {step["name"]: step for step in target.get("steps", [])}
+              state = next(
+                  (
+                      marker_names[name]
+                      for name in marker_names
+                      if steps.get(name, {}).get("conclusion") == "success"
+                  ),
+                  None,
+              )
+              if state == "success":
+                  print("All CI matrix jobs passed.")
+                  sys.exit(0)
+
+              print(f"Aggregate CI state is {state or 'unknown'}; blocking merge.")
+              sys.exit(1)
           PY
