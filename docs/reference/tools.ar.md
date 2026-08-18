@@ -1,4 +1,4 @@
-<!-- i18n-source-sha256: 9e104b7a893f61206aea6ed76b78bb04387fc5349535c46ffafd8f2e4c9ccd3e -->
+<!-- i18n-source-sha256: 784cf8286b0aba665f54b0b14b7467047ff618447663c4b354d92176796c4001 -->
 # مرجع الأدوات
 
 تُبنى هذه الصفحة من MCP tool schemas الفعلية. شغّل `python scripts/generate-tools-reference.py` بعد تغيير public tool surface لتحديث English reference.
@@ -24,13 +24,13 @@
 
 ### `workspace_open`
 
-يفتح أو يعيد استخدام Live Workspace التفاعلي للتعاون الفوري بين الإنسان وagent. استدعه مرة واحدة للمهمة النشطة وأعد استخدام workspace العائم الذي يعيد الاتصال تلقائيًا بدل فتحه مرارًا. استخدمه عندما تحسن terminal output أو files/diffs أو jobs أو remotes أو audit activity سير العمل بوضوح.
+افتح أو أعد استخدام Live Workspace يعرض الـ Logical Session المحددة صراحةً. مرّر session_id النشط الذي أعاده session_manage. لا يستنتج Workspace هوية المهمة من MCP transport؛ مرّر null صراحةً عندما لا توجد Logical Session نشطة.
 
 | المعامل | النوع | مطلوب/default | الوصف |
 |---|---|---|---|
+| `session_id` | `string \| null` | required |  |
 | `machine` | `string \| null` | `null` |  |
 | `cwd` | `string` | `"."` |  |
-| `session_run_id` | `string \| null` | required | قدّم هذا الحقل دائمًا. استخدم `null` عندما لا توجد Session منطقية نشطة؛ بعد start/resume عبر `session_manage` مرّر `active_run.run_id` المعاد واستمر في استخدامه عبر إعادة اتصال MCP transport. بعد resume/takeover صريح استخدم القيمة الجديدة. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -45,7 +45,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | المعامل | النوع | مطلوب/default | الوصف |
 |---|---|---|---|
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | قدّم هذا الحقل دائمًا. استخدم `null` عندما لا توجد Session منطقية نشطة؛ بعد start/resume عبر `session_manage` مرّر `active_run.run_id` المعاد واستمر في استخدامه عبر إعادة اتصال MCP transport. بعد resume/takeover صريح استخدم القيمة الجديدة. |
+| `logical_session_id` | `string \| null` | required | Logical Session لاستدعاء الأداة هذا. مرّر session_id الذي أعاده session_manage أثناء العمل على المهمة. استخدم null فقط عندما لا توجد Logical Session نشطة. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -57,7 +57,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 
 | المعامل | النوع | مطلوب/default | الوصف |
 |---|---|---|---|
-| `session_run_id` | `string \| null` | required | قدّم هذا الحقل دائمًا. استخدم `null` عندما لا توجد Session منطقية نشطة؛ بعد start/resume عبر `session_manage` مرّر `active_run.run_id` المعاد واستمر في استخدامه عبر إعادة اتصال MCP transport. بعد resume/takeover صريح استخدم القيمة الجديدة. |
+| `logical_session_id` | `string \| null` | required | Logical Session لاستدعاء الأداة هذا. مرّر session_id الذي أعاده session_manage أثناء العمل على المهمة. استخدم null فقط عندما لا توجد Logical Session نشطة. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -68,7 +68,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | المعامل | النوع | مطلوب/default | الوصف |
 |---|---|---|---|
 | `name` | `string` | required |  |
-| `session_run_id` | `string \| null` | required | قدّم هذا الحقل دائمًا. استخدم `null` عندما لا توجد Session منطقية نشطة؛ بعد start/resume عبر `session_manage` مرّر `active_run.run_id` المعاد واستمر في استخدامه عبر إعادة اتصال MCP transport. بعد resume/takeover صريح استخدم القيمة الجديدة. |
+| `logical_session_id` | `string \| null` | required | Logical Session لاستدعاء الأداة هذا. مرّر session_id الذي أعاده session_manage أثناء العمل على المهمة. استخدم null فقط عندما لا توجد Logical Session نشطة. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -80,7 +80,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 |---|---|---|---|
 | `name` | `string` | required |  |
 | `path` | `string` | required |  |
-| `session_run_id` | `string \| null` | required | قدّم هذا الحقل دائمًا. استخدم `null` عندما لا توجد Session منطقية نشطة؛ بعد start/resume عبر `session_manage` مرّر `active_run.run_id` المعاد واستمر في استخدامه عبر إعادة اتصال MCP transport. بعد resume/takeover صريح استخدم القيمة الجديدة. |
+| `logical_session_id` | `string \| null` | required | Logical Session لاستدعاء الأداة هذا. مرّر session_id الذي أعاده session_manage أثناء العمل على المهمة. استخدم null فقط عندما لا توجد Logical Session نشطة. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -93,37 +93,35 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `cwd` | `string` | `"."` |  |
 | `glob` | `string \| null` | `null` |  |
 | `max_results` | `integer` | `200` |  |
-| `session_run_id` | `string \| null` | required | قدّم هذا الحقل دائمًا. استخدم `null` عندما لا توجد Session منطقية نشطة؛ بعد start/resume عبر `session_manage` مرّر `active_run.run_id` المعاد واستمر في استخدامه عبر إعادة اتصال MCP transport. بعد resume/takeover صريح استخدم القيمة الجديدة. |
+| `logical_session_id` | `string \| null` | required | Logical Session لاستدعاء الأداة هذا. مرّر session_id الذي أعاده session_manage أثناء العمل على المهمة. استخدم null فقط عندما لا توجد Logical Session نشطة. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
 ### `session_manage`
 
-يدير Session منطقية دائمة للمهمة مستقلة عن machine وcwd. نفّذ start قبل العمل الجوهري بالأدوات، وreport عند checkpoints المهمة، وresume بواسطة `session_id` لتسليم العمل إلى GPT/MCP run جديد. ينشئ `resume(takeover=true)` دائمًا agent run جديدًا ويستبدل القديم. استخدم `active_run.run_id` المعاد كـ `session_run_id` لـ report/finish/cancel والأدوات اللاحقة. الإجراءات: start, resume, get, report, list, finish, cancel, delete.
+أدر Logical Session دائمة واحدة. ينشئ start مهمة جديدة ويعيد session_id الخاص بها. يتابع resume فقط session_id الصريح الذي قدّمه المستخدم أو الموجود بالفعل في هذه المحادثة. تتطلب كل الإجراءات عدا start قيمة session_id. الإجراءات: start, resume, get, report, finish, cancel, delete. يقبل report الحقول summary/findings/next/blockers/objective/label، ويتطلب delete Session نهائية.
 
 | المعامل | النوع | مطلوب/default | الوصف |
 |---|---|---|---|
 | `action` | `string` | required |  |
 | `session_id` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | `null` |  |
 | `label` | `string \| null` | `null` |  |
 | `objective` | `string \| null` | `null` |  |
 | `summary` | `string \| null` | `null` |  |
 | `findings` | `array[string] \| null` | `null` |  |
 | `next` | `string \| null` | `null` |  |
 | `blockers` | `array[string] \| null` | `null` |  |
-| `takeover` | `boolean` | `false` |  |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
 ### `plan_manage`
 
-يدير Goal Plan الاختياري المملوك للـ Session المنطقية الحالية. يتيح Plan النشط continuation تلقائيًا بعد 15 دقيقة بلا نشاط من agent، بحد أقصى 10 محاولات. ابدأ/استأنف Session أولًا عبر `session_manage`؛ يجب أن تستخدم الإجراءات المعدِّلة `active_run.run_id` الخاص بها كـ `session_run_id`. الإجراءات: start, get, update, block, resume, finish, cancel. يتطلب start objective وsteps، ويتطلب finish أن تكون كل steps completed أو skipped.
+أدر Goal mode الاختياري للـ Logical Session المحددة صراحةً. يفعّل plan نشط المتابعة التلقائية بعد 15 دقيقة من دون نشاط agent، بحد أقصى 10 محاولات. يجب أن يكون session_id هو المعرّف الدائم نفسه الذي أعاده session_manage. الإجراءات: start, get, update, block, resume, finish, cancel. يتطلب start objective وsteps، ويتطلب finish أن تكون كل steps completed أو skipped.
 
 | المعامل | النوع | مطلوب/default | الوصف |
 |---|---|---|---|
 | `action` | `string` | required |  |
-| `session_run_id` | `string \| null` | `null` |  |
+| `session_id` | `string` | required |  |
 | `objective` | `string \| null` | `null` |  |
 | `steps` | `array[object] \| null` | `null` |  |
 | `step_id` | `string \| null` | `null` |  |
@@ -140,7 +138,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | المعامل | النوع | مطلوب/default | الوصف |
 |---|---|---|---|
 | `lines` | `integer` | `100` |  |
-| `session_run_id` | `string \| null` | required | قدّم هذا الحقل دائمًا. استخدم `null` عندما لا توجد Session منطقية نشطة؛ بعد start/resume عبر `session_manage` مرّر `active_run.run_id` المعاد واستمر في استخدامه عبر إعادة اتصال MCP transport. بعد resume/takeover صريح استخدم القيمة الجديدة. |
+| `logical_session_id` | `string \| null` | required | Logical Session لاستدعاء الأداة هذا. مرّر session_id الذي أعاده session_manage أثناء العمل على المهمة. استخدم null فقط عندما لا توجد Logical Session نشطة. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -159,7 +157,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | قدّم هذا الحقل دائمًا. استخدم `null` عندما لا توجد Session منطقية نشطة؛ بعد start/resume عبر `session_manage` مرّر `active_run.run_id` المعاد واستمر في استخدامه عبر إعادة اتصال MCP transport. بعد resume/takeover صريح استخدم القيمة الجديدة. |
+| `logical_session_id` | `string \| null` | required | Logical Session لاستدعاء الأداة هذا. مرّر session_id الذي أعاده session_manage أثناء العمل على المهمة. استخدم null فقط عندما لا توجد Logical Session نشطة. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -177,7 +175,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | قدّم هذا الحقل دائمًا. استخدم `null` عندما لا توجد Session منطقية نشطة؛ بعد start/resume عبر `session_manage` مرّر `active_run.run_id` المعاد واستمر في استخدامه عبر إعادة اتصال MCP transport. بعد resume/takeover صريح استخدم القيمة الجديدة. |
+| `logical_session_id` | `string \| null` | required | Logical Session لاستدعاء الأداة هذا. مرّر session_id الذي أعاده session_manage أثناء العمل على المهمة. استخدم null فقط عندما لا توجد Logical Session نشطة. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -195,7 +193,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | قدّم هذا الحقل دائمًا. استخدم `null` عندما لا توجد Session منطقية نشطة؛ بعد start/resume عبر `session_manage` مرّر `active_run.run_id` المعاد واستمر في استخدامه عبر إعادة اتصال MCP transport. بعد resume/takeover صريح استخدم القيمة الجديدة. |
+| `logical_session_id` | `string \| null` | required | Logical Session لاستدعاء الأداة هذا. مرّر session_id الذي أعاده session_manage أثناء العمل على المهمة. استخدم null فقط عندما لا توجد Logical Session نشطة. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -211,7 +209,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `input_text` | `string` | required |  |
 | `enter` | `boolean` | `true` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | قدّم هذا الحقل دائمًا. استخدم `null` عندما لا توجد Session منطقية نشطة؛ بعد start/resume عبر `session_manage` مرّر `active_run.run_id` المعاد واستمر في استخدامه عبر إعادة اتصال MCP transport. بعد resume/takeover صريح استخدم القيمة الجديدة. |
+| `logical_session_id` | `string \| null` | required | Logical Session لاستدعاء الأداة هذا. مرّر session_id الذي أعاده session_manage أثناء العمل على المهمة. استخدم null فقط عندما لا توجد Logical Session نشطة. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -226,7 +224,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `session_id` | `string` | required |  |
 | `lines` | `integer` | `200` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | قدّم هذا الحقل دائمًا. استخدم `null` عندما لا توجد Session منطقية نشطة؛ بعد start/resume عبر `session_manage` مرّر `active_run.run_id` المعاد واستمر في استخدامه عبر إعادة اتصال MCP transport. بعد resume/takeover صريح استخدم القيمة الجديدة. |
+| `logical_session_id` | `string \| null` | required | Logical Session لاستدعاء الأداة هذا. مرّر session_id الذي أعاده session_manage أثناء العمل على المهمة. استخدم null فقط عندما لا توجد Logical Session نشطة. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -240,7 +238,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 |---|---|---|---|
 | `session_id` | `string` | required |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | قدّم هذا الحقل دائمًا. استخدم `null` عندما لا توجد Session منطقية نشطة؛ بعد start/resume عبر `session_manage` مرّر `active_run.run_id` المعاد واستمر في استخدامه عبر إعادة اتصال MCP transport. بعد resume/takeover صريح استخدم القيمة الجديدة. |
+| `logical_session_id` | `string \| null` | required | Logical Session لاستدعاء الأداة هذا. مرّر session_id الذي أعاده session_manage أثناء العمل على المهمة. استخدم null فقط عندما لا توجد Logical Session نشطة. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -253,7 +251,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | المعامل | النوع | مطلوب/default | الوصف |
 |---|---|---|---|
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | قدّم هذا الحقل دائمًا. استخدم `null` عندما لا توجد Session منطقية نشطة؛ بعد start/resume عبر `session_manage` مرّر `active_run.run_id` المعاد واستمر في استخدامه عبر إعادة اتصال MCP transport. بعد resume/takeover صريح استخدم القيمة الجديدة. |
+| `logical_session_id` | `string \| null` | required | Logical Session لاستدعاء الأداة هذا. مرّر session_id الذي أعاده session_manage أثناء العمل على المهمة. استخدم null فقط عندما لا توجد Logical Session نشطة. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -271,7 +269,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | قدّم هذا الحقل دائمًا. استخدم `null` عندما لا توجد Session منطقية نشطة؛ بعد start/resume عبر `session_manage` مرّر `active_run.run_id` المعاد واستمر في استخدامه عبر إعادة اتصال MCP transport. بعد resume/takeover صريح استخدم القيمة الجديدة. |
+| `logical_session_id` | `string \| null` | required | Logical Session لاستدعاء الأداة هذا. مرّر session_id الذي أعاده session_manage أثناء العمل على المهمة. استخدم null فقط عندما لا توجد Logical Session نشطة. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -285,7 +283,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 |---|---|---|---|
 | `include_finished` | `boolean` | `true` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | قدّم هذا الحقل دائمًا. استخدم `null` عندما لا توجد Session منطقية نشطة؛ بعد start/resume عبر `session_manage` مرّر `active_run.run_id` المعاد واستمر في استخدامه عبر إعادة اتصال MCP transport. بعد resume/takeover صريح استخدم القيمة الجديدة. |
+| `logical_session_id` | `string \| null` | required | Logical Session لاستدعاء الأداة هذا. مرّر session_id الذي أعاده session_manage أثناء العمل على المهمة. استخدم null فقط عندما لا توجد Logical Session نشطة. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -300,7 +298,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `job_id` | `string` | required |  |
 | `lines` | `integer` | `200` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | قدّم هذا الحقل دائمًا. استخدم `null` عندما لا توجد Session منطقية نشطة؛ بعد start/resume عبر `session_manage` مرّر `active_run.run_id` المعاد واستمر في استخدامه عبر إعادة اتصال MCP transport. بعد resume/takeover صريح استخدم القيمة الجديدة. |
+| `logical_session_id` | `string \| null` | required | Logical Session لاستدعاء الأداة هذا. مرّر session_id الذي أعاده session_manage أثناء العمل على المهمة. استخدم null فقط عندما لا توجد Logical Session نشطة. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -314,7 +312,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 |---|---|---|---|
 | `job_id` | `string` | required |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | قدّم هذا الحقل دائمًا. استخدم `null` عندما لا توجد Session منطقية نشطة؛ بعد start/resume عبر `session_manage` مرّر `active_run.run_id` المعاد واستمر في استخدامه عبر إعادة اتصال MCP transport. بعد resume/takeover صريح استخدم القيمة الجديدة. |
+| `logical_session_id` | `string \| null` | required | Logical Session لاستدعاء الأداة هذا. مرّر session_id الذي أعاده session_manage أثناء العمل على المهمة. استخدم null فقط عندما لا توجد Logical Session نشطة. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -330,7 +328,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | قدّم هذا الحقل دائمًا. استخدم `null` عندما لا توجد Session منطقية نشطة؛ بعد start/resume عبر `session_manage` مرّر `active_run.run_id` المعاد واستمر في استخدامه عبر إعادة اتصال MCP transport. بعد resume/takeover صريح استخدم القيمة الجديدة. |
+| `logical_session_id` | `string \| null` | required | Logical Session لاستدعاء الأداة هذا. مرّر session_id الذي أعاده session_manage أثناء العمل على المهمة. استخدم null فقط عندما لا توجد Logical Session نشطة. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -348,7 +346,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `recursive` | `boolean` | `false` |  |
 | `max_entries` | `integer` | `500` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | قدّم هذا الحقل دائمًا. استخدم `null` عندما لا توجد Session منطقية نشطة؛ بعد start/resume عبر `session_manage` مرّر `active_run.run_id` المعاد واستمر في استخدامه عبر إعادة اتصال MCP transport. بعد resume/takeover صريح استخدم القيمة الجديدة. |
+| `logical_session_id` | `string \| null` | required | Logical Session لاستدعاء الأداة هذا. مرّر session_id الذي أعاده session_manage أثناء العمل على المهمة. استخدم null فقط عندما لا توجد Logical Session نشطة. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -364,7 +362,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `depth` | `integer` | `3` |  |
 | `max_entries` | `integer` | `500` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | قدّم هذا الحقل دائمًا. استخدم `null` عندما لا توجد Session منطقية نشطة؛ بعد start/resume عبر `session_manage` مرّر `active_run.run_id` المعاد واستمر في استخدامه عبر إعادة اتصال MCP transport. بعد resume/takeover صريح استخدم القيمة الجديدة. |
+| `logical_session_id` | `string \| null` | required | Logical Session لاستدعاء الأداة هذا. مرّر session_id الذي أعاده session_manage أثناء العمل على المهمة. استخدم null فقط عندما لا توجد Logical Session نشطة. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -380,7 +378,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `cwd` | `string` | `"."` |  |
 | `max_results` | `integer` | `500` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | قدّم هذا الحقل دائمًا. استخدم `null` عندما لا توجد Session منطقية نشطة؛ بعد start/resume عبر `session_manage` مرّر `active_run.run_id` المعاد واستمر في استخدامه عبر إعادة اتصال MCP transport. بعد resume/takeover صريح استخدم القيمة الجديدة. |
+| `logical_session_id` | `string \| null` | required | Logical Session لاستدعاء الأداة هذا. مرّر session_id الذي أعاده session_manage أثناء العمل على المهمة. استخدم null فقط عندما لا توجد Logical Session نشطة. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -399,7 +397,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `case_sensitive` | `boolean` | `true` |  |
 | `max_results` | `integer \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | قدّم هذا الحقل دائمًا. استخدم `null` عندما لا توجد Session منطقية نشطة؛ بعد start/resume عبر `session_manage` مرّر `active_run.run_id` المعاد واستمر في استخدامه عبر إعادة اتصال MCP transport. بعد resume/takeover صريح استخدم القيمة الجديدة. |
+| `logical_session_id` | `string \| null` | required | Logical Session لاستدعاء الأداة هذا. مرّر session_id الذي أعاده session_manage أثناء العمل على المهمة. استخدم null فقط عندما لا توجد Logical Session نشطة. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -417,7 +415,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `binary_preview` | `string \| null` | `null` |  |
 | `binary_preview_bytes` | `integer` | `256` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | قدّم هذا الحقل دائمًا. استخدم `null` عندما لا توجد Session منطقية نشطة؛ بعد start/resume عبر `session_manage` مرّر `active_run.run_id` المعاد واستمر في استخدامه عبر إعادة اتصال MCP transport. بعد resume/takeover صريح استخدم القيمة الجديدة. |
+| `logical_session_id` | `string \| null` | required | Logical Session لاستدعاء الأداة هذا. مرّر session_id الذي أعاده session_manage أثناء العمل على المهمة. استخدم null فقط عندما لا توجد Logical Session نشطة. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -431,7 +429,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 |---|---|---|---|
 | `path` | `string` | required |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | قدّم هذا الحقل دائمًا. استخدم `null` عندما لا توجد Session منطقية نشطة؛ بعد start/resume عبر `session_manage` مرّر `active_run.run_id` المعاد واستمر في استخدامه عبر إعادة اتصال MCP transport. بعد resume/takeover صريح استخدم القيمة الجديدة. |
+| `logical_session_id` | `string \| null` | required | Logical Session لاستدعاء الأداة هذا. مرّر session_id الذي أعاده session_manage أثناء العمل على المهمة. استخدم null فقط عندما لا توجد Logical Session نشطة. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -449,7 +447,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | قدّم هذا الحقل دائمًا. استخدم `null` عندما لا توجد Session منطقية نشطة؛ بعد start/resume عبر `session_manage` مرّر `active_run.run_id` المعاد واستمر في استخدامه عبر إعادة اتصال MCP transport. بعد resume/takeover صريح استخدم القيمة الجديدة. |
+| `logical_session_id` | `string \| null` | required | Logical Session لاستدعاء الأداة هذا. مرّر session_id الذي أعاده session_manage أثناء العمل على المهمة. استخدم null فقط عندما لا توجد Logical Session نشطة. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -466,7 +464,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | قدّم هذا الحقل دائمًا. استخدم `null` عندما لا توجد Session منطقية نشطة؛ بعد start/resume عبر `session_manage` مرّر `active_run.run_id` المعاد واستمر في استخدامه عبر إعادة اتصال MCP transport. بعد resume/takeover صريح استخدم القيمة الجديدة. |
+| `logical_session_id` | `string \| null` | required | Logical Session لاستدعاء الأداة هذا. مرّر session_id الذي أعاده session_manage أثناء العمل على المهمة. استخدم null فقط عندما لا توجد Logical Session نشطة. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -483,7 +481,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | قدّم هذا الحقل دائمًا. استخدم `null` عندما لا توجد Session منطقية نشطة؛ بعد start/resume عبر `session_manage` مرّر `active_run.run_id` المعاد واستمر في استخدامه عبر إعادة اتصال MCP transport. بعد resume/takeover صريح استخدم القيمة الجديدة. |
+| `logical_session_id` | `string \| null` | required | Logical Session لاستدعاء الأداة هذا. مرّر session_id الذي أعاده session_manage أثناء العمل على المهمة. استخدم null فقط عندما لا توجد Logical Session نشطة. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -500,7 +498,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | قدّم هذا الحقل دائمًا. استخدم `null` عندما لا توجد Session منطقية نشطة؛ بعد start/resume عبر `session_manage` مرّر `active_run.run_id` المعاد واستمر في استخدامه عبر إعادة اتصال MCP transport. بعد resume/takeover صريح استخدم القيمة الجديدة. |
+| `logical_session_id` | `string \| null` | required | Logical Session لاستدعاء الأداة هذا. مرّر session_id الذي أعاده session_manage أثناء العمل على المهمة. استخدم null فقط عندما لا توجد Logical Session نشطة. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -520,7 +518,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `chunk_size` | `integer \| null` | `null` |  |
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | قدّم هذا الحقل دائمًا. استخدم `null` عندما لا توجد Session منطقية نشطة؛ بعد start/resume عبر `session_manage` مرّر `active_run.run_id` المعاد واستمر في استخدامه عبر إعادة اتصال MCP transport. بعد resume/takeover صريح استخدم القيمة الجديدة. |
+| `logical_session_id` | `string \| null` | required | Logical Session لاستدعاء الأداة هذا. مرّر session_id الذي أعاده session_manage أثناء العمل على المهمة. استخدم null فقط عندما لا توجد Logical Session نشطة. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -537,7 +535,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `filename` | `string \| null` | `null` |  |
 | `max_downloads` | `integer \| null` | `null` |  |
 | `inline` | `boolean` | `false` |  |
-| `session_run_id` | `string \| null` | required | قدّم هذا الحقل دائمًا. استخدم `null` عندما لا توجد Session منطقية نشطة؛ بعد start/resume عبر `session_manage` مرّر `active_run.run_id` المعاد واستمر في استخدامه عبر إعادة اتصال MCP transport. بعد resume/takeover صريح استخدم القيمة الجديدة. |
+| `logical_session_id` | `string \| null` | required | Logical Session لاستدعاء الأداة هذا. مرّر session_id الذي أعاده session_manage أثناء العمل على المهمة. استخدم null فقط عندما لا توجد Logical Session نشطة. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -548,7 +546,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | المعامل | النوع | مطلوب/default | الوصف |
 |---|---|---|---|
 | `include_expired` | `boolean` | `false` |  |
-| `session_run_id` | `string \| null` | required | قدّم هذا الحقل دائمًا. استخدم `null` عندما لا توجد Session منطقية نشطة؛ بعد start/resume عبر `session_manage` مرّر `active_run.run_id` المعاد واستمر في استخدامه عبر إعادة اتصال MCP transport. بعد resume/takeover صريح استخدم القيمة الجديدة. |
+| `logical_session_id` | `string \| null` | required | Logical Session لاستدعاء الأداة هذا. مرّر session_id الذي أعاده session_manage أثناء العمل على المهمة. استخدم null فقط عندما لا توجد Logical Session نشطة. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -559,7 +557,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | المعامل | النوع | مطلوب/default | الوصف |
 |---|---|---|---|
 | `token` | `string` | required |  |
-| `session_run_id` | `string \| null` | required | قدّم هذا الحقل دائمًا. استخدم `null` عندما لا توجد Session منطقية نشطة؛ بعد start/resume عبر `session_manage` مرّر `active_run.run_id` المعاد واستمر في استخدامه عبر إعادة اتصال MCP transport. بعد resume/takeover صريح استخدم القيمة الجديدة. |
+| `logical_session_id` | `string \| null` | required | Logical Session لاستدعاء الأداة هذا. مرّر session_id الذي أعاده session_manage أثناء العمل على المهمة. استخدم null فقط عندما لا توجد Logical Session نشطة. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -585,7 +583,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `refresh` | `boolean` | `true` |  |
 | `key` | `string \| null` | `null` |  |
 | `value` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | قدّم هذا الحقل دائمًا. استخدم `null` عندما لا توجد Session منطقية نشطة؛ بعد start/resume عبر `session_manage` مرّر `active_run.run_id` المعاد واستمر في استخدامه عبر إعادة اتصال MCP transport. بعد resume/takeover صريح استخدم القيمة الجديدة. |
+| `logical_session_id` | `string \| null` | required | Logical Session لاستدعاء الأداة هذا. مرّر session_id الذي أعاده session_manage أثناء العمل على المهمة. استخدم null فقط عندما لا توجد Logical Session نشطة. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -598,7 +596,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `query` | `string` | `""` |  |
 | `server` | `string \| null` | `null` |  |
 | `limit` | `integer` | `20` |  |
-| `session_run_id` | `string \| null` | required | قدّم هذا الحقل دائمًا. استخدم `null` عندما لا توجد Session منطقية نشطة؛ بعد start/resume عبر `session_manage` مرّر `active_run.run_id` المعاد واستمر في استخدامه عبر إعادة اتصال MCP transport. بعد resume/takeover صريح استخدم القيمة الجديدة. |
+| `logical_session_id` | `string \| null` | required | Logical Session لاستدعاء الأداة هذا. مرّر session_id الذي أعاده session_manage أثناء العمل على المهمة. استخدم null فقط عندما لا توجد Logical Session نشطة. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -609,7 +607,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | المعامل | النوع | مطلوب/default | الوصف |
 |---|---|---|---|
 | `name` | `string` | required |  |
-| `session_run_id` | `string \| null` | required | قدّم هذا الحقل دائمًا. استخدم `null` عندما لا توجد Session منطقية نشطة؛ بعد start/resume عبر `session_manage` مرّر `active_run.run_id` المعاد واستمر في استخدامه عبر إعادة اتصال MCP transport. بعد resume/takeover صريح استخدم القيمة الجديدة. |
+| `logical_session_id` | `string \| null` | required | Logical Session لاستدعاء الأداة هذا. مرّر session_id الذي أعاده session_manage أثناء العمل على المهمة. استخدم null فقط عندما لا توجد Logical Session نشطة. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -622,7 +620,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `name` | `string` | required |  |
 | `arguments` | `object \| null` | `null` |  |
 | `timeout_s` | `integer \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | قدّم هذا الحقل دائمًا. استخدم `null` عندما لا توجد Session منطقية نشطة؛ بعد start/resume عبر `session_manage` مرّر `active_run.run_id` المعاد واستمر في استخدامه عبر إعادة اتصال MCP transport. بعد resume/takeover صريح استخدم القيمة الجديدة. |
+| `logical_session_id` | `string \| null` | required | Logical Session لاستدعاء الأداة هذا. مرّر session_id الذي أعاده session_manage أثناء العمل على المهمة. استخدم null فقط عندما لا توجد Logical Session نشطة. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -646,7 +644,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `storage_state_path` | `string \| null` | `null` |  |
 | `save_storage_state_path` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | قدّم هذا الحقل دائمًا. استخدم `null` عندما لا توجد Session منطقية نشطة؛ بعد start/resume عبر `session_manage` مرّر `active_run.run_id` المعاد واستمر في استخدامه عبر إعادة اتصال MCP transport. بعد resume/takeover صريح استخدم القيمة الجديدة. |
+| `logical_session_id` | `string \| null` | required | Logical Session لاستدعاء الأداة هذا. مرّر session_id الذي أعاده session_manage أثناء العمل على المهمة. استخدم null فقط عندما لا توجد Logical Session نشطة. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -666,7 +664,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `max_text_chars` | `integer` | `100000` |  |
 | `max_elements` | `integer` | `100` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | قدّم هذا الحقل دائمًا. استخدم `null` عندما لا توجد Session منطقية نشطة؛ بعد start/resume عبر `session_manage` مرّر `active_run.run_id` المعاد واستمر في استخدامه عبر إعادة اتصال MCP transport. بعد resume/takeover صريح استخدم القيمة الجديدة. |
+| `logical_session_id` | `string \| null` | required | Logical Session لاستدعاء الأداة هذا. مرّر session_id الذي أعاده session_manage أثناء العمل على المهمة. استخدم null فقط عندما لا توجد Logical Session نشطة. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -683,7 +681,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `page_id` | `string \| null` | `null` |  |
 | `timeout_ms` | `integer` | `30000` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | قدّم هذا الحقل دائمًا. استخدم `null` عندما لا توجد Session منطقية نشطة؛ بعد start/resume عبر `session_manage` مرّر `active_run.run_id` المعاد واستمر في استخدامه عبر إعادة اتصال MCP transport. بعد resume/takeover صريح استخدم القيمة الجديدة. |
+| `logical_session_id` | `string \| null` | required | Logical Session لاستدعاء الأداة هذا. مرّر session_id الذي أعاده session_manage أثناء العمل على المهمة. استخدم null فقط عندما لا توجد Logical Session نشطة. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -699,7 +697,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `cwd` | `string` | `"."` |  |
 | `timeout_s` | `integer` | `60` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | قدّم هذا الحقل دائمًا. استخدم `null` عندما لا توجد Session منطقية نشطة؛ بعد start/resume عبر `session_manage` مرّر `active_run.run_id` المعاد واستمر في استخدامه عبر إعادة اتصال MCP transport. بعد resume/takeover صريح استخدم القيمة الجديدة. |
+| `logical_session_id` | `string \| null` | required | Logical Session لاستدعاء الأداة هذا. مرّر session_id الذي أعاده session_manage أثناء العمل على المهمة. استخدم null فقط عندما لا توجد Logical Session نشطة. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -719,7 +717,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `ttl_s` | `integer \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
 | `new_name` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | قدّم هذا الحقل دائمًا. استخدم `null` عندما لا توجد Session منطقية نشطة؛ بعد start/resume عبر `session_manage` مرّر `active_run.run_id` المعاد واستمر في استخدامه عبر إعادة اتصال MCP transport. بعد resume/takeover صريح استخدم القيمة الجديدة. |
+| `logical_session_id` | `string \| null` | required | Logical Session لاستدعاء الأداة هذا. مرّر session_id الذي أعاده session_manage أثناء العمل على المهمة. استخدم null فقط عندما لا توجد Logical Session نشطة. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 

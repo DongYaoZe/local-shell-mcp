@@ -1,4 +1,4 @@
-<!-- i18n-source-sha256: 9e104b7a893f61206aea6ed76b78bb04387fc5349535c46ffafd8f2e4c9ccd3e -->
+<!-- i18n-source-sha256: 784cf8286b0aba665f54b0b14b7467047ff618447663c4b354d92176796c4001 -->
 # Referencia de herramientas
 
 Esta página se construye a partir de los schemas reales de las tools MCP. Ejecute `python scripts/generate-tools-reference.py` después de cambiar la superficie pública de tools para actualizar la referencia English.
@@ -24,13 +24,13 @@ La mayoría de las herramientas devuelve un `ToolResult` estructurado con `ok`, 
 
 ### `workspace_open`
 
-Abre o reutiliza el Live Workspace interactivo para colaboración humano/agent en tiempo real. Llámelo una sola vez para una tarea activa y reutilice el workspace flotante con reconexión automática en lugar de abrirlo repetidamente. Úselo cuando terminal output, files/diffs, jobs, remotes o audit activity mejoren materialmente el workflow.
+Abre o reutiliza un Live Workspace que muestra la Logical Session indicada explícitamente. Pasa el session_id activo devuelto por session_manage. El Workspace nunca infiere la identidad de la tarea a partir del transporte MCP; pasa null de forma explícita cuando no haya una Logical Session activa.
 
 | Parámetro | Tipo | Requerido/default | Descripción |
 |---|---|---|---|
+| `session_id` | `string \| null` | required |  |
 | `machine` | `string \| null` | `null` |  |
 | `cwd` | `string` | `"."` |  |
-| `session_run_id` | `string \| null` | required | Proporcione siempre este campo. Use `null` cuando no haya una Session lógica activa; tras start/resume de `session_manage`, pase el `active_run.run_id` devuelto y siga usándolo durante reconexiones del transporte MCP. Tras un resume/takeover explícito, use el nuevo valor. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -45,7 +45,7 @@ Devuelve versión, workspace, auth, policy e información de entorno localmente 
 | Parámetro | Tipo | Requerido/default | Descripción |
 |---|---|---|---|
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Proporcione siempre este campo. Use `null` cuando no haya una Session lógica activa; tras start/resume de `session_manage`, pase el `active_run.run_id` devuelto y siga usándolo durante reconexiones del transporte MCP. Tras un resume/takeover explícito, use el nuevo valor. |
+| `logical_session_id` | `string \| null` | required | Logical Session para esta llamada de herramienta. Mientras trabajes en la tarea, pasa el session_id devuelto por session_manage. Usa null solo cuando no haya una Logical Session activa. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -57,7 +57,7 @@ Lista Agent Skills instaladas sin cargar sus instructions. La superficie MCP de 
 
 | Parámetro | Tipo | Requerido/default | Descripción |
 |---|---|---|---|
-| `session_run_id` | `string \| null` | required | Proporcione siempre este campo. Use `null` cuando no haya una Session lógica activa; tras start/resume de `session_manage`, pase el `active_run.run_id` devuelto y siga usándolo durante reconexiones del transporte MCP. Tras un resume/takeover explícito, use el nuevo valor. |
+| `logical_session_id` | `string \| null` | required | Logical Session para esta llamada de herramienta. Mientras trabajes en la tarea, pasa el session_id devuelto por session_manage. Usa null solo cuando no haya una Logical Session activa. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -68,7 +68,7 @@ Carga una Skill instalada por el nombre exacto devuelto por `skill_list`. Devuel
 | Parámetro | Tipo | Requerido/default | Descripción |
 |---|---|---|---|
 | `name` | `string` | required |  |
-| `session_run_id` | `string \| null` | required | Proporcione siempre este campo. Use `null` cuando no haya una Session lógica activa; tras start/resume de `session_manage`, pase el `active_run.run_id` devuelto y siga usándolo durante reconexiones del transporte MCP. Tras un resume/takeover explícito, use el nuevo valor. |
+| `logical_session_id` | `string \| null` | required | Logical Session para esta llamada de herramienta. Mientras trabajes en la tarea, pasa el session_id devuelto por session_manage. Usa null solo cuando no haya una Logical Session activa. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -80,7 +80,7 @@ Lee un archivo de texto relacionado de una Skill instalada.
 |---|---|---|---|
 | `name` | `string` | required |  |
 | `path` | `string` | required |  |
-| `session_run_id` | `string \| null` | required | Proporcione siempre este campo. Use `null` cuando no haya una Session lógica activa; tras start/resume de `session_manage`, pase el `active_run.run_id` devuelto y siga usándolo durante reconexiones del transporte MCP. Tras un resume/takeover explícito, use el nuevo valor. |
+| `logical_session_id` | `string \| null` | required | Logical Session para esta llamada de herramienta. Mientras trabajes en la tarea, pasa el session_id devuelto por session_manage. Usa null solo cuando no haya una Logical Session activa. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -93,37 +93,35 @@ Escanea archivos de texto del workspace local en busca de secrets comunes antes 
 | `cwd` | `string` | `"."` |  |
 | `glob` | `string \| null` | `null` |  |
 | `max_results` | `integer` | `200` |  |
-| `session_run_id` | `string \| null` | required | Proporcione siempre este campo. Use `null` cuando no haya una Session lógica activa; tras start/resume de `session_manage`, pase el `active_run.run_id` devuelto y siga usándolo durante reconexiones del transporte MCP. Tras un resume/takeover explícito, use el nuevo valor. |
+| `logical_session_id` | `string \| null` | required | Logical Session para esta llamada de herramienta. Mientras trabajes en la tarea, pasa el session_id devuelto por session_manage. Usa null solo cuando no haya una Logical Session activa. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
 ### `session_manage`
 
-Gestiona una Session lógica de tarea durable, independiente de machine y cwd. Haga start antes de trabajo sustantivo con herramientas, report en checkpoints significativos y resume por `session_id` para transferir el trabajo a un nuevo run GPT/MCP. `resume(takeover=true)` siempre crea un nuevo agent run y reemplaza al anterior. Use el `active_run.run_id` devuelto como `session_run_id` para report/finish/cancel y herramientas posteriores. Acciones: start, resume, get, report, list, finish, cancel, delete.
+Gestiona una única Logical Session persistente. start crea una tarea nueva y devuelve su session_id. resume continúa únicamente el session_id explícito proporcionado por el usuario o ya presente en esta conversación. Todas las acciones salvo start requieren session_id. Acciones: start, resume, get, report, finish, cancel, delete. report acepta summary/findings/next/blockers/objective/label; delete requiere una Session terminal.
 
 | Parámetro | Tipo | Requerido/default | Descripción |
 |---|---|---|---|
 | `action` | `string` | required |  |
 | `session_id` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | `null` |  |
 | `label` | `string \| null` | `null` |  |
 | `objective` | `string \| null` | `null` |  |
 | `summary` | `string \| null` | `null` |  |
 | `findings` | `array[string] \| null` | `null` |  |
 | `next` | `string \| null` | `null` |  |
 | `blockers` | `array[string] \| null` | `null` |  |
-| `takeover` | `boolean` | `false` |  |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
 ### `plan_manage`
 
-Gestiona el Goal Plan opcional propiedad de la Session lógica actual. Un Plan activo habilita continuación automática tras 15 minutos sin actividad del agente, limitada a 10 intentos. Primero haga start/resume de la Session con `session_manage`; las acciones mutantes deben usar su `active_run.run_id` como `session_run_id`. Acciones: start, get, update, block, resume, finish, cancel. start requiere objective y steps; finish exige que todos los steps estén completed o skipped.
+Gestiona el Goal mode opcional de la Logical Session explícita. Un plan activo habilita la continuación automática tras 15 minutos sin actividad del agente, con un máximo de 10 intentos. session_id debe ser el mismo identificador persistente devuelto por session_manage. Acciones: start, get, update, block, resume, finish, cancel. start requiere objective y steps; finish exige que todos los steps estén completed o skipped.
 
 | Parámetro | Tipo | Requerido/default | Descripción |
 |---|---|---|---|
 | `action` | `string` | required |  |
-| `session_run_id` | `string \| null` | `null` |  |
+| `session_id` | `string` | required |  |
 | `objective` | `string \| null` | `null` |  |
 | `steps` | `array[object] \| null` | `null` |  |
 | `step_id` | `string \| null` | `null` |  |
@@ -140,7 +138,7 @@ Lee entradas recientes del audit log local.
 | Parámetro | Tipo | Requerido/default | Descripción |
 |---|---|---|---|
 | `lines` | `integer` | `100` |  |
-| `session_run_id` | `string \| null` | required | Proporcione siempre este campo. Use `null` cuando no haya una Session lógica activa; tras start/resume de `session_manage`, pase el `active_run.run_id` devuelto y siga usándolo durante reconexiones del transporte MCP. Tras un resume/takeover explícito, use el nuevo valor. |
+| `logical_session_id` | `string \| null` | required | Logical Session para esta llamada de herramienta. Mientras trabajes en la tarea, pasa el session_id devuelto por session_manage. Usa null solo cuando no haya una Logical Session activa. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -159,7 +157,7 @@ Ejecuta un comando shell no interactivo localmente o en una máquina remota. Ús
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Proporcione siempre este campo. Use `null` cuando no haya una Session lógica activa; tras start/resume de `session_manage`, pase el `active_run.run_id` devuelto y siga usándolo durante reconexiones del transporte MCP. Tras un resume/takeover explícito, use el nuevo valor. |
+| `logical_session_id` | `string \| null` | required | Logical Session para esta llamada de herramienta. Mientras trabajes en la tarea, pasa el session_id devuelto por session_manage. Usa null solo cuando no haya una Logical Session activa. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -177,7 +175,7 @@ Escribe y ejecuta un script Python corto localmente o en una máquina remota.
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Proporcione siempre este campo. Use `null` cuando no haya una Session lógica activa; tras start/resume de `session_manage`, pase el `active_run.run_id` devuelto y siga usándolo durante reconexiones del transporte MCP. Tras un resume/takeover explícito, use el nuevo valor. |
+| `logical_session_id` | `string \| null` | required | Logical Session para esta llamada de herramienta. Mientras trabajes en la tarea, pasa el session_id devuelto por session_manage. Usa null solo cuando no haya una Logical Session activa. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -195,7 +193,7 @@ Inicia una shell interactiva persistente localmente o en una máquina remota.
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Proporcione siempre este campo. Use `null` cuando no haya una Session lógica activa; tras start/resume de `session_manage`, pase el `active_run.run_id` devuelto y siga usándolo durante reconexiones del transporte MCP. Tras un resume/takeover explícito, use el nuevo valor. |
+| `logical_session_id` | `string \| null` | required | Logical Session para esta llamada de herramienta. Mientras trabajes en la tarea, pasa el session_id devuelto por session_manage. Usa null solo cuando no haya una Logical Session activa. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -211,7 +209,7 @@ Envía input a una sesión shell persistente local o remota.
 | `input_text` | `string` | required |  |
 | `enter` | `boolean` | `true` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Proporcione siempre este campo. Use `null` cuando no haya una Session lógica activa; tras start/resume de `session_manage`, pase el `active_run.run_id` devuelto y siga usándolo durante reconexiones del transporte MCP. Tras un resume/takeover explícito, use el nuevo valor. |
+| `logical_session_id` | `string \| null` | required | Logical Session para esta llamada de herramienta. Mientras trabajes en la tarea, pasa el session_id devuelto por session_manage. Usa null solo cuando no haya una Logical Session activa. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -226,7 +224,7 @@ Lee output reciente de una sesión shell persistente local o remota.
 | `session_id` | `string` | required |  |
 | `lines` | `integer` | `200` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Proporcione siempre este campo. Use `null` cuando no haya una Session lógica activa; tras start/resume de `session_manage`, pase el `active_run.run_id` devuelto y siga usándolo durante reconexiones del transporte MCP. Tras un resume/takeover explícito, use el nuevo valor. |
+| `logical_session_id` | `string \| null` | required | Logical Session para esta llamada de herramienta. Mientras trabajes en la tarea, pasa el session_id devuelto por session_manage. Usa null solo cuando no haya una Logical Session activa. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -240,7 +238,7 @@ Termina una sesión shell persistente local o remota.
 |---|---|---|---|
 | `session_id` | `string` | required |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Proporcione siempre este campo. Use `null` cuando no haya una Session lógica activa; tras start/resume de `session_manage`, pase el `active_run.run_id` devuelto y siga usándolo durante reconexiones del transporte MCP. Tras un resume/takeover explícito, use el nuevo valor. |
+| `logical_session_id` | `string \| null` | required | Logical Session para esta llamada de herramienta. Mientras trabajes en la tarea, pasa el session_id devuelto por session_manage. Usa null solo cuando no haya una Logical Session activa. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -253,7 +251,7 @@ Lista sesiones shell persistentes localmente o en una máquina remota.
 | Parámetro | Tipo | Requerido/default | Descripción |
 |---|---|---|---|
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Proporcione siempre este campo. Use `null` cuando no haya una Session lógica activa; tras start/resume de `session_manage`, pase el `active_run.run_id` devuelto y siga usándolo durante reconexiones del transporte MCP. Tras un resume/takeover explícito, use el nuevo valor. |
+| `logical_session_id` | `string \| null` | required | Logical Session para esta llamada de herramienta. Mientras trabajes en la tarea, pasa el session_id devuelto por session_manage. Usa null solo cuando no haya una Logical Session activa. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -271,7 +269,7 @@ Inicia un job largo y trackeado localmente o en una máquina remota.
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Proporcione siempre este campo. Use `null` cuando no haya una Session lógica activa; tras start/resume de `session_manage`, pase el `active_run.run_id` devuelto y siga usándolo durante reconexiones del transporte MCP. Tras un resume/takeover explícito, use el nuevo valor. |
+| `logical_session_id` | `string \| null` | required | Logical Session para esta llamada de herramienta. Mientras trabajes en la tarea, pasa el session_id devuelto por session_manage. Usa null solo cuando no haya una Logical Session activa. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -285,7 +283,7 @@ Lista jobs trackeados localmente o en una máquina remota.
 |---|---|---|---|
 | `include_finished` | `boolean` | `true` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Proporcione siempre este campo. Use `null` cuando no haya una Session lógica activa; tras start/resume de `session_manage`, pase el `active_run.run_id` devuelto y siga usándolo durante reconexiones del transporte MCP. Tras un resume/takeover explícito, use el nuevo valor. |
+| `logical_session_id` | `string \| null` | required | Logical Session para esta llamada de herramienta. Mientras trabajes en la tarea, pasa el session_id devuelto por session_manage. Usa null solo cuando no haya una Logical Session activa. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -300,7 +298,7 @@ Lee output reciente de un job local o remoto trackeado.
 | `job_id` | `string` | required |  |
 | `lines` | `integer` | `200` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Proporcione siempre este campo. Use `null` cuando no haya una Session lógica activa; tras start/resume de `session_manage`, pase el `active_run.run_id` devuelto y siga usándolo durante reconexiones del transporte MCP. Tras un resume/takeover explícito, use el nuevo valor. |
+| `logical_session_id` | `string \| null` | required | Logical Session para esta llamada de herramienta. Mientras trabajes en la tarea, pasa el session_id devuelto por session_manage. Usa null solo cuando no haya una Logical Session activa. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -314,7 +312,7 @@ Detiene un job local o remoto trackeado.
 |---|---|---|---|
 | `job_id` | `string` | required |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Proporcione siempre este campo. Use `null` cuando no haya una Session lógica activa; tras start/resume de `session_manage`, pase el `active_run.run_id` devuelto y siga usándolo durante reconexiones del transporte MCP. Tras un resume/takeover explícito, use el nuevo valor. |
+| `logical_session_id` | `string \| null` | required | Logical Session para esta llamada de herramienta. Mientras trabajes en la tarea, pasa el session_id devuelto por session_manage. Usa null solo cuando no haya una Logical Session activa. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -330,7 +328,7 @@ Reinicia un job local o remoto trackeado que se detuvo o salió.
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Proporcione siempre este campo. Use `null` cuando no haya una Session lógica activa; tras start/resume de `session_manage`, pase el `active_run.run_id` devuelto y siga usándolo durante reconexiones del transporte MCP. Tras un resume/takeover explícito, use el nuevo valor. |
+| `logical_session_id` | `string \| null` | required | Logical Session para esta llamada de herramienta. Mientras trabajes en la tarea, pasa el session_id devuelto por session_manage. Usa null solo cuando no haya una Logical Session activa. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -348,7 +346,7 @@ Lista archivos y directorios localmente o en una máquina remota.
 | `recursive` | `boolean` | `false` |  |
 | `max_entries` | `integer` | `500` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Proporcione siempre este campo. Use `null` cuando no haya una Session lógica activa; tras start/resume de `session_manage`, pase el `active_run.run_id` devuelto y siga usándolo durante reconexiones del transporte MCP. Tras un resume/takeover explícito, use el nuevo valor. |
+| `logical_session_id` | `string \| null` | required | Logical Session para esta llamada de herramienta. Mientras trabajes en la tarea, pasa el session_id devuelto por session_manage. Usa null solo cuando no haya una Logical Session activa. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -364,7 +362,7 @@ Devuelve un árbol de directorios compacto localmente o en una máquina remota.
 | `depth` | `integer` | `3` |  |
 | `max_entries` | `integer` | `500` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Proporcione siempre este campo. Use `null` cuando no haya una Session lógica activa; tras start/resume de `session_manage`, pase el `active_run.run_id` devuelto y siga usándolo durante reconexiones del transporte MCP. Tras un resume/takeover explícito, use el nuevo valor. |
+| `logical_session_id` | `string \| null` | required | Logical Session para esta llamada de herramienta. Mientras trabajes en la tarea, pasa el session_id devuelto por session_manage. Usa null solo cuando no haya una Logical Session activa. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -380,7 +378,7 @@ Encuentra paths por glob localmente o en una máquina remota.
 | `cwd` | `string` | `"."` |  |
 | `max_results` | `integer` | `500` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Proporcione siempre este campo. Use `null` cuando no haya una Session lógica activa; tras start/resume de `session_manage`, pase el `active_run.run_id` devuelto y siga usándolo durante reconexiones del transporte MCP. Tras un resume/takeover explícito, use el nuevo valor. |
+| `logical_session_id` | `string \| null` | required | Logical Session para esta llamada de herramienta. Mientras trabajes en la tarea, pasa el session_id devuelto por session_manage. Usa null solo cuando no haya una Logical Session activa. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -399,7 +397,7 @@ Busca contenido de archivos localmente o en una máquina remota.
 | `case_sensitive` | `boolean` | `true` |  |
 | `max_results` | `integer \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Proporcione siempre este campo. Use `null` cuando no haya una Session lógica activa; tras start/resume de `session_manage`, pase el `active_run.run_id` devuelto y siga usándolo durante reconexiones del transporte MCP. Tras un resume/takeover explícito, use el nuevo valor. |
+| `logical_session_id` | `string \| null` | required | Logical Session para esta llamada de herramienta. Mientras trabajes en la tarea, pasa el session_id devuelto por session_manage. Usa null solo cuando no haya una Logical Session activa. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -417,7 +415,7 @@ Lee un archivo o lista de archivos localmente o en una máquina remota.
 | `binary_preview` | `string \| null` | `null` |  |
 | `binary_preview_bytes` | `integer` | `256` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Proporcione siempre este campo. Use `null` cuando no haya una Session lógica activa; tras start/resume de `session_manage`, pase el `active_run.run_id` devuelto y siga usándolo durante reconexiones del transporte MCP. Tras un resume/takeover explícito, use el nuevo valor. |
+| `logical_session_id` | `string \| null` | required | Logical Session para esta llamada de herramienta. Mientras trabajes en la tarea, pasa el session_id devuelto por session_manage. Usa null solo cuando no haya una Logical Session activa. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -431,7 +429,7 @@ Muestra un archivo PNG, JPEG, GIF o WebP como contenido de imagen MCP nativo loc
 |---|---|---|---|
 | `path` | `string` | required |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Proporcione siempre este campo. Use `null` cuando no haya una Session lógica activa; tras start/resume de `session_manage`, pase el `active_run.run_id` devuelto y siga usándolo durante reconexiones del transporte MCP. Tras un resume/takeover explícito, use el nuevo valor. |
+| `logical_session_id` | `string \| null` | required | Logical Session para esta llamada de herramienta. Mientras trabajes en la tarea, pasa el session_id devuelto por session_manage. Usa null solo cuando no haya una Logical Session activa. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -449,7 +447,7 @@ Escribe un archivo de texto UTF-8 localmente o en una máquina remota.
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Proporcione siempre este campo. Use `null` cuando no haya una Session lógica activa; tras start/resume de `session_manage`, pase el `active_run.run_id` devuelto y siga usándolo durante reconexiones del transporte MCP. Tras un resume/takeover explícito, use el nuevo valor. |
+| `logical_session_id` | `string \| null` | required | Logical Session para esta llamada de herramienta. Mientras trabajes en la tarea, pasa el session_id devuelto por session_manage. Usa null solo cuando no haya una Logical Session activa. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -466,7 +464,7 @@ Aplica uno o más edits de texto exactos a un archivo local o remoto. Cada edit 
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Proporcione siempre este campo. Use `null` cuando no haya una Session lógica activa; tras start/resume de `session_manage`, pase el `active_run.run_id` devuelto y siga usándolo durante reconexiones del transporte MCP. Tras un resume/takeover explícito, use el nuevo valor. |
+| `logical_session_id` | `string \| null` | required | Logical Session para esta llamada de herramienta. Mientras trabajes en la tarea, pasa el session_id devuelto por session_manage. Usa null solo cuando no haya una Logical Session activa. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -483,7 +481,7 @@ Elimina un archivo o directorio local o remoto. `recursive=false` elimina archiv
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Proporcione siempre este campo. Use `null` cuando no haya una Session lógica activa; tras start/resume de `session_manage`, pase el `active_run.run_id` devuelto y siga usándolo durante reconexiones del transporte MCP. Tras un resume/takeover explícito, use el nuevo valor. |
+| `logical_session_id` | `string \| null` | required | Logical Session para esta llamada de herramienta. Mientras trabajes en la tarea, pasa el session_id devuelto por session_manage. Usa null solo cuando no haya una Logical Session activa. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -500,7 +498,7 @@ Comprueba y aplica un unified diff o envelope de file_patch local o remotamente.
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Proporcione siempre este campo. Use `null` cuando no haya una Session lógica activa; tras start/resume de `session_manage`, pase el `active_run.run_id` devuelto y siga usándolo durante reconexiones del transporte MCP. Tras un resume/takeover explícito, use el nuevo valor. |
+| `logical_session_id` | `string \| null` | required | Logical Session para esta llamada de herramienta. Mientras trabajes en la tarea, pasa el session_id devuelto por session_manage. Usa null solo cuando no haya una Logical Session activa. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -520,7 +518,7 @@ Inicia un job trackeado que copia un archivo o directorio entre el controller y 
 | `chunk_size` | `integer \| null` | `null` |  |
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Proporcione siempre este campo. Use `null` cuando no haya una Session lógica activa; tras start/resume de `session_manage`, pase el `active_run.run_id` devuelto y siga usándolo durante reconexiones del transporte MCP. Tras un resume/takeover explícito, use el nuevo valor. |
+| `logical_session_id` | `string \| null` | required | Logical Session para esta llamada de herramienta. Mientras trabajes en la tarea, pasa el session_id devuelto por session_manage. Usa null solo cuando no haya una Logical Session activa. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -537,7 +535,7 @@ Crea una URL temporal accesible por browser para un archivo local. Por defecto l
 | `filename` | `string \| null` | `null` |  |
 | `max_downloads` | `integer \| null` | `null` |  |
 | `inline` | `boolean` | `false` |  |
-| `session_run_id` | `string \| null` | required | Proporcione siempre este campo. Use `null` cuando no haya una Session lógica activa; tras start/resume de `session_manage`, pase el `active_run.run_id` devuelto y siga usándolo durante reconexiones del transporte MCP. Tras un resume/takeover explícito, use el nuevo valor. |
+| `logical_session_id` | `string \| null` | required | Logical Session para esta llamada de herramienta. Mientras trabajes en la tarea, pasa el session_id devuelto por session_manage. Usa null solo cuando no haya una Logical Session activa. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -548,7 +546,7 @@ Lista URLs de descarga de archivos locales generadas.
 | Parámetro | Tipo | Requerido/default | Descripción |
 |---|---|---|---|
 | `include_expired` | `boolean` | `false` |  |
-| `session_run_id` | `string \| null` | required | Proporcione siempre este campo. Use `null` cuando no haya una Session lógica activa; tras start/resume de `session_manage`, pase el `active_run.run_id` devuelto y siga usándolo durante reconexiones del transporte MCP. Tras un resume/takeover explícito, use el nuevo valor. |
+| `logical_session_id` | `string \| null` | required | Logical Session para esta llamada de herramienta. Mientras trabajes en la tarea, pasa el session_id devuelto por session_manage. Usa null solo cuando no haya una Logical Session activa. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -559,7 +557,7 @@ Revoca una URL de descarga de archivo local generada.
 | Parámetro | Tipo | Requerido/default | Descripción |
 |---|---|---|---|
 | `token` | `string` | required |  |
-| `session_run_id` | `string \| null` | required | Proporcione siempre este campo. Use `null` cuando no haya una Session lógica activa; tras start/resume de `session_manage`, pase el `active_run.run_id` devuelto y siga usándolo durante reconexiones del transporte MCP. Tras un resume/takeover explícito, use el nuevo valor. |
+| `logical_session_id` | `string \| null` | required | Logical Session para esta llamada de herramienta. Mientras trabajes en la tarea, pasa el session_id devuelto por session_manage. Usa null solo cuando no haya una Logical Session activa. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -585,7 +583,7 @@ Registra, lista, obtiene, habilita, deshabilita, refresca, elimina o actualiza e
 | `refresh` | `boolean` | `true` |  |
 | `key` | `string \| null` | `null` |  |
 | `value` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Proporcione siempre este campo. Use `null` cuando no haya una Session lógica activa; tras start/resume de `session_manage`, pase el `active_run.run_id` devuelto y siga usándolo durante reconexiones del transporte MCP. Tras un resume/takeover explícito, use el nuevo valor. |
+| `logical_session_id` | `string \| null` | required | Logical Session para esta llamada de herramienta. Mientras trabajes en la tarea, pasa el session_id devuelto por session_manage. Usa null solo cuando no haya una Logical Session activa. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -598,7 +596,7 @@ Busca summaries ligeros cacheados de tools de servidores MCP dinámicos habilita
 | `query` | `string` | `""` |  |
 | `server` | `string \| null` | `null` |  |
 | `limit` | `integer` | `20` |  |
-| `session_run_id` | `string \| null` | required | Proporcione siempre este campo. Use `null` cuando no haya una Session lógica activa; tras start/resume de `session_manage`, pase el `active_run.run_id` devuelto y siga usándolo durante reconexiones del transporte MCP. Tras un resume/takeover explícito, use el nuevo valor. |
+| `logical_session_id` | `string \| null` | required | Logical Session para esta llamada de herramienta. Mientras trabajes en la tarea, pasa el session_id devuelto por session_manage. Usa null solo cuando no haya una Logical Session activa. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -609,7 +607,7 @@ Devuelve el schema completo cacheado de una tool MCP dinámica llamada `<server>
 | Parámetro | Tipo | Requerido/default | Descripción |
 |---|---|---|---|
 | `name` | `string` | required |  |
-| `session_run_id` | `string \| null` | required | Proporcione siempre este campo. Use `null` cuando no haya una Session lógica activa; tras start/resume de `session_manage`, pase el `active_run.run_id` devuelto y siga usándolo durante reconexiones del transporte MCP. Tras un resume/takeover explícito, use el nuevo valor. |
+| `logical_session_id` | `string \| null` | required | Logical Session para esta llamada de herramienta. Mientras trabajes en la tarea, pasa el session_id devuelto por session_manage. Usa null solo cuando no haya una Logical Session activa. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -622,7 +620,7 @@ Llama una tool MCP dinámica cacheada llamada `<server>:<tool>`. Descúbrala con
 | `name` | `string` | required |  |
 | `arguments` | `object \| null` | `null` |  |
 | `timeout_s` | `integer \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Proporcione siempre este campo. Use `null` cuando no haya una Session lógica activa; tras start/resume de `session_manage`, pase el `active_run.run_id` devuelto y siga usándolo durante reconexiones del transporte MCP. Tras un resume/takeover explícito, use el nuevo valor. |
+| `logical_session_id` | `string \| null` | required | Logical Session para esta llamada de herramienta. Mientras trabajes en la tarea, pasa el session_id devuelto por session_manage. Usa null solo cuando no haya una Logical Session activa. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -646,7 +644,7 @@ Inicia, lista, cierra o limpia sesiones browser persistentes de alto nivel local
 | `storage_state_path` | `string \| null` | `null` |  |
 | `save_storage_state_path` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Proporcione siempre este campo. Use `null` cuando no haya una Session lógica activa; tras start/resume de `session_manage`, pase el `active_run.run_id` devuelto y siga usándolo durante reconexiones del transporte MCP. Tras un resume/takeover explícito, use el nuevo valor. |
+| `logical_session_id` | `string \| null` | required | Logical Session para esta llamada de herramienta. Mientras trabajes en la tarea, pasa el session_id devuelto por session_manage. Usa null solo cuando no haya una Logical Session activa. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -666,7 +664,7 @@ Captura una página browser persistente: title, URL, texto visible acotado, elem
 | `max_text_chars` | `integer` | `100000` |  |
 | `max_elements` | `integer` | `100` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Proporcione siempre este campo. Use `null` cuando no haya una Session lógica activa; tras start/resume de `session_manage`, pase el `active_run.run_id` devuelto y siga usándolo durante reconexiones del transporte MCP. Tras un resume/takeover explícito, use el nuevo valor. |
+| `logical_session_id` | `string \| null` | required | Logical Session para esta llamada de herramienta. Mientras trabajes en la tarea, pasa el session_id devuelto por session_manage. Usa null solo cuando no haya una Logical Session activa. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -683,7 +681,7 @@ Ejecuta acciones estructuradas en una sesión browser persistente. Soporta navig
 | `page_id` | `string \| null` | `null` |  |
 | `timeout_ms` | `integer` | `30000` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Proporcione siempre este campo. Use `null` cuando no haya una Session lógica activa; tras start/resume de `session_manage`, pase el `active_run.run_id` devuelto y siga usándolo durante reconexiones del transporte MCP. Tras un resume/takeover explícito, use el nuevo valor. |
+| `logical_session_id` | `string \| null` | required | Logical Session para esta llamada de herramienta. Mientras trabajes en la tarea, pasa el session_id devuelto por session_manage. Usa null solo cuando no haya una Logical Session activa. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -699,7 +697,7 @@ Ejecuta un script Python Playwright completo localmente o en una máquina remota
 | `cwd` | `string` | `"."` |  |
 | `timeout_s` | `integer` | `60` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Proporcione siempre este campo. Use `null` cuando no haya una Session lógica activa; tras start/resume de `session_manage`, pase el `active_run.run_id` devuelto y siga usándolo durante reconexiones del transporte MCP. Tras un resume/takeover explícito, use el nuevo valor. |
+| `logical_session_id` | `string \| null` | required | Logical Session para esta llamada de herramienta. Mientras trabajes en la tarea, pasa el session_id devuelto por session_manage. Usa null solo cuando no haya una Logical Session activa. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -719,7 +717,7 @@ Gestiona remote workers con action=invite, list, revoke o rename. invite acepta 
 | `ttl_s` | `integer \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
 | `new_name` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Proporcione siempre este campo. Use `null` cuando no haya una Session lógica activa; tras start/resume de `session_manage`, pase el `active_run.run_id` devuelto y siga usándolo durante reconexiones del transporte MCP. Tras un resume/takeover explícito, use el nuevo valor. |
+| `logical_session_id` | `string \| null` | required | Logical Session para esta llamada de herramienta. Mientras trabajes en la tarea, pasa el session_id devuelto por session_manage. Usa null solo cuando no haya una Logical Session activa. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 

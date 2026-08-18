@@ -17,24 +17,26 @@ local-shell-mcp --mode mcp
 
 ## ChatGPT Live Workspace
 
-When ChatGPT renders MCP Apps, `workspace_open` opens a floating collaborative view for the currently attached logical Session. The Session owns durable task state; the Live Workspace only presents live activity and human controls. Reconnecting the app or changing ChatGPT/MCP transport therefore does not reset the Session.
+When ChatGPT renders MCP Apps, `workspace_open(session_id=...)` opens a floating collaborative view of the explicitly selected Logical Session. The Session owns the durable task state—objective, progress, Plan, and Activity—while Live Workspace only presents that state, live activity, and human controls. It never infers task identity from the MCP transport.
 
-A typical handoff is:
+A typical explicit handoff is:
 
 ```text
 session_manage(action="start", objective=...)
         -> session_id
-... tool work + session_manage(action="report", ...) ...
-new agent run
-session_manage(action="resume", session_id=..., takeover=true)
-        -> inherited progress, Plan, and recent activity
-workspace_open()
-        -> reconnectable view of that Session
+... tool work with logical_session_id=session_id
+... session_manage(action="report", session_id=...) ...
+new ChatGPT conversation
+user passes the previous session_id
+session_manage(action="resume", session_id=...)
+        -> existing progress, Plan, and recent Activity
+workspace_open(session_id=...)
+        -> view of that same Session
 ```
 
-`takeover=true` supersedes a still-active older agent run. Any later tool call from the superseded run is rejected until that agent explicitly resumes the Session again. Sessions do not bind a machine or working directory; normal tool parameters continue to choose local/remote targets and paths.
+`session_id` is the only durable task identity. An agent must not list, infer, or automatically select a Session from another conversation. To continue work in a new conversation, the user explicitly passes the existing `session_id`. Agents should report the active `session_id` after start/resume, at meaningful progress checkpoints, and before ending a turn so it can be handed off. Sessions do not bind a machine or working directory; normal tool parameters continue to choose local/remote targets and paths.
 
-An optional `plan_manage` Plan enables Goal mode for the Session. If the Plan is active and no agent activity occurs for 15 minutes, an attached Live Workspace can ask ChatGPT to continue. The continuation first resumes the same `session_id` and is limited to 10 continuation attempts (accepted or rejected). Blocked, completed, and cancelled Plan statuses are not auto-continued; an active Plan whose steps are all completed or skipped remains eligible for cleanup continuation so the resumed agent can finish the Plan. Human pause/resume/cancel controls update the Session-owned Plan rather than ephemeral Live Workspace state.
+An optional `plan_manage` Plan enables Goal mode for the Session. If the Plan is active and no agent activity occurs for 15 minutes, an attached Live Workspace can ask ChatGPT to continue. The continuation resumes the same explicit `session_id` and is limited to 10 continuation attempts (accepted or rejected). Blocked, completed, and cancelled Plan statuses are not auto-continued; an active Plan whose steps are all completed or skipped remains eligible for cleanup continuation so the resumed agent can finish the Plan. Human pause/resume/cancel controls update the Session-owned Plan rather than ephemeral Live Workspace state.
 
 ## Browser interface
 

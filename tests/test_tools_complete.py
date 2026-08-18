@@ -52,9 +52,7 @@ async def test_disable_local_requires_remote_targets_and_hides_local_only_tools(
     assert explicit_local_result["ok"] is True
     assert manager.calls[-1][0:2] == ("local", "run_shell_tool")
 
-    remote_result = await mcp._tool_manager._tools["run_shell"].fn(
-        command="pwd", machine="node"
-    )
+    remote_result = await mcp._tool_manager._tools["run_shell"].fn(command="pwd", machine="node")
     assert remote_result["ok"] is True
     assert manager.calls[-1][0:2] == ("node", "run_shell_tool")
     assert manager.calls[-1][2]["command"] == "pwd"
@@ -172,8 +170,12 @@ async def test_all_public_tool_wrappers_local_and_remote(tmp_path, monkeypatch):
         return {"matches": []}
 
     monkeypatch.setattr(tools, "grep", fake_grep)
-    monkeypatch.setattr(tools, "run_shell", lambda *args, **kwargs: asyncio.sleep(0, result=_result()))
-    monkeypatch.setattr(tools, "public_run_shell", lambda *args, **kwargs: asyncio.sleep(0, result=_result()))
+    monkeypatch.setattr(
+        tools, "run_shell", lambda *args, **kwargs: asyncio.sleep(0, result=_result())
+    )
+    monkeypatch.setattr(
+        tools, "public_run_shell", lambda *args, **kwargs: asyncio.sleep(0, result=_result())
+    )
     for name in (
         "_run_python",
         "start_shell",
@@ -213,9 +215,9 @@ async def test_all_public_tool_wrappers_local_and_remote(tmp_path, monkeypatch):
 
     mcp = tools.build_mcp()
     local_cases = {
-        "workspace_open": {},
+        "workspace_open": {"session_id": None},
         "open_live_workspace": {},
-        "live_workspace_reconnect": {},
+        "live_workspace_reconnect": {"live_id": "missing-live-id"},
         "environment_get": {},
         "skill_list": {},
         "skill_load": {"name": "skill"},
@@ -245,10 +247,15 @@ async def test_all_public_tool_wrappers_local_and_remote(tmp_path, monkeypatch):
         "file_edit": {"path": "x", "edits": [], "purpose": "test"},
         "file_delete": {"path": "x", "purpose": "test"},
         "file_patch": {"patch": "diff", "purpose": "test"},
-        "remote_transfer": {"source_path": "a", "destination_path": "b", "destination_machine": "node", "purpose": "test"},
+        "remote_transfer": {
+            "source_path": "a",
+            "destination_path": "b",
+            "destination_machine": "node",
+            "purpose": "test",
+        },
         "secret_scan": {},
-        "session_manage": {"action": "list"},
-        "plan_manage": {"action": "get"},
+        "session_manage": {"action": "get", "session_id": "missing"},
+        "plan_manage": {"action": "get", "session_id": "missing"},
         "mcp_manage": {"action": "list"},
         "mcp_tool_search": {},
         "mcp_tool_inspect": {"name": "missing:tool"},
@@ -264,8 +271,6 @@ async def test_all_public_tool_wrappers_local_and_remote(tmp_path, monkeypatch):
     for name, kwargs in local_cases.items():
         result = await _raw_tool(mcp, name)(**kwargs)
         assert result is not None, name
-
-
 
     invite = await _raw_tool(mcp, "remote_manage")(
         action="invite", name="node", workdir="/workspace", ttl_s=120
@@ -475,9 +480,7 @@ def test_tool_helpers_audit_serialization_timeout_and_tail(tmp_path, monkeypatch
     assert _handled_error_data(generic)["status"] == "error"
 
     audit_path = tmp_path / "audit.jsonl"
-    audit_path.write_text(
-        '{"event":"one"}\ninvalid\n{"event":"three"}\n', encoding="utf-8"
-    )
+    audit_path.write_text('{"event":"one"}\ninvalid\n{"event":"three"}\n', encoding="utf-8")
     tail = tools._read_audit_tail_entries(2)
     assert tail["entries"] == [{"raw": "invalid"}, {"event": "three"}]
     assert tail["bytes_read"] > 0

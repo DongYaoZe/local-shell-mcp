@@ -1,4 +1,4 @@
-<!-- i18n-source-sha256: 9e104b7a893f61206aea6ed76b78bb04387fc5349535c46ffafd8f2e4c9ccd3e -->
+<!-- i18n-source-sha256: 784cf8286b0aba665f54b0b14b7467047ff618447663c4b354d92176796c4001 -->
 # Tools referansı
 
 Bu page gerçek MCP tool schemas üzerinden oluşturulur. Public tool surface değiştiğinde English reference güncellemek için `python scripts/generate-tools-reference.py` çalıştırın.
@@ -24,13 +24,13 @@ Bu page gerçek MCP tool schemas üzerinden oluşturulur. Public tool surface de
 
 ### `workspace_open`
 
-Real-time human/agent collaboration için interactive Live Workspace açar veya reuse eder. Active task için bir kez call edin; tekrar tekrar açmak yerine self-reconnecting floating workspace reuse edin. Terminal output, files/diffs, jobs, remotes veya audit activity workflow’u belirgin şekilde iyileştiriyorsa kullanın.
+Açıkça verilen Logical Sessionı gösteren bir Live Workspace açar veya yeniden kullanır. session_manage tarafından döndürülen etkin session_id değerini iletin. Workspace görev kimliğini MCP transport üzerinden asla çıkarsamaz; etkin Logical Session yoksa null değerini açıkça iletin.
 
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
+| `session_id` | `string \| null` | required |  |
 | `machine` | `string \| null` | `null` |  |
 | `cwd` | `string` | `"."` |  |
-| `session_run_id` | `string \| null` | required | Bu field her zaman sağlanmalıdır. Aktif logical Session yoksa `null` kullanın; `session_manage` start/resume sonrasında dönen `active_run.run_id` değerini verin ve MCP transport reconnect’leri boyunca kullanmayı sürdürün. Açık resume/takeover sonrasında yeni değeri kullanın. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -45,7 +45,7 @@ Local veya remote machine için version, workspace, auth, policy ve environment 
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Bu field her zaman sağlanmalıdır. Aktif logical Session yoksa `null` kullanın; `session_manage` start/resume sonrasında dönen `active_run.run_id` değerini verin ve MCP transport reconnect’leri boyunca kullanmayı sürdürün. Açık resume/takeover sonrasında yeni değeri kullanın. |
+| `logical_session_id` | `string \| null` | required | Bu tool çağrısının Logical Sessionı. Görev üzerinde çalışırken session_manage tarafından döndürülen session_id değerini iletin. null yalnızca etkin Logical Session yokken kullanılmalıdır. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -57,7 +57,7 @@ Instructions yüklemeden installed Agent Skills listeler. MCP tool surface sabit
 
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
-| `session_run_id` | `string \| null` | required | Bu field her zaman sağlanmalıdır. Aktif logical Session yoksa `null` kullanın; `session_manage` start/resume sonrasında dönen `active_run.run_id` değerini verin ve MCP transport reconnect’leri boyunca kullanmayı sürdürün. Açık resume/takeover sonrasında yeni değeri kullanın. |
+| `logical_session_id` | `string \| null` | required | Bu tool çağrısının Logical Sessionı. Görev üzerinde çalışırken session_manage tarafından döndürülen session_id değerini iletin. null yalnızca etkin Logical Session yokken kullanılmalıdır. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -68,7 +68,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
 | `name` | `string` | required |  |
-| `session_run_id` | `string \| null` | required | Bu field her zaman sağlanmalıdır. Aktif logical Session yoksa `null` kullanın; `session_manage` start/resume sonrasında dönen `active_run.run_id` değerini verin ve MCP transport reconnect’leri boyunca kullanmayı sürdürün. Açık resume/takeover sonrasında yeni değeri kullanın. |
+| `logical_session_id` | `string \| null` | required | Bu tool çağrısının Logical Sessionı. Görev üzerinde çalışırken session_manage tarafından döndürülen session_id değerini iletin. null yalnızca etkin Logical Session yokken kullanılmalıdır. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -80,7 +80,7 @@ Installed Skill’e ait bir related text file okur.
 |---|---|---|---|
 | `name` | `string` | required |  |
 | `path` | `string` | required |  |
-| `session_run_id` | `string \| null` | required | Bu field her zaman sağlanmalıdır. Aktif logical Session yoksa `null` kullanın; `session_manage` start/resume sonrasında dönen `active_run.run_id` değerini verin ve MCP transport reconnect’leri boyunca kullanmayı sürdürün. Açık resume/takeover sonrasında yeni değeri kullanın. |
+| `logical_session_id` | `string \| null` | required | Bu tool çağrısının Logical Sessionı. Görev üzerinde çalışırken session_manage tarafından döndürülen session_id değerini iletin. null yalnızca etkin Logical Session yokken kullanılmalıdır. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -93,37 +93,35 @@ Commit veya push öncesi local workspace text files içinde common secrets scan 
 | `cwd` | `string` | `"."` |  |
 | `glob` | `string \| null` | `null` |  |
 | `max_results` | `integer` | `200` |  |
-| `session_run_id` | `string \| null` | required | Bu field her zaman sağlanmalıdır. Aktif logical Session yoksa `null` kullanın; `session_manage` start/resume sonrasında dönen `active_run.run_id` değerini verin ve MCP transport reconnect’leri boyunca kullanmayı sürdürün. Açık resume/takeover sonrasında yeni değeri kullanın. |
+| `logical_session_id` | `string \| null` | required | Bu tool çağrısının Logical Sessionı. Görev üzerinde çalışırken session_manage tarafından döndürülen session_id değerini iletin. null yalnızca etkin Logical Session yokken kullanılmalıdır. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
 ### `session_manage`
 
-Machine ve cwd’den bağımsız kalıcı logical task Session yönetir. Önemli tool çalışmasından önce start, anlamlı checkpoint’lerde report, yeni GPT/MCP run’a devretmek için `session_id` ile resume kullanın. `resume(takeover=true)` her zaman yeni agent run oluşturur ve eskisini supersede eder. Dönen `active_run.run_id` değerini report/finish/cancel ve sonraki araçlarda `session_run_id` olarak kullanın. Action: start, resume, get, report, list, finish, cancel, delete.
+Tek bir kalıcı Logical Sessionı yönetir. start yeni bir görev oluşturur ve session_id değerini döndürür. resume yalnızca kullanıcının açıkça verdiği veya bu konuşmada zaten bulunan session_id değerini sürdürür. start dışındaki tüm actionlar session_id gerektirir. Actionlar: start, resume, get, report, finish, cancel, delete. report summary/findings/next/blockers/objective/label kabul eder; delete terminal bir Session gerektirir.
 
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
 | `action` | `string` | required |  |
 | `session_id` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | `null` |  |
 | `label` | `string \| null` | `null` |  |
 | `objective` | `string \| null` | `null` |  |
 | `summary` | `string \| null` | `null` |  |
 | `findings` | `array[string] \| null` | `null` |  |
 | `next` | `string \| null` | `null` |  |
 | `blockers` | `array[string] \| null` | `null` |  |
-| `takeover` | `boolean` | `false` |  |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
 ### `plan_manage`
 
-Mevcut logical Session’a ait optional Goal Plan’ı yönetir. Active Plan, 15 dakika agent activity olmamasından sonra automatic continuation açar ve 10 denemeyle sınırlar. Önce `session_manage` ile Session start/resume edin; state değiştiren action’lar Session’ın `active_run.run_id` değerini `session_run_id` olarak kullanmalıdır. Action: start, get, update, block, resume, finish, cancel. start objective ve steps ister; finish tüm steps completed veya skipped olmasını gerektirir.
+Açık Logical Sessionın isteğe bağlı Goal modeunu yönetir. Etkin plan, agent etkinliği olmadan 15 dakika geçince otomatik continuationı etkinleştirir ve en fazla 10 denemeyle sınırlar. session_id, session_manage tarafından döndürülen aynı kalıcı id olmalıdır. Actionlar: start, get, update, block, resume, finish, cancel. start objective ve steps gerektirir; finish tüm steps değerlerinin completed veya skipped olmasını gerektirir.
 
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
 | `action` | `string` | required |  |
-| `session_run_id` | `string \| null` | `null` |  |
+| `session_id` | `string` | required |  |
 | `objective` | `string \| null` | `null` |  |
 | `steps` | `array[object] \| null` | `null` |  |
 | `step_id` | `string \| null` | `null` |  |
@@ -140,7 +138,7 @@ Recent local audit log entries okur.
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
 | `lines` | `integer` | `100` |  |
-| `session_run_id` | `string \| null` | required | Bu field her zaman sağlanmalıdır. Aktif logical Session yoksa `null` kullanın; `session_manage` start/resume sonrasında dönen `active_run.run_id` değerini verin ve MCP transport reconnect’leri boyunca kullanmayı sürdürün. Açık resume/takeover sonrasında yeni değeri kullanın. |
+| `logical_session_id` | `string \| null` | required | Bu tool çağrısının Logical Sessionı. Görev üzerinde çalışırken session_manage tarafından döndürülen session_id değerini iletin. null yalnızca etkin Logical Session yokken kullanılmalıdır. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -159,7 +157,7 @@ Local veya remote machine üzerinde bir non-interactive shell command çalışt�
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Bu field her zaman sağlanmalıdır. Aktif logical Session yoksa `null` kullanın; `session_manage` start/resume sonrasında dönen `active_run.run_id` değerini verin ve MCP transport reconnect’leri boyunca kullanmayı sürdürün. Açık resume/takeover sonrasında yeni değeri kullanın. |
+| `logical_session_id` | `string \| null` | required | Bu tool çağrısının Logical Sessionı. Görev üzerinde çalışırken session_manage tarafından döndürülen session_id değerini iletin. null yalnızca etkin Logical Session yokken kullanılmalıdır. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -177,7 +175,7 @@ Local veya remote machine üzerinde short Python script yazar ve çalıştırır
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Bu field her zaman sağlanmalıdır. Aktif logical Session yoksa `null` kullanın; `session_manage` start/resume sonrasında dönen `active_run.run_id` değerini verin ve MCP transport reconnect’leri boyunca kullanmayı sürdürün. Açık resume/takeover sonrasında yeni değeri kullanın. |
+| `logical_session_id` | `string \| null` | required | Bu tool çağrısının Logical Sessionı. Görev üzerinde çalışırken session_manage tarafından döndürülen session_id değerini iletin. null yalnızca etkin Logical Session yokken kullanılmalıdır. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -195,7 +193,7 @@ Local veya remote machine üzerinde persistent interactive shell başlatır.
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Bu field her zaman sağlanmalıdır. Aktif logical Session yoksa `null` kullanın; `session_manage` start/resume sonrasında dönen `active_run.run_id` değerini verin ve MCP transport reconnect’leri boyunca kullanmayı sürdürün. Açık resume/takeover sonrasında yeni değeri kullanın. |
+| `logical_session_id` | `string \| null` | required | Bu tool çağrısının Logical Sessionı. Görev üzerinde çalışırken session_manage tarafından döndürülen session_id değerini iletin. null yalnızca etkin Logical Session yokken kullanılmalıdır. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -211,7 +209,7 @@ Persistent local/remote shell session’a input gönderir.
 | `input_text` | `string` | required |  |
 | `enter` | `boolean` | `true` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Bu field her zaman sağlanmalıdır. Aktif logical Session yoksa `null` kullanın; `session_manage` start/resume sonrasında dönen `active_run.run_id` değerini verin ve MCP transport reconnect’leri boyunca kullanmayı sürdürün. Açık resume/takeover sonrasında yeni değeri kullanın. |
+| `logical_session_id` | `string \| null` | required | Bu tool çağrısının Logical Sessionı. Görev üzerinde çalışırken session_manage tarafından döndürülen session_id değerini iletin. null yalnızca etkin Logical Session yokken kullanılmalıdır. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -226,7 +224,7 @@ Persistent local/remote shell session recent output okur.
 | `session_id` | `string` | required |  |
 | `lines` | `integer` | `200` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Bu field her zaman sağlanmalıdır. Aktif logical Session yoksa `null` kullanın; `session_manage` start/resume sonrasında dönen `active_run.run_id` değerini verin ve MCP transport reconnect’leri boyunca kullanmayı sürdürün. Açık resume/takeover sonrasında yeni değeri kullanın. |
+| `logical_session_id` | `string \| null` | required | Bu tool çağrısının Logical Sessionı. Görev üzerinde çalışırken session_manage tarafından döndürülen session_id değerini iletin. null yalnızca etkin Logical Session yokken kullanılmalıdır. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -240,7 +238,7 @@ Persistent local/remote shell session sonlandırır.
 |---|---|---|---|
 | `session_id` | `string` | required |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Bu field her zaman sağlanmalıdır. Aktif logical Session yoksa `null` kullanın; `session_manage` start/resume sonrasında dönen `active_run.run_id` değerini verin ve MCP transport reconnect’leri boyunca kullanmayı sürdürün. Açık resume/takeover sonrasında yeni değeri kullanın. |
+| `logical_session_id` | `string \| null` | required | Bu tool çağrısının Logical Sessionı. Görev üzerinde çalışırken session_manage tarafından döndürülen session_id değerini iletin. null yalnızca etkin Logical Session yokken kullanılmalıdır. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -253,7 +251,7 @@ Local veya remote machine üzerinde persistent shell sessions listeler.
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Bu field her zaman sağlanmalıdır. Aktif logical Session yoksa `null` kullanın; `session_manage` start/resume sonrasında dönen `active_run.run_id` değerini verin ve MCP transport reconnect’leri boyunca kullanmayı sürdürün. Açık resume/takeover sonrasında yeni değeri kullanın. |
+| `logical_session_id` | `string \| null` | required | Bu tool çağrısının Logical Sessionı. Görev üzerinde çalışırken session_manage tarafından döndürülen session_id değerini iletin. null yalnızca etkin Logical Session yokken kullanılmalıdır. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -271,7 +269,7 @@ Local veya remote machine üzerinde tracked long-running job başlatır.
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Bu field her zaman sağlanmalıdır. Aktif logical Session yoksa `null` kullanın; `session_manage` start/resume sonrasında dönen `active_run.run_id` değerini verin ve MCP transport reconnect’leri boyunca kullanmayı sürdürün. Açık resume/takeover sonrasında yeni değeri kullanın. |
+| `logical_session_id` | `string \| null` | required | Bu tool çağrısının Logical Sessionı. Görev üzerinde çalışırken session_manage tarafından döndürülen session_id değerini iletin. null yalnızca etkin Logical Session yokken kullanılmalıdır. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -285,7 +283,7 @@ Local veya remote machine üzerinde tracked jobs listeler.
 |---|---|---|---|
 | `include_finished` | `boolean` | `true` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Bu field her zaman sağlanmalıdır. Aktif logical Session yoksa `null` kullanın; `session_manage` start/resume sonrasında dönen `active_run.run_id` değerini verin ve MCP transport reconnect’leri boyunca kullanmayı sürdürün. Açık resume/takeover sonrasında yeni değeri kullanın. |
+| `logical_session_id` | `string \| null` | required | Bu tool çağrısının Logical Sessionı. Görev üzerinde çalışırken session_manage tarafından döndürülen session_id değerini iletin. null yalnızca etkin Logical Session yokken kullanılmalıdır. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -300,7 +298,7 @@ Tracked local/remote job recent output okur.
 | `job_id` | `string` | required |  |
 | `lines` | `integer` | `200` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Bu field her zaman sağlanmalıdır. Aktif logical Session yoksa `null` kullanın; `session_manage` start/resume sonrasında dönen `active_run.run_id` değerini verin ve MCP transport reconnect’leri boyunca kullanmayı sürdürün. Açık resume/takeover sonrasında yeni değeri kullanın. |
+| `logical_session_id` | `string \| null` | required | Bu tool çağrısının Logical Sessionı. Görev üzerinde çalışırken session_manage tarafından döndürülen session_id değerini iletin. null yalnızca etkin Logical Session yokken kullanılmalıdır. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -314,7 +312,7 @@ Tracked local/remote job durdurur.
 |---|---|---|---|
 | `job_id` | `string` | required |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Bu field her zaman sağlanmalıdır. Aktif logical Session yoksa `null` kullanın; `session_manage` start/resume sonrasında dönen `active_run.run_id` değerini verin ve MCP transport reconnect’leri boyunca kullanmayı sürdürün. Açık resume/takeover sonrasında yeni değeri kullanın. |
+| `logical_session_id` | `string \| null` | required | Bu tool çağrısının Logical Sessionı. Görev üzerinde çalışırken session_manage tarafından döndürülen session_id değerini iletin. null yalnızca etkin Logical Session yokken kullanılmalıdır. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -330,7 +328,7 @@ Stopped/exited tracked local/remote job yeniden başlatır.
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Bu field her zaman sağlanmalıdır. Aktif logical Session yoksa `null` kullanın; `session_manage` start/resume sonrasında dönen `active_run.run_id` değerini verin ve MCP transport reconnect’leri boyunca kullanmayı sürdürün. Açık resume/takeover sonrasında yeni değeri kullanın. |
+| `logical_session_id` | `string \| null` | required | Bu tool çağrısının Logical Sessionı. Görev üzerinde çalışırken session_manage tarafından döndürülen session_id değerini iletin. null yalnızca etkin Logical Session yokken kullanılmalıdır. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -348,7 +346,7 @@ Local veya remote machine üzerinde files/directories listeler.
 | `recursive` | `boolean` | `false` |  |
 | `max_entries` | `integer` | `500` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Bu field her zaman sağlanmalıdır. Aktif logical Session yoksa `null` kullanın; `session_manage` start/resume sonrasında dönen `active_run.run_id` değerini verin ve MCP transport reconnect’leri boyunca kullanmayı sürdürün. Açık resume/takeover sonrasında yeni değeri kullanın. |
+| `logical_session_id` | `string \| null` | required | Bu tool çağrısının Logical Sessionı. Görev üzerinde çalışırken session_manage tarafından döndürülen session_id değerini iletin. null yalnızca etkin Logical Session yokken kullanılmalıdır. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -364,7 +362,7 @@ Local veya remote machine üzerinde compact directory tree döndürür.
 | `depth` | `integer` | `3` |  |
 | `max_entries` | `integer` | `500` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Bu field her zaman sağlanmalıdır. Aktif logical Session yoksa `null` kullanın; `session_manage` start/resume sonrasında dönen `active_run.run_id` değerini verin ve MCP transport reconnect’leri boyunca kullanmayı sürdürün. Açık resume/takeover sonrasında yeni değeri kullanın. |
+| `logical_session_id` | `string \| null` | required | Bu tool çağrısının Logical Sessionı. Görev üzerinde çalışırken session_manage tarafından döndürülen session_id değerini iletin. null yalnızca etkin Logical Session yokken kullanılmalıdır. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -380,7 +378,7 @@ Local veya remote machine üzerinde glob ile paths bulur.
 | `cwd` | `string` | `"."` |  |
 | `max_results` | `integer` | `500` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Bu field her zaman sağlanmalıdır. Aktif logical Session yoksa `null` kullanın; `session_manage` start/resume sonrasında dönen `active_run.run_id` değerini verin ve MCP transport reconnect’leri boyunca kullanmayı sürdürün. Açık resume/takeover sonrasında yeni değeri kullanın. |
+| `logical_session_id` | `string \| null` | required | Bu tool çağrısının Logical Sessionı. Görev üzerinde çalışırken session_manage tarafından döndürülen session_id değerini iletin. null yalnızca etkin Logical Session yokken kullanılmalıdır. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -399,7 +397,7 @@ Local veya remote machine üzerinde file contents arar.
 | `case_sensitive` | `boolean` | `true` |  |
 | `max_results` | `integer \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Bu field her zaman sağlanmalıdır. Aktif logical Session yoksa `null` kullanın; `session_manage` start/resume sonrasında dönen `active_run.run_id` değerini verin ve MCP transport reconnect’leri boyunca kullanmayı sürdürün. Açık resume/takeover sonrasında yeni değeri kullanın. |
+| `logical_session_id` | `string \| null` | required | Bu tool çağrısının Logical Sessionı. Görev üzerinde çalışırken session_manage tarafından döndürülen session_id değerini iletin. null yalnızca etkin Logical Session yokken kullanılmalıdır. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -417,7 +415,7 @@ Local veya remote machine üzerinde bir file veya list files okur.
 | `binary_preview` | `string \| null` | `null` |  |
 | `binary_preview_bytes` | `integer` | `256` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Bu field her zaman sağlanmalıdır. Aktif logical Session yoksa `null` kullanın; `session_manage` start/resume sonrasında dönen `active_run.run_id` değerini verin ve MCP transport reconnect’leri boyunca kullanmayı sürdürün. Açık resume/takeover sonrasında yeni değeri kullanın. |
+| `logical_session_id` | `string \| null` | required | Bu tool çağrısının Logical Sessionı. Görev üzerinde çalışırken session_manage tarafından döndürülen session_id değerini iletin. null yalnızca etkin Logical Session yokken kullanılmalıdır. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -431,7 +429,7 @@ PNG, JPEG, GIF veya WebP file’ı local veya remote machine üzerinde native MC
 |---|---|---|---|
 | `path` | `string` | required |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Bu field her zaman sağlanmalıdır. Aktif logical Session yoksa `null` kullanın; `session_manage` start/resume sonrasında dönen `active_run.run_id` değerini verin ve MCP transport reconnect’leri boyunca kullanmayı sürdürün. Açık resume/takeover sonrasında yeni değeri kullanın. |
+| `logical_session_id` | `string \| null` | required | Bu tool çağrısının Logical Sessionı. Görev üzerinde çalışırken session_manage tarafından döndürülen session_id değerini iletin. null yalnızca etkin Logical Session yokken kullanılmalıdır. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -449,7 +447,7 @@ Local veya remote machine üzerinde UTF-8 text file yazar.
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Bu field her zaman sağlanmalıdır. Aktif logical Session yoksa `null` kullanın; `session_manage` start/resume sonrasında dönen `active_run.run_id` değerini verin ve MCP transport reconnect’leri boyunca kullanmayı sürdürün. Açık resume/takeover sonrasında yeni değeri kullanın. |
+| `logical_session_id` | `string \| null` | required | Bu tool çağrısının Logical Sessionı. Görev üzerinde çalışırken session_manage tarafından döndürülen session_id değerini iletin. null yalnızca etkin Logical Session yokken kullanılmalıdır. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -466,7 +464,7 @@ Bir local/remote file üzerinde bir veya daha fazla exact-text edits uygular. He
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Bu field her zaman sağlanmalıdır. Aktif logical Session yoksa `null` kullanın; `session_manage` start/resume sonrasında dönen `active_run.run_id` değerini verin ve MCP transport reconnect’leri boyunca kullanmayı sürdürün. Açık resume/takeover sonrasında yeni değeri kullanın. |
+| `logical_session_id` | `string \| null` | required | Bu tool çağrısının Logical Sessionı. Görev üzerinde çalışırken session_manage tarafından döndürülen session_id değerini iletin. null yalnızca etkin Logical Session yokken kullanılmalıdır. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -483,7 +481,7 @@ Local/remote file veya directory siler. `recursive=false` files veya empty direc
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Bu field her zaman sağlanmalıdır. Aktif logical Session yoksa `null` kullanın; `session_manage` start/resume sonrasında dönen `active_run.run_id` değerini verin ve MCP transport reconnect’leri boyunca kullanmayı sürdürün. Açık resume/takeover sonrasında yeni değeri kullanın. |
+| `logical_session_id` | `string \| null` | required | Bu tool çağrısının Logical Sessionı. Görev üzerinde çalışırken session_manage tarafından döndürülen session_id değerini iletin. null yalnızca etkin Logical Session yokken kullanılmalıdır. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -500,7 +498,7 @@ Local veya remote unified diff veya file_patch envelope kontrol eder ve uygular.
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Bu field her zaman sağlanmalıdır. Aktif logical Session yoksa `null` kullanın; `session_manage` start/resume sonrasında dönen `active_run.run_id` değerini verin ve MCP transport reconnect’leri boyunca kullanmayı sürdürün. Açık resume/takeover sonrasında yeni değeri kullanın. |
+| `logical_session_id` | `string \| null` | required | Bu tool çağrısının Logical Sessionı. Görev üzerinde çalışırken session_manage tarafından döndürülen session_id değerini iletin. null yalnızca etkin Logical Session yokken kullanılmalıdır. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -520,7 +518,7 @@ Controller ile remote machine’ler arasında file veya directory kopyalayan tra
 | `chunk_size` | `integer \| null` | `null` |  |
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Bu field her zaman sağlanmalıdır. Aktif logical Session yoksa `null` kullanın; `session_manage` start/resume sonrasında dönen `active_run.run_id` değerini verin ve MCP transport reconnect’leri boyunca kullanmayı sürdürün. Açık resume/takeover sonrasında yeni değeri kullanın. |
+| `logical_session_id` | `string \| null` | required | Bu tool çağrısının Logical Sessionı. Görev üzerinde çalışırken session_manage tarafından döndürülen session_id değerini iletin. null yalnızca etkin Logical Session yokken kullanılmalıdır. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -537,7 +535,7 @@ Local file için temporary browser-accessible URL oluşturur. Default response a
 | `filename` | `string \| null` | `null` |  |
 | `max_downloads` | `integer \| null` | `null` |  |
 | `inline` | `boolean` | `false` |  |
-| `session_run_id` | `string \| null` | required | Bu field her zaman sağlanmalıdır. Aktif logical Session yoksa `null` kullanın; `session_manage` start/resume sonrasında dönen `active_run.run_id` değerini verin ve MCP transport reconnect’leri boyunca kullanmayı sürdürün. Açık resume/takeover sonrasında yeni değeri kullanın. |
+| `logical_session_id` | `string \| null` | required | Bu tool çağrısının Logical Sessionı. Görev üzerinde çalışırken session_manage tarafından döndürülen session_id değerini iletin. null yalnızca etkin Logical Session yokken kullanılmalıdır. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -548,7 +546,7 @@ Generated local file download URLs listeler.
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
 | `include_expired` | `boolean` | `false` |  |
-| `session_run_id` | `string \| null` | required | Bu field her zaman sağlanmalıdır. Aktif logical Session yoksa `null` kullanın; `session_manage` start/resume sonrasında dönen `active_run.run_id` değerini verin ve MCP transport reconnect’leri boyunca kullanmayı sürdürün. Açık resume/takeover sonrasında yeni değeri kullanın. |
+| `logical_session_id` | `string \| null` | required | Bu tool çağrısının Logical Sessionı. Görev üzerinde çalışırken session_manage tarafından döndürülen session_id değerini iletin. null yalnızca etkin Logical Session yokken kullanılmalıdır. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -559,7 +557,7 @@ Generated local file download URL revoke eder.
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
 | `token` | `string` | required |  |
-| `session_run_id` | `string \| null` | required | Bu field her zaman sağlanmalıdır. Aktif logical Session yoksa `null` kullanın; `session_manage` start/resume sonrasında dönen `active_run.run_id` değerini verin ve MCP transport reconnect’leri boyunca kullanmayı sürdürün. Açık resume/takeover sonrasında yeni değeri kullanın. |
+| `logical_session_id` | `string \| null` | required | Bu tool çağrısının Logical Sessionı. Görev üzerinde çalışırken session_manage tarafından döndürülen session_id değerini iletin. null yalnızca etkin Logical Session yokken kullanılmalıdır. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -585,7 +583,7 @@ Dynamic MCP servers için isolated environment/headers register, list, get, enab
 | `refresh` | `boolean` | `true` |  |
 | `key` | `string \| null` | `null` |  |
 | `value` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Bu field her zaman sağlanmalıdır. Aktif logical Session yoksa `null` kullanın; `session_manage` start/resume sonrasında dönen `active_run.run_id` değerini verin ve MCP transport reconnect’leri boyunca kullanmayı sürdürün. Açık resume/takeover sonrasında yeni değeri kullanın. |
+| `logical_session_id` | `string \| null` | required | Bu tool çağrısının Logical Sessionı. Görev üzerinde çalışırken session_manage tarafından döndürülen session_id değerini iletin. null yalnızca etkin Logical Session yokken kullanılmalıdır. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -598,7 +596,7 @@ Enabled dynamic MCP servers üzerinden cached lightweight tool summaries arar. D
 | `query` | `string` | `""` |  |
 | `server` | `string \| null` | `null` |  |
 | `limit` | `integer` | `20` |  |
-| `session_run_id` | `string \| null` | required | Bu field her zaman sağlanmalıdır. Aktif logical Session yoksa `null` kullanın; `session_manage` start/resume sonrasında dönen `active_run.run_id` değerini verin ve MCP transport reconnect’leri boyunca kullanmayı sürdürün. Açık resume/takeover sonrasında yeni değeri kullanın. |
+| `logical_session_id` | `string \| null` | required | Bu tool çağrısının Logical Sessionı. Görev üzerinde çalışırken session_manage tarafından döndürülen session_id değerini iletin. null yalnızca etkin Logical Session yokken kullanılmalıdır. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -609,7 +607,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
 | `name` | `string` | required |  |
-| `session_run_id` | `string \| null` | required | Bu field her zaman sağlanmalıdır. Aktif logical Session yoksa `null` kullanın; `session_manage` start/resume sonrasında dönen `active_run.run_id` değerini verin ve MCP transport reconnect’leri boyunca kullanmayı sürdürün. Açık resume/takeover sonrasında yeni değeri kullanın. |
+| `logical_session_id` | `string \| null` | required | Bu tool çağrısının Logical Sessionı. Görev üzerinde çalışırken session_manage tarafından döndürülen session_id değerini iletin. null yalnızca etkin Logical Session yokken kullanılmalıdır. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -622,7 +620,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `name` | `string` | required |  |
 | `arguments` | `object \| null` | `null` |  |
 | `timeout_s` | `integer \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Bu field her zaman sağlanmalıdır. Aktif logical Session yoksa `null` kullanın; `session_manage` start/resume sonrasında dönen `active_run.run_id` değerini verin ve MCP transport reconnect’leri boyunca kullanmayı sürdürün. Açık resume/takeover sonrasında yeni değeri kullanın. |
+| `logical_session_id` | `string \| null` | required | Bu tool çağrısının Logical Sessionı. Görev üzerinde çalışırken session_manage tarafından döndürülen session_id değerini iletin. null yalnızca etkin Logical Session yokken kullanılmalıdır. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -646,7 +644,7 @@ Local veya remote persistent high-level browser sessions start, list, close veya
 | `storage_state_path` | `string \| null` | `null` |  |
 | `save_storage_state_path` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Bu field her zaman sağlanmalıdır. Aktif logical Session yoksa `null` kullanın; `session_manage` start/resume sonrasında dönen `active_run.run_id` değerini verin ve MCP transport reconnect’leri boyunca kullanmayı sürdürün. Açık resume/takeover sonrasında yeni değeri kullanın. |
+| `logical_session_id` | `string \| null` | required | Bu tool çağrısının Logical Sessionı. Görev üzerinde çalışırken session_manage tarafından döndürülen session_id değerini iletin. null yalnızca etkin Logical Session yokken kullanılmalıdır. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -666,7 +664,7 @@ Persistent browser page capture eder: title, URL, bounded visible text, `e1` gib
 | `max_text_chars` | `integer` | `100000` |  |
 | `max_elements` | `integer` | `100` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Bu field her zaman sağlanmalıdır. Aktif logical Session yoksa `null` kullanın; `session_manage` start/resume sonrasında dönen `active_run.run_id` değerini verin ve MCP transport reconnect’leri boyunca kullanmayı sürdürün. Açık resume/takeover sonrasında yeni değeri kullanın. |
+| `logical_session_id` | `string \| null` | required | Bu tool çağrısının Logical Sessionı. Görev üzerinde çalışırken session_manage tarafından döndürülen session_id değerini iletin. null yalnızca etkin Logical Session yokken kullanılmalıdır. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -683,7 +681,7 @@ Persistent browser session içinde structured actions çalıştırır. navigate,
 | `page_id` | `string \| null` | `null` |  |
 | `timeout_ms` | `integer` | `30000` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Bu field her zaman sağlanmalıdır. Aktif logical Session yoksa `null` kullanın; `session_manage` start/resume sonrasında dönen `active_run.run_id` değerini verin ve MCP transport reconnect’leri boyunca kullanmayı sürdürün. Açık resume/takeover sonrasında yeni değeri kullanın. |
+| `logical_session_id` | `string \| null` | required | Bu tool çağrısının Logical Sessionı. Görev üzerinde çalışırken session_manage tarafından döndürülen session_id değerini iletin. null yalnızca etkin Logical Session yokken kullanılmalıdır. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -699,7 +697,7 @@ Local veya remote machine üzerinde full Python Playwright script çalıştırı
 | `cwd` | `string` | `"."` |  |
 | `timeout_s` | `integer` | `60` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Bu field her zaman sağlanmalıdır. Aktif logical Session yoksa `null` kullanın; `session_manage` start/resume sonrasında dönen `active_run.run_id` değerini verin ve MCP transport reconnect’leri boyunca kullanmayı sürdürün. Açık resume/takeover sonrasında yeni değeri kullanın. |
+| `logical_session_id` | `string \| null` | required | Bu tool çağrısının Logical Sessionı. Görev üzerinde çalışırken session_manage tarafından döndürülen session_id değerini iletin. null yalnızca etkin Logical Session yokken kullanılmalıdır. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -719,7 +717,7 @@ action=invite, list, revoke veya rename ile remote workers yönetir. invite name
 | `ttl_s` | `integer \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
 | `new_name` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Bu field her zaman sağlanmalıdır. Aktif logical Session yoksa `null` kullanın; `session_manage` start/resume sonrasında dönen `active_run.run_id` değerini verin ve MCP transport reconnect’leri boyunca kullanmayı sürdürün. Açık resume/takeover sonrasında yeni değeri kullanın. |
+| `logical_session_id` | `string \| null` | required | Bu tool çağrısının Logical Sessionı. Görev üzerinde çalışırken session_manage tarafından döndürülen session_id değerini iletin. null yalnızca etkin Logical Session yokken kullanılmalıdır. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 

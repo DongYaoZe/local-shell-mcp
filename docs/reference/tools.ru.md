@@ -1,4 +1,4 @@
-<!-- i18n-source-sha256: 9e104b7a893f61206aea6ed76b78bb04387fc5349535c46ffafd8f2e4c9ccd3e -->
+<!-- i18n-source-sha256: 784cf8286b0aba665f54b0b14b7467047ff618447663c4b354d92176796c4001 -->
 # Справочник tools
 
 Эта страница строится из фактических MCP tool schemas. После изменения public tool surface запустите `python scripts/generate-tools-reference.py`, чтобы обновить English reference.
@@ -24,13 +24,13 @@
 
 ### `workspace_open`
 
-Открывает или повторно использует interactive Live Workspace для real-time human/agent collaboration. Для active task вызовите один раз и затем используйте самопереподключающийся floating workspace вместо повторных открытий. Применяйте, когда terminal output, files/diffs, jobs, remotes или audit activity существенно улучшают workflow.
+Открывает или повторно использует Live Workspace, отображающий явно указанную Logical Session. Передайте активный session_id, возвращённый session_manage. Workspace никогда не выводит идентичность задачи из MCP transport; явно передайте null, если активной Logical Session нет.
 
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
+| `session_id` | `string \| null` | required |  |
 | `machine` | `string \| null` | `null` |  |
 | `cwd` | `string` | `"."` |  |
-| `session_run_id` | `string \| null` | required | Всегда передавайте это поле. Если активной logical Session нет, используйте `null`; после start/resume через `session_manage` передавайте возвращённый `active_run.run_id` и продолжайте использовать его при переподключениях MCP transport. После явного resume/takeover используйте новое значение. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -45,7 +45,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Всегда передавайте это поле. Если активной logical Session нет, используйте `null`; после start/resume через `session_manage` передавайте возвращённый `active_run.run_id` и продолжайте использовать его при переподключениях MCP transport. После явного resume/takeover используйте новое значение. |
+| `logical_session_id` | `string \| null` | required | Logical Session для этого вызова инструмента. Во время работы над задачей передавайте session_id, возвращённый session_manage. Используйте null только когда активной Logical Session нет. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -57,7 +57,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
-| `session_run_id` | `string \| null` | required | Всегда передавайте это поле. Если активной logical Session нет, используйте `null`; после start/resume через `session_manage` передавайте возвращённый `active_run.run_id` и продолжайте использовать его при переподключениях MCP transport. После явного resume/takeover используйте новое значение. |
+| `logical_session_id` | `string \| null` | required | Logical Session для этого вызова инструмента. Во время работы над задачей передавайте session_id, возвращённый session_manage. Используйте null только когда активной Logical Session нет. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -68,7 +68,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
 | `name` | `string` | required |  |
-| `session_run_id` | `string \| null` | required | Всегда передавайте это поле. Если активной logical Session нет, используйте `null`; после start/resume через `session_manage` передавайте возвращённый `active_run.run_id` и продолжайте использовать его при переподключениях MCP transport. После явного resume/takeover используйте новое значение. |
+| `logical_session_id` | `string \| null` | required | Logical Session для этого вызова инструмента. Во время работы над задачей передавайте session_id, возвращённый session_manage. Используйте null только когда активной Logical Session нет. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -80,7 +80,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 |---|---|---|---|
 | `name` | `string` | required |  |
 | `path` | `string` | required |  |
-| `session_run_id` | `string \| null` | required | Всегда передавайте это поле. Если активной logical Session нет, используйте `null`; после start/resume через `session_manage` передавайте возвращённый `active_run.run_id` и продолжайте использовать его при переподключениях MCP transport. После явного resume/takeover используйте новое значение. |
+| `logical_session_id` | `string \| null` | required | Logical Session для этого вызова инструмента. Во время работы над задачей передавайте session_id, возвращённый session_manage. Используйте null только когда активной Logical Session нет. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -93,37 +93,35 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `cwd` | `string` | `"."` |  |
 | `glob` | `string \| null` | `null` |  |
 | `max_results` | `integer` | `200` |  |
-| `session_run_id` | `string \| null` | required | Всегда передавайте это поле. Если активной logical Session нет, используйте `null`; после start/resume через `session_manage` передавайте возвращённый `active_run.run_id` и продолжайте использовать его при переподключениях MCP transport. После явного resume/takeover используйте новое значение. |
+| `logical_session_id` | `string \| null` | required | Logical Session для этого вызова инструмента. Во время работы над задачей передавайте session_id, возвращённый session_manage. Используйте null только когда активной Logical Session нет. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
 ### `session_manage`
 
-Управляет долговечной logical task Session, независимой от machine и cwd. Выполняйте start перед существенной работой инструментами, report на значимых checkpoints и resume по `session_id` для передачи работы новому GPT/MCP run. `resume(takeover=true)` всегда создаёт новый agent run и заменяет старый. Возвращённый `active_run.run_id` используйте как `session_run_id` для report/finish/cancel и последующих инструментов. Действия: start, resume, get, report, list, finish, cancel, delete.
+Управляет одной долговечной Logical Session. start создаёт новую задачу и возвращает её session_id. resume продолжает только явный session_id, переданный пользователем или уже присутствующий в этом разговоре. Все действия, кроме start, требуют session_id. Действия: start, resume, get, report, finish, cancel, delete. report принимает summary/findings/next/blockers/objective/label; delete требует terminal Session.
 
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
 | `action` | `string` | required |  |
 | `session_id` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | `null` |  |
 | `label` | `string \| null` | `null` |  |
 | `objective` | `string \| null` | `null` |  |
 | `summary` | `string \| null` | `null` |  |
 | `findings` | `array[string] \| null` | `null` |  |
 | `next` | `string \| null` | `null` |  |
 | `blockers` | `array[string] \| null` | `null` |  |
-| `takeover` | `boolean` | `false` |  |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
 ### `plan_manage`
 
-Управляет необязательным Goal Plan текущей logical Session. Активный Plan включает автоматическое продолжение после 15 минут без активности агента, максимум 10 попыток. Сначала выполните start/resume Session через `session_manage`; изменяющие действия должны использовать её `active_run.run_id` как `session_run_id`. Действия: start, get, update, block, resume, finish, cancel. start требует objective и steps; finish требует, чтобы все steps были completed или skipped.
+Управляет необязательным Goal mode для явно заданной Logical Session. Активный plan включает автоматическое продолжение после 15 минут без активности agent, максимум 10 попыток. session_id должен быть тем же долговечным id, который вернул session_manage. Действия: start, get, update, block, resume, finish, cancel. start требует objective и steps; finish требует, чтобы все steps были completed или skipped.
 
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
 | `action` | `string` | required |  |
-| `session_run_id` | `string \| null` | `null` |  |
+| `session_id` | `string` | required |  |
 | `objective` | `string \| null` | `null` |  |
 | `steps` | `array[object] \| null` | `null` |  |
 | `step_id` | `string \| null` | `null` |  |
@@ -140,7 +138,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
 | `lines` | `integer` | `100` |  |
-| `session_run_id` | `string \| null` | required | Всегда передавайте это поле. Если активной logical Session нет, используйте `null`; после start/resume через `session_manage` передавайте возвращённый `active_run.run_id` и продолжайте использовать его при переподключениях MCP transport. После явного resume/takeover используйте новое значение. |
+| `logical_session_id` | `string \| null` | required | Logical Session для этого вызова инструмента. Во время работы над задачей передавайте session_id, возвращённый session_manage. Используйте null только когда активной Logical Session нет. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -159,7 +157,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Всегда передавайте это поле. Если активной logical Session нет, используйте `null`; после start/resume через `session_manage` передавайте возвращённый `active_run.run_id` и продолжайте использовать его при переподключениях MCP transport. После явного resume/takeover используйте новое значение. |
+| `logical_session_id` | `string \| null` | required | Logical Session для этого вызова инструмента. Во время работы над задачей передавайте session_id, возвращённый session_manage. Используйте null только когда активной Logical Session нет. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -177,7 +175,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Всегда передавайте это поле. Если активной logical Session нет, используйте `null`; после start/resume через `session_manage` передавайте возвращённый `active_run.run_id` и продолжайте использовать его при переподключениях MCP transport. После явного resume/takeover используйте новое значение. |
+| `logical_session_id` | `string \| null` | required | Logical Session для этого вызова инструмента. Во время работы над задачей передавайте session_id, возвращённый session_manage. Используйте null только когда активной Logical Session нет. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -195,7 +193,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Всегда передавайте это поле. Если активной logical Session нет, используйте `null`; после start/resume через `session_manage` передавайте возвращённый `active_run.run_id` и продолжайте использовать его при переподключениях MCP transport. После явного resume/takeover используйте новое значение. |
+| `logical_session_id` | `string \| null` | required | Logical Session для этого вызова инструмента. Во время работы над задачей передавайте session_id, возвращённый session_manage. Используйте null только когда активной Logical Session нет. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -211,7 +209,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `input_text` | `string` | required |  |
 | `enter` | `boolean` | `true` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Всегда передавайте это поле. Если активной logical Session нет, используйте `null`; после start/resume через `session_manage` передавайте возвращённый `active_run.run_id` и продолжайте использовать его при переподключениях MCP transport. После явного resume/takeover используйте новое значение. |
+| `logical_session_id` | `string \| null` | required | Logical Session для этого вызова инструмента. Во время работы над задачей передавайте session_id, возвращённый session_manage. Используйте null только когда активной Logical Session нет. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -226,7 +224,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `session_id` | `string` | required |  |
 | `lines` | `integer` | `200` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Всегда передавайте это поле. Если активной logical Session нет, используйте `null`; после start/resume через `session_manage` передавайте возвращённый `active_run.run_id` и продолжайте использовать его при переподключениях MCP transport. После явного resume/takeover используйте новое значение. |
+| `logical_session_id` | `string \| null` | required | Logical Session для этого вызова инструмента. Во время работы над задачей передавайте session_id, возвращённый session_manage. Используйте null только когда активной Logical Session нет. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -240,7 +238,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 |---|---|---|---|
 | `session_id` | `string` | required |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Всегда передавайте это поле. Если активной logical Session нет, используйте `null`; после start/resume через `session_manage` передавайте возвращённый `active_run.run_id` и продолжайте использовать его при переподключениях MCP transport. После явного resume/takeover используйте новое значение. |
+| `logical_session_id` | `string \| null` | required | Logical Session для этого вызова инструмента. Во время работы над задачей передавайте session_id, возвращённый session_manage. Используйте null только когда активной Logical Session нет. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -253,7 +251,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Всегда передавайте это поле. Если активной logical Session нет, используйте `null`; после start/resume через `session_manage` передавайте возвращённый `active_run.run_id` и продолжайте использовать его при переподключениях MCP transport. После явного resume/takeover используйте новое значение. |
+| `logical_session_id` | `string \| null` | required | Logical Session для этого вызова инструмента. Во время работы над задачей передавайте session_id, возвращённый session_manage. Используйте null только когда активной Logical Session нет. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -271,7 +269,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Всегда передавайте это поле. Если активной logical Session нет, используйте `null`; после start/resume через `session_manage` передавайте возвращённый `active_run.run_id` и продолжайте использовать его при переподключениях MCP transport. После явного resume/takeover используйте новое значение. |
+| `logical_session_id` | `string \| null` | required | Logical Session для этого вызова инструмента. Во время работы над задачей передавайте session_id, возвращённый session_manage. Используйте null только когда активной Logical Session нет. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -285,7 +283,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 |---|---|---|---|
 | `include_finished` | `boolean` | `true` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Всегда передавайте это поле. Если активной logical Session нет, используйте `null`; после start/resume через `session_manage` передавайте возвращённый `active_run.run_id` и продолжайте использовать его при переподключениях MCP transport. После явного resume/takeover используйте новое значение. |
+| `logical_session_id` | `string \| null` | required | Logical Session для этого вызова инструмента. Во время работы над задачей передавайте session_id, возвращённый session_manage. Используйте null только когда активной Logical Session нет. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -300,7 +298,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `job_id` | `string` | required |  |
 | `lines` | `integer` | `200` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Всегда передавайте это поле. Если активной logical Session нет, используйте `null`; после start/resume через `session_manage` передавайте возвращённый `active_run.run_id` и продолжайте использовать его при переподключениях MCP transport. После явного resume/takeover используйте новое значение. |
+| `logical_session_id` | `string \| null` | required | Logical Session для этого вызова инструмента. Во время работы над задачей передавайте session_id, возвращённый session_manage. Используйте null только когда активной Logical Session нет. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -314,7 +312,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 |---|---|---|---|
 | `job_id` | `string` | required |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Всегда передавайте это поле. Если активной logical Session нет, используйте `null`; после start/resume через `session_manage` передавайте возвращённый `active_run.run_id` и продолжайте использовать его при переподключениях MCP transport. После явного resume/takeover используйте новое значение. |
+| `logical_session_id` | `string \| null` | required | Logical Session для этого вызова инструмента. Во время работы над задачей передавайте session_id, возвращённый session_manage. Используйте null только когда активной Logical Session нет. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -330,7 +328,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Всегда передавайте это поле. Если активной logical Session нет, используйте `null`; после start/resume через `session_manage` передавайте возвращённый `active_run.run_id` и продолжайте использовать его при переподключениях MCP transport. После явного resume/takeover используйте новое значение. |
+| `logical_session_id` | `string \| null` | required | Logical Session для этого вызова инструмента. Во время работы над задачей передавайте session_id, возвращённый session_manage. Используйте null только когда активной Logical Session нет. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -348,7 +346,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `recursive` | `boolean` | `false` |  |
 | `max_entries` | `integer` | `500` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Всегда передавайте это поле. Если активной logical Session нет, используйте `null`; после start/resume через `session_manage` передавайте возвращённый `active_run.run_id` и продолжайте использовать его при переподключениях MCP transport. После явного resume/takeover используйте новое значение. |
+| `logical_session_id` | `string \| null` | required | Logical Session для этого вызова инструмента. Во время работы над задачей передавайте session_id, возвращённый session_manage. Используйте null только когда активной Logical Session нет. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -364,7 +362,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `depth` | `integer` | `3` |  |
 | `max_entries` | `integer` | `500` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Всегда передавайте это поле. Если активной logical Session нет, используйте `null`; после start/resume через `session_manage` передавайте возвращённый `active_run.run_id` и продолжайте использовать его при переподключениях MCP transport. После явного resume/takeover используйте новое значение. |
+| `logical_session_id` | `string \| null` | required | Logical Session для этого вызова инструмента. Во время работы над задачей передавайте session_id, возвращённый session_manage. Используйте null только когда активной Logical Session нет. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -380,7 +378,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `cwd` | `string` | `"."` |  |
 | `max_results` | `integer` | `500` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Всегда передавайте это поле. Если активной logical Session нет, используйте `null`; после start/resume через `session_manage` передавайте возвращённый `active_run.run_id` и продолжайте использовать его при переподключениях MCP transport. После явного resume/takeover используйте новое значение. |
+| `logical_session_id` | `string \| null` | required | Logical Session для этого вызова инструмента. Во время работы над задачей передавайте session_id, возвращённый session_manage. Используйте null только когда активной Logical Session нет. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -399,7 +397,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `case_sensitive` | `boolean` | `true` |  |
 | `max_results` | `integer \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Всегда передавайте это поле. Если активной logical Session нет, используйте `null`; после start/resume через `session_manage` передавайте возвращённый `active_run.run_id` и продолжайте использовать его при переподключениях MCP transport. После явного resume/takeover используйте новое значение. |
+| `logical_session_id` | `string \| null` | required | Logical Session для этого вызова инструмента. Во время работы над задачей передавайте session_id, возвращённый session_manage. Используйте null только когда активной Logical Session нет. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -417,7 +415,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `binary_preview` | `string \| null` | `null` |  |
 | `binary_preview_bytes` | `integer` | `256` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Всегда передавайте это поле. Если активной logical Session нет, используйте `null`; после start/resume через `session_manage` передавайте возвращённый `active_run.run_id` и продолжайте использовать его при переподключениях MCP transport. После явного resume/takeover используйте новое значение. |
+| `logical_session_id` | `string \| null` | required | Logical Session для этого вызова инструмента. Во время работы над задачей передавайте session_id, возвращённый session_manage. Используйте null только когда активной Logical Session нет. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -431,7 +429,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 |---|---|---|---|
 | `path` | `string` | required |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Всегда передавайте это поле. Если активной logical Session нет, используйте `null`; после start/resume через `session_manage` передавайте возвращённый `active_run.run_id` и продолжайте использовать его при переподключениях MCP transport. После явного resume/takeover используйте новое значение. |
+| `logical_session_id` | `string \| null` | required | Logical Session для этого вызова инструмента. Во время работы над задачей передавайте session_id, возвращённый session_manage. Используйте null только когда активной Logical Session нет. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -449,7 +447,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Всегда передавайте это поле. Если активной logical Session нет, используйте `null`; после start/resume через `session_manage` передавайте возвращённый `active_run.run_id` и продолжайте использовать его при переподключениях MCP transport. После явного resume/takeover используйте новое значение. |
+| `logical_session_id` | `string \| null` | required | Logical Session для этого вызова инструмента. Во время работы над задачей передавайте session_id, возвращённый session_manage. Используйте null только когда активной Logical Session нет. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -466,7 +464,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Всегда передавайте это поле. Если активной logical Session нет, используйте `null`; после start/resume через `session_manage` передавайте возвращённый `active_run.run_id` и продолжайте использовать его при переподключениях MCP transport. После явного resume/takeover используйте новое значение. |
+| `logical_session_id` | `string \| null` | required | Logical Session для этого вызова инструмента. Во время работы над задачей передавайте session_id, возвращённый session_manage. Используйте null только когда активной Logical Session нет. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -483,7 +481,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Всегда передавайте это поле. Если активной logical Session нет, используйте `null`; после start/resume через `session_manage` передавайте возвращённый `active_run.run_id` и продолжайте использовать его при переподключениях MCP transport. После явного resume/takeover используйте новое значение. |
+| `logical_session_id` | `string \| null` | required | Logical Session для этого вызова инструмента. Во время работы над задачей передавайте session_id, возвращённый session_manage. Используйте null только когда активной Logical Session нет. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -500,7 +498,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Всегда передавайте это поле. Если активной logical Session нет, используйте `null`; после start/resume через `session_manage` передавайте возвращённый `active_run.run_id` и продолжайте использовать его при переподключениях MCP transport. После явного resume/takeover используйте новое значение. |
+| `logical_session_id` | `string \| null` | required | Logical Session для этого вызова инструмента. Во время работы над задачей передавайте session_id, возвращённый session_manage. Используйте null только когда активной Logical Session нет. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -520,7 +518,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `chunk_size` | `integer \| null` | `null` |  |
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Всегда передавайте это поле. Если активной logical Session нет, используйте `null`; после start/resume через `session_manage` передавайте возвращённый `active_run.run_id` и продолжайте использовать его при переподключениях MCP transport. После явного resume/takeover используйте новое значение. |
+| `logical_session_id` | `string \| null` | required | Logical Session для этого вызова инструмента. Во время работы над задачей передавайте session_id, возвращённый session_manage. Используйте null только когда активной Logical Session нет. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -537,7 +535,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `filename` | `string \| null` | `null` |  |
 | `max_downloads` | `integer \| null` | `null` |  |
 | `inline` | `boolean` | `false` |  |
-| `session_run_id` | `string \| null` | required | Всегда передавайте это поле. Если активной logical Session нет, используйте `null`; после start/resume через `session_manage` передавайте возвращённый `active_run.run_id` и продолжайте использовать его при переподключениях MCP transport. После явного resume/takeover используйте новое значение. |
+| `logical_session_id` | `string \| null` | required | Logical Session для этого вызова инструмента. Во время работы над задачей передавайте session_id, возвращённый session_manage. Используйте null только когда активной Logical Session нет. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -548,7 +546,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
 | `include_expired` | `boolean` | `false` |  |
-| `session_run_id` | `string \| null` | required | Всегда передавайте это поле. Если активной logical Session нет, используйте `null`; после start/resume через `session_manage` передавайте возвращённый `active_run.run_id` и продолжайте использовать его при переподключениях MCP transport. После явного resume/takeover используйте новое значение. |
+| `logical_session_id` | `string \| null` | required | Logical Session для этого вызова инструмента. Во время работы над задачей передавайте session_id, возвращённый session_manage. Используйте null только когда активной Logical Session нет. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -559,7 +557,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
 | `token` | `string` | required |  |
-| `session_run_id` | `string \| null` | required | Всегда передавайте это поле. Если активной logical Session нет, используйте `null`; после start/resume через `session_manage` передавайте возвращённый `active_run.run_id` и продолжайте использовать его при переподключениях MCP transport. После явного resume/takeover используйте новое значение. |
+| `logical_session_id` | `string \| null` | required | Logical Session для этого вызова инструмента. Во время работы над задачей передавайте session_id, возвращённый session_manage. Используйте null только когда активной Logical Session нет. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -585,7 +583,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `refresh` | `boolean` | `true` |  |
 | `key` | `string \| null` | `null` |  |
 | `value` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Всегда передавайте это поле. Если активной logical Session нет, используйте `null`; после start/resume через `session_manage` передавайте возвращённый `active_run.run_id` и продолжайте использовать его при переподключениях MCP transport. После явного resume/takeover используйте новое значение. |
+| `logical_session_id` | `string \| null` | required | Logical Session для этого вызова инструмента. Во время работы над задачей передавайте session_id, возвращённый session_manage. Используйте null только когда активной Logical Session нет. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -598,7 +596,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `query` | `string` | `""` |  |
 | `server` | `string \| null` | `null` |  |
 | `limit` | `integer` | `20` |  |
-| `session_run_id` | `string \| null` | required | Всегда передавайте это поле. Если активной logical Session нет, используйте `null`; после start/resume через `session_manage` передавайте возвращённый `active_run.run_id` и продолжайте использовать его при переподключениях MCP transport. После явного resume/takeover используйте новое значение. |
+| `logical_session_id` | `string \| null` | required | Logical Session для этого вызова инструмента. Во время работы над задачей передавайте session_id, возвращённый session_manage. Используйте null только когда активной Logical Session нет. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -609,7 +607,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
 | `name` | `string` | required |  |
-| `session_run_id` | `string \| null` | required | Всегда передавайте это поле. Если активной logical Session нет, используйте `null`; после start/resume через `session_manage` передавайте возвращённый `active_run.run_id` и продолжайте использовать его при переподключениях MCP transport. После явного resume/takeover используйте новое значение. |
+| `logical_session_id` | `string \| null` | required | Logical Session для этого вызова инструмента. Во время работы над задачей передавайте session_id, возвращённый session_manage. Используйте null только когда активной Logical Session нет. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -622,7 +620,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `name` | `string` | required |  |
 | `arguments` | `object \| null` | `null` |  |
 | `timeout_s` | `integer \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Всегда передавайте это поле. Если активной logical Session нет, используйте `null`; после start/resume через `session_manage` передавайте возвращённый `active_run.run_id` и продолжайте использовать его при переподключениях MCP transport. После явного resume/takeover используйте новое значение. |
+| `logical_session_id` | `string \| null` | required | Logical Session для этого вызова инструмента. Во время работы над задачей передавайте session_id, возвращённый session_manage. Используйте null только когда активной Logical Session нет. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -646,7 +644,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `storage_state_path` | `string \| null` | `null` |  |
 | `save_storage_state_path` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Всегда передавайте это поле. Если активной logical Session нет, используйте `null`; после start/resume через `session_manage` передавайте возвращённый `active_run.run_id` и продолжайте использовать его при переподключениях MCP transport. После явного resume/takeover используйте новое значение. |
+| `logical_session_id` | `string \| null` | required | Logical Session для этого вызова инструмента. Во время работы над задачей передавайте session_id, возвращённый session_manage. Используйте null только когда активной Logical Session нет. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -666,7 +664,7 @@ Capture persistent browser page: title, URL, bounded visible text, interactive e
 | `max_text_chars` | `integer` | `100000` |  |
 | `max_elements` | `integer` | `100` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Всегда передавайте это поле. Если активной logical Session нет, используйте `null`; после start/resume через `session_manage` передавайте возвращённый `active_run.run_id` и продолжайте использовать его при переподключениях MCP transport. После явного resume/takeover используйте новое значение. |
+| `logical_session_id` | `string \| null` | required | Logical Session для этого вызова инструмента. Во время работы над задачей передавайте session_id, возвращённый session_manage. Используйте null только когда активной Logical Session нет. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -683,7 +681,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `page_id` | `string \| null` | `null` |  |
 | `timeout_ms` | `integer` | `30000` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Всегда передавайте это поле. Если активной logical Session нет, используйте `null`; после start/resume через `session_manage` передавайте возвращённый `active_run.run_id` и продолжайте использовать его при переподключениях MCP transport. После явного resume/takeover используйте новое значение. |
+| `logical_session_id` | `string \| null` | required | Logical Session для этого вызова инструмента. Во время работы над задачей передавайте session_id, возвращённый session_manage. Используйте null только когда активной Logical Session нет. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -699,7 +697,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `cwd` | `string` | `"."` |  |
 | `timeout_s` | `integer` | `60` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Всегда передавайте это поле. Если активной logical Session нет, используйте `null`; после start/resume через `session_manage` передавайте возвращённый `active_run.run_id` и продолжайте использовать его при переподключениях MCP transport. После явного resume/takeover используйте новое значение. |
+| `logical_session_id` | `string \| null` | required | Logical Session для этого вызова инструмента. Во время работы над задачей передавайте session_id, возвращённый session_manage. Используйте null только когда активной Logical Session нет. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -719,7 +717,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `ttl_s` | `integer \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
 | `new_name` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Всегда передавайте это поле. Если активной logical Session нет, используйте `null`; после start/resume через `session_manage` передавайте возвращённый `active_run.run_id` и продолжайте использовать его при переподключениях MCP transport. После явного resume/takeover используйте новое значение. |
+| `logical_session_id` | `string \| null` | required | Logical Session для этого вызова инструмента. Во время работы над задачей передавайте session_id, возвращённый session_manage. Используйте null только когда активной Logical Session нет. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 

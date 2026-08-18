@@ -1,4 +1,4 @@
-<!-- i18n-source-sha256: 9e104b7a893f61206aea6ed76b78bb04387fc5349535c46ffafd8f2e4c9ccd3e -->
+<!-- i18n-source-sha256: 784cf8286b0aba665f54b0b14b7467047ff618447663c4b354d92176796c4001 -->
 # Referensi tools
 
 Page ini dibangun dari MCP tool schemas yang sebenarnya. Jalankan `python scripts/generate-tools-reference.py` setelah mengubah public tool surface untuk memperbarui English reference.
@@ -24,13 +24,13 @@ Sebagian besar tool mengembalikan `ToolResult` terstruktur berisi `ok`, `message
 
 ### `workspace_open`
 
-Membuka atau menggunakan ulang interactive Live Workspace untuk real-time human/agent collaboration. Panggil sekali untuk active task dan gunakan ulang floating workspace yang reconnect otomatis, bukan membukanya berulang kali. Gunakan saat terminal output, files/diffs, jobs, remotes, atau audit activity meningkatkan workflow secara nyata.
+Buka atau gunakan kembali Live Workspace yang menampilkan Logical Session yang diberikan secara eksplisit. Berikan session_id aktif yang dikembalikan session_manage. Workspace tidak pernah menyimpulkan identitas task dari transport MCP; berikan null secara eksplisit saat tidak ada Logical Session aktif.
 
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
+| `session_id` | `string \| null` | required |  |
 | `machine` | `string \| null` | `null` |  |
 | `cwd` | `string` | `"."` |  |
-| `session_run_id` | `string \| null` | required | Selalu berikan field ini. Gunakan `null` saat tidak ada logical Session aktif; setelah start/resume `session_manage`, berikan `active_run.run_id` yang dikembalikan dan terus gunakan selama reconnect transport MCP. Setelah resume/takeover eksplisit, gunakan nilai baru. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -45,7 +45,7 @@ Mengembalikan version, workspace, auth, policy, dan environment information seca
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Selalu berikan field ini. Gunakan `null` saat tidak ada logical Session aktif; setelah start/resume `session_manage`, berikan `active_run.run_id` yang dikembalikan dan terus gunakan selama reconnect transport MCP. Setelah resume/takeover eksplisit, gunakan nilai baru. |
+| `logical_session_id` | `string \| null` | required | Logical Session untuk pemanggilan tool ini. Saat mengerjakan task, berikan session_id yang dikembalikan session_manage. Gunakan null hanya ketika tidak ada Logical Session aktif. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -57,7 +57,7 @@ Mencantumkan installed Agent Skills tanpa memuat instructions. MCP tool surface 
 
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
-| `session_run_id` | `string \| null` | required | Selalu berikan field ini. Gunakan `null` saat tidak ada logical Session aktif; setelah start/resume `session_manage`, berikan `active_run.run_id` yang dikembalikan dan terus gunakan selama reconnect transport MCP. Setelah resume/takeover eksplisit, gunakan nilai baru. |
+| `logical_session_id` | `string \| null` | required | Logical Session untuk pemanggilan tool ini. Saat mengerjakan task, berikan session_id yang dikembalikan session_manage. Gunakan null hanya ketika tidak ada Logical Session aktif. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -68,7 +68,7 @@ Memuat installed Skill dengan exact name yang dikembalikan `skill_list`. Mengemb
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
 | `name` | `string` | required |  |
-| `session_run_id` | `string \| null` | required | Selalu berikan field ini. Gunakan `null` saat tidak ada logical Session aktif; setelah start/resume `session_manage`, berikan `active_run.run_id` yang dikembalikan dan terus gunakan selama reconnect transport MCP. Setelah resume/takeover eksplisit, gunakan nilai baru. |
+| `logical_session_id` | `string \| null` | required | Logical Session untuk pemanggilan tool ini. Saat mengerjakan task, berikan session_id yang dikembalikan session_manage. Gunakan null hanya ketika tidak ada Logical Session aktif. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -80,7 +80,7 @@ Membaca satu related text file dari installed Skill.
 |---|---|---|---|
 | `name` | `string` | required |  |
 | `path` | `string` | required |  |
-| `session_run_id` | `string \| null` | required | Selalu berikan field ini. Gunakan `null` saat tidak ada logical Session aktif; setelah start/resume `session_manage`, berikan `active_run.run_id` yang dikembalikan dan terus gunakan selama reconnect transport MCP. Setelah resume/takeover eksplisit, gunakan nilai baru. |
+| `logical_session_id` | `string \| null` | required | Logical Session untuk pemanggilan tool ini. Saat mengerjakan task, berikan session_id yang dikembalikan session_manage. Gunakan null hanya ketika tidak ada Logical Session aktif. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -93,37 +93,35 @@ Memindai local workspace text files untuk common secrets sebelum commit atau pus
 | `cwd` | `string` | `"."` |  |
 | `glob` | `string \| null` | `null` |  |
 | `max_results` | `integer` | `200` |  |
-| `session_run_id` | `string \| null` | required | Selalu berikan field ini. Gunakan `null` saat tidak ada logical Session aktif; setelah start/resume `session_manage`, berikan `active_run.run_id` yang dikembalikan dan terus gunakan selama reconnect transport MCP. Setelah resume/takeover eksplisit, gunakan nilai baru. |
+| `logical_session_id` | `string \| null` | required | Logical Session untuk pemanggilan tool ini. Saat mengerjakan task, berikan session_id yang dikembalikan session_manage. Gunakan null hanya ketika tidak ada Logical Session aktif. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
 ### `session_manage`
 
-Mengelola logical task Session durable yang independen dari machine dan cwd. Lakukan start sebelum kerja tool yang substantif, report pada checkpoint penting, dan resume dengan `session_id` untuk menyerahkan kerja ke run GPT/MCP baru. `resume(takeover=true)` selalu membuat agent run baru dan menggantikan run lama. Gunakan `active_run.run_id` yang dikembalikan sebagai `session_run_id` untuk report/finish/cancel dan tool berikutnya. Aksi: start, resume, get, report, list, finish, cancel, delete.
+Kelola satu Logical Session durable. start membuat task baru dan mengembalikan session_id-nya. resume hanya melanjutkan session_id eksplisit yang diberikan pengguna atau yang sudah ada dalam percakapan ini. Semua action selain start memerlukan session_id. Action: start, resume, get, report, finish, cancel, delete. report menerima summary/findings/next/blockers/objective/label; delete memerlukan Session terminal.
 
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
 | `action` | `string` | required |  |
 | `session_id` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | `null` |  |
 | `label` | `string \| null` | `null` |  |
 | `objective` | `string \| null` | `null` |  |
 | `summary` | `string \| null` | `null` |  |
 | `findings` | `array[string] \| null` | `null` |  |
 | `next` | `string \| null` | `null` |  |
 | `blockers` | `array[string] \| null` | `null` |  |
-| `takeover` | `boolean` | `false` |  |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
 ### `plan_manage`
 
-Mengelola Goal Plan opsional milik logical Session saat ini. Plan aktif mengaktifkan continuation otomatis setelah 15 menit tanpa aktivitas agent, dibatasi 10 percobaan. Start/resume Session lebih dulu dengan `session_manage`; action yang mengubah state harus memakai `active_run.run_id` Session sebagai `session_run_id`. Aksi: start, get, update, block, resume, finish, cancel. start memerlukan objective dan steps; finish mensyaratkan semua step completed atau skipped.
+Kelola Goal mode opsional untuk Logical Session eksplisit. Plan aktif mengaktifkan continuation otomatis setelah 15 menit tanpa aktivitas agent, maksimal 10 percobaan. session_id harus sama dengan id durable yang dikembalikan session_manage. Action: start, get, update, block, resume, finish, cancel. start memerlukan objective dan steps; finish mengharuskan semua steps completed atau skipped.
 
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
 | `action` | `string` | required |  |
-| `session_run_id` | `string \| null` | `null` |  |
+| `session_id` | `string` | required |  |
 | `objective` | `string \| null` | `null` |  |
 | `steps` | `array[object] \| null` | `null` |  |
 | `step_id` | `string \| null` | `null` |  |
@@ -140,7 +138,7 @@ Membaca recent local audit log entries.
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
 | `lines` | `integer` | `100` |  |
-| `session_run_id` | `string \| null` | required | Selalu berikan field ini. Gunakan `null` saat tidak ada logical Session aktif; setelah start/resume `session_manage`, berikan `active_run.run_id` yang dikembalikan dan terus gunakan selama reconnect transport MCP. Setelah resume/takeover eksplisit, gunakan nilai baru. |
+| `logical_session_id` | `string \| null` | required | Logical Session untuk pemanggilan tool ini. Saat mengerjakan task, berikan session_id yang dikembalikan session_manage. Gunakan null hanya ketika tidak ada Logical Session aktif. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -159,7 +157,7 @@ Menjalankan satu non-interactive shell command secara lokal atau pada remote mac
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Selalu berikan field ini. Gunakan `null` saat tidak ada logical Session aktif; setelah start/resume `session_manage`, berikan `active_run.run_id` yang dikembalikan dan terus gunakan selama reconnect transport MCP. Setelah resume/takeover eksplisit, gunakan nilai baru. |
+| `logical_session_id` | `string \| null` | required | Logical Session untuk pemanggilan tool ini. Saat mengerjakan task, berikan session_id yang dikembalikan session_manage. Gunakan null hanya ketika tidak ada Logical Session aktif. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -177,7 +175,7 @@ Menulis dan menjalankan short Python script secara lokal atau pada remote machin
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Selalu berikan field ini. Gunakan `null` saat tidak ada logical Session aktif; setelah start/resume `session_manage`, berikan `active_run.run_id` yang dikembalikan dan terus gunakan selama reconnect transport MCP. Setelah resume/takeover eksplisit, gunakan nilai baru. |
+| `logical_session_id` | `string \| null` | required | Logical Session untuk pemanggilan tool ini. Saat mengerjakan task, berikan session_id yang dikembalikan session_manage. Gunakan null hanya ketika tidak ada Logical Session aktif. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -195,7 +193,7 @@ Memulai persistent interactive shell secara lokal atau pada remote machine.
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Selalu berikan field ini. Gunakan `null` saat tidak ada logical Session aktif; setelah start/resume `session_manage`, berikan `active_run.run_id` yang dikembalikan dan terus gunakan selama reconnect transport MCP. Setelah resume/takeover eksplisit, gunakan nilai baru. |
+| `logical_session_id` | `string \| null` | required | Logical Session untuk pemanggilan tool ini. Saat mengerjakan task, berikan session_id yang dikembalikan session_manage. Gunakan null hanya ketika tidak ada Logical Session aktif. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -211,7 +209,7 @@ Mengirim input ke persistent local/remote shell session.
 | `input_text` | `string` | required |  |
 | `enter` | `boolean` | `true` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Selalu berikan field ini. Gunakan `null` saat tidak ada logical Session aktif; setelah start/resume `session_manage`, berikan `active_run.run_id` yang dikembalikan dan terus gunakan selama reconnect transport MCP. Setelah resume/takeover eksplisit, gunakan nilai baru. |
+| `logical_session_id` | `string \| null` | required | Logical Session untuk pemanggilan tool ini. Saat mengerjakan task, berikan session_id yang dikembalikan session_manage. Gunakan null hanya ketika tidak ada Logical Session aktif. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -226,7 +224,7 @@ Membaca recent output dari persistent local/remote shell session.
 | `session_id` | `string` | required |  |
 | `lines` | `integer` | `200` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Selalu berikan field ini. Gunakan `null` saat tidak ada logical Session aktif; setelah start/resume `session_manage`, berikan `active_run.run_id` yang dikembalikan dan terus gunakan selama reconnect transport MCP. Setelah resume/takeover eksplisit, gunakan nilai baru. |
+| `logical_session_id` | `string \| null` | required | Logical Session untuk pemanggilan tool ini. Saat mengerjakan task, berikan session_id yang dikembalikan session_manage. Gunakan null hanya ketika tidak ada Logical Session aktif. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -240,7 +238,7 @@ Menghentikan persistent local/remote shell session.
 |---|---|---|---|
 | `session_id` | `string` | required |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Selalu berikan field ini. Gunakan `null` saat tidak ada logical Session aktif; setelah start/resume `session_manage`, berikan `active_run.run_id` yang dikembalikan dan terus gunakan selama reconnect transport MCP. Setelah resume/takeover eksplisit, gunakan nilai baru. |
+| `logical_session_id` | `string \| null` | required | Logical Session untuk pemanggilan tool ini. Saat mengerjakan task, berikan session_id yang dikembalikan session_manage. Gunakan null hanya ketika tidak ada Logical Session aktif. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -253,7 +251,7 @@ Mencantumkan persistent shell sessions secara lokal atau pada remote machine.
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Selalu berikan field ini. Gunakan `null` saat tidak ada logical Session aktif; setelah start/resume `session_manage`, berikan `active_run.run_id` yang dikembalikan dan terus gunakan selama reconnect transport MCP. Setelah resume/takeover eksplisit, gunakan nilai baru. |
+| `logical_session_id` | `string \| null` | required | Logical Session untuk pemanggilan tool ini. Saat mengerjakan task, berikan session_id yang dikembalikan session_manage. Gunakan null hanya ketika tidak ada Logical Session aktif. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -271,7 +269,7 @@ Memulai tracked long-running job secara lokal atau pada remote machine.
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Selalu berikan field ini. Gunakan `null` saat tidak ada logical Session aktif; setelah start/resume `session_manage`, berikan `active_run.run_id` yang dikembalikan dan terus gunakan selama reconnect transport MCP. Setelah resume/takeover eksplisit, gunakan nilai baru. |
+| `logical_session_id` | `string \| null` | required | Logical Session untuk pemanggilan tool ini. Saat mengerjakan task, berikan session_id yang dikembalikan session_manage. Gunakan null hanya ketika tidak ada Logical Session aktif. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -285,7 +283,7 @@ Mencantumkan tracked jobs secara lokal atau pada remote machine.
 |---|---|---|---|
 | `include_finished` | `boolean` | `true` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Selalu berikan field ini. Gunakan `null` saat tidak ada logical Session aktif; setelah start/resume `session_manage`, berikan `active_run.run_id` yang dikembalikan dan terus gunakan selama reconnect transport MCP. Setelah resume/takeover eksplisit, gunakan nilai baru. |
+| `logical_session_id` | `string \| null` | required | Logical Session untuk pemanggilan tool ini. Saat mengerjakan task, berikan session_id yang dikembalikan session_manage. Gunakan null hanya ketika tidak ada Logical Session aktif. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -300,7 +298,7 @@ Membaca recent output dari tracked local/remote job.
 | `job_id` | `string` | required |  |
 | `lines` | `integer` | `200` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Selalu berikan field ini. Gunakan `null` saat tidak ada logical Session aktif; setelah start/resume `session_manage`, berikan `active_run.run_id` yang dikembalikan dan terus gunakan selama reconnect transport MCP. Setelah resume/takeover eksplisit, gunakan nilai baru. |
+| `logical_session_id` | `string \| null` | required | Logical Session untuk pemanggilan tool ini. Saat mengerjakan task, berikan session_id yang dikembalikan session_manage. Gunakan null hanya ketika tidak ada Logical Session aktif. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -314,7 +312,7 @@ Menghentikan tracked local/remote job.
 |---|---|---|---|
 | `job_id` | `string` | required |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Selalu berikan field ini. Gunakan `null` saat tidak ada logical Session aktif; setelah start/resume `session_manage`, berikan `active_run.run_id` yang dikembalikan dan terus gunakan selama reconnect transport MCP. Setelah resume/takeover eksplisit, gunakan nilai baru. |
+| `logical_session_id` | `string \| null` | required | Logical Session untuk pemanggilan tool ini. Saat mengerjakan task, berikan session_id yang dikembalikan session_manage. Gunakan null hanya ketika tidak ada Logical Session aktif. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -330,7 +328,7 @@ Memulai ulang stopped/exited tracked local/remote job.
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Selalu berikan field ini. Gunakan `null` saat tidak ada logical Session aktif; setelah start/resume `session_manage`, berikan `active_run.run_id` yang dikembalikan dan terus gunakan selama reconnect transport MCP. Setelah resume/takeover eksplisit, gunakan nilai baru. |
+| `logical_session_id` | `string \| null` | required | Logical Session untuk pemanggilan tool ini. Saat mengerjakan task, berikan session_id yang dikembalikan session_manage. Gunakan null hanya ketika tidak ada Logical Session aktif. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -348,7 +346,7 @@ Mencantumkan files dan directories secara lokal atau pada remote machine.
 | `recursive` | `boolean` | `false` |  |
 | `max_entries` | `integer` | `500` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Selalu berikan field ini. Gunakan `null` saat tidak ada logical Session aktif; setelah start/resume `session_manage`, berikan `active_run.run_id` yang dikembalikan dan terus gunakan selama reconnect transport MCP. Setelah resume/takeover eksplisit, gunakan nilai baru. |
+| `logical_session_id` | `string \| null` | required | Logical Session untuk pemanggilan tool ini. Saat mengerjakan task, berikan session_id yang dikembalikan session_manage. Gunakan null hanya ketika tidak ada Logical Session aktif. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -364,7 +362,7 @@ Mengembalikan compact directory tree secara lokal atau pada remote machine.
 | `depth` | `integer` | `3` |  |
 | `max_entries` | `integer` | `500` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Selalu berikan field ini. Gunakan `null` saat tidak ada logical Session aktif; setelah start/resume `session_manage`, berikan `active_run.run_id` yang dikembalikan dan terus gunakan selama reconnect transport MCP. Setelah resume/takeover eksplisit, gunakan nilai baru. |
+| `logical_session_id` | `string \| null` | required | Logical Session untuk pemanggilan tool ini. Saat mengerjakan task, berikan session_id yang dikembalikan session_manage. Gunakan null hanya ketika tidak ada Logical Session aktif. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -380,7 +378,7 @@ Mencari paths berdasarkan glob secara lokal atau pada remote machine.
 | `cwd` | `string` | `"."` |  |
 | `max_results` | `integer` | `500` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Selalu berikan field ini. Gunakan `null` saat tidak ada logical Session aktif; setelah start/resume `session_manage`, berikan `active_run.run_id` yang dikembalikan dan terus gunakan selama reconnect transport MCP. Setelah resume/takeover eksplisit, gunakan nilai baru. |
+| `logical_session_id` | `string \| null` | required | Logical Session untuk pemanggilan tool ini. Saat mengerjakan task, berikan session_id yang dikembalikan session_manage. Gunakan null hanya ketika tidak ada Logical Session aktif. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -399,7 +397,7 @@ Mencari isi files secara lokal atau pada remote machine.
 | `case_sensitive` | `boolean` | `true` |  |
 | `max_results` | `integer \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Selalu berikan field ini. Gunakan `null` saat tidak ada logical Session aktif; setelah start/resume `session_manage`, berikan `active_run.run_id` yang dikembalikan dan terus gunakan selama reconnect transport MCP. Setelah resume/takeover eksplisit, gunakan nilai baru. |
+| `logical_session_id` | `string \| null` | required | Logical Session untuk pemanggilan tool ini. Saat mengerjakan task, berikan session_id yang dikembalikan session_manage. Gunakan null hanya ketika tidak ada Logical Session aktif. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -417,7 +415,7 @@ Membaca satu file atau list files secara lokal atau pada remote machine.
 | `binary_preview` | `string \| null` | `null` |  |
 | `binary_preview_bytes` | `integer` | `256` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Selalu berikan field ini. Gunakan `null` saat tidak ada logical Session aktif; setelah start/resume `session_manage`, berikan `active_run.run_id` yang dikembalikan dan terus gunakan selama reconnect transport MCP. Setelah resume/takeover eksplisit, gunakan nilai baru. |
+| `logical_session_id` | `string \| null` | required | Logical Session untuk pemanggilan tool ini. Saat mengerjakan task, berikan session_id yang dikembalikan session_manage. Gunakan null hanya ketika tidak ada Logical Session aktif. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -431,7 +429,7 @@ Menampilkan PNG, JPEG, GIF, atau WebP sebagai native MCP image content secara lo
 |---|---|---|---|
 | `path` | `string` | required |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Selalu berikan field ini. Gunakan `null` saat tidak ada logical Session aktif; setelah start/resume `session_manage`, berikan `active_run.run_id` yang dikembalikan dan terus gunakan selama reconnect transport MCP. Setelah resume/takeover eksplisit, gunakan nilai baru. |
+| `logical_session_id` | `string \| null` | required | Logical Session untuk pemanggilan tool ini. Saat mengerjakan task, berikan session_id yang dikembalikan session_manage. Gunakan null hanya ketika tidak ada Logical Session aktif. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -449,7 +447,7 @@ Menulis UTF-8 text file secara lokal atau pada remote machine.
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Selalu berikan field ini. Gunakan `null` saat tidak ada logical Session aktif; setelah start/resume `session_manage`, berikan `active_run.run_id` yang dikembalikan dan terus gunakan selama reconnect transport MCP. Setelah resume/takeover eksplisit, gunakan nilai baru. |
+| `logical_session_id` | `string \| null` | required | Logical Session untuk pemanggilan tool ini. Saat mengerjakan task, berikan session_id yang dikembalikan session_manage. Gunakan null hanya ketika tidak ada Logical Session aktif. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -466,7 +464,7 @@ Menerapkan satu atau lebih exact-text edits pada local/remote file. Setiap edit 
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Selalu berikan field ini. Gunakan `null` saat tidak ada logical Session aktif; setelah start/resume `session_manage`, berikan `active_run.run_id` yang dikembalikan dan terus gunakan selama reconnect transport MCP. Setelah resume/takeover eksplisit, gunakan nilai baru. |
+| `logical_session_id` | `string \| null` | required | Logical Session untuk pemanggilan tool ini. Saat mengerjakan task, berikan session_id yang dikembalikan session_manage. Gunakan null hanya ketika tidak ada Logical Session aktif. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -483,7 +481,7 @@ Menghapus local/remote file atau directory. `recursive=false` menghapus files at
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Selalu berikan field ini. Gunakan `null` saat tidak ada logical Session aktif; setelah start/resume `session_manage`, berikan `active_run.run_id` yang dikembalikan dan terus gunakan selama reconnect transport MCP. Setelah resume/takeover eksplisit, gunakan nilai baru. |
+| `logical_session_id` | `string \| null` | required | Logical Session untuk pemanggilan tool ini. Saat mengerjakan task, berikan session_id yang dikembalikan session_manage. Gunakan null hanya ketika tidak ada Logical Session aktif. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -500,7 +498,7 @@ Memeriksa dan menerapkan unified diff atau file_patch envelope secara lokal atau
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Selalu berikan field ini. Gunakan `null` saat tidak ada logical Session aktif; setelah start/resume `session_manage`, berikan `active_run.run_id` yang dikembalikan dan terus gunakan selama reconnect transport MCP. Setelah resume/takeover eksplisit, gunakan nilai baru. |
+| `logical_session_id` | `string \| null` | required | Logical Session untuk pemanggilan tool ini. Saat mengerjakan task, berikan session_id yang dikembalikan session_manage. Gunakan null hanya ketika tidak ada Logical Session aktif. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -520,7 +518,7 @@ Memulai job terlacak yang menyalin file atau directory antara controller dan rem
 | `chunk_size` | `integer \| null` | `null` |  |
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Selalu berikan field ini. Gunakan `null` saat tidak ada logical Session aktif; setelah start/resume `session_manage`, berikan `active_run.run_id` yang dikembalikan dan terus gunakan selama reconnect transport MCP. Setelah resume/takeover eksplisit, gunakan nilai baru. |
+| `logical_session_id` | `string \| null` | required | Logical Session untuk pemanggilan tool ini. Saat mengerjakan task, berikan session_id yang dikembalikan session_manage. Gunakan null hanya ketika tidak ada Logical Session aktif. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -537,7 +535,7 @@ Membuat temporary browser-accessible URL untuk local file. Default response adal
 | `filename` | `string \| null` | `null` |  |
 | `max_downloads` | `integer \| null` | `null` |  |
 | `inline` | `boolean` | `false` |  |
-| `session_run_id` | `string \| null` | required | Selalu berikan field ini. Gunakan `null` saat tidak ada logical Session aktif; setelah start/resume `session_manage`, berikan `active_run.run_id` yang dikembalikan dan terus gunakan selama reconnect transport MCP. Setelah resume/takeover eksplisit, gunakan nilai baru. |
+| `logical_session_id` | `string \| null` | required | Logical Session untuk pemanggilan tool ini. Saat mengerjakan task, berikan session_id yang dikembalikan session_manage. Gunakan null hanya ketika tidak ada Logical Session aktif. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -548,7 +546,7 @@ Mencantumkan generated local file download URLs.
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
 | `include_expired` | `boolean` | `false` |  |
-| `session_run_id` | `string \| null` | required | Selalu berikan field ini. Gunakan `null` saat tidak ada logical Session aktif; setelah start/resume `session_manage`, berikan `active_run.run_id` yang dikembalikan dan terus gunakan selama reconnect transport MCP. Setelah resume/takeover eksplisit, gunakan nilai baru. |
+| `logical_session_id` | `string \| null` | required | Logical Session untuk pemanggilan tool ini. Saat mengerjakan task, berikan session_id yang dikembalikan session_manage. Gunakan null hanya ketika tidak ada Logical Session aktif. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -559,7 +557,7 @@ Mencabut generated local file download URL.
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
 | `token` | `string` | required |  |
-| `session_run_id` | `string \| null` | required | Selalu berikan field ini. Gunakan `null` saat tidak ada logical Session aktif; setelah start/resume `session_manage`, berikan `active_run.run_id` yang dikembalikan dan terus gunakan selama reconnect transport MCP. Setelah resume/takeover eksplisit, gunakan nilai baru. |
+| `logical_session_id` | `string \| null` | required | Logical Session untuk pemanggilan tool ini. Saat mengerjakan task, berikan session_id yang dikembalikan session_manage. Gunakan null hanya ketika tidak ada Logical Session aktif. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -585,7 +583,7 @@ Mendaftarkan, mencantumkan, mengambil, mengaktifkan, menonaktifkan, refresh, men
 | `refresh` | `boolean` | `true` |  |
 | `key` | `string \| null` | `null` |  |
 | `value` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Selalu berikan field ini. Gunakan `null` saat tidak ada logical Session aktif; setelah start/resume `session_manage`, berikan `active_run.run_id` yang dikembalikan dan terus gunakan selama reconnect transport MCP. Setelah resume/takeover eksplisit, gunakan nilai baru. |
+| `logical_session_id` | `string \| null` | required | Logical Session untuk pemanggilan tool ini. Saat mengerjakan task, berikan session_id yang dikembalikan session_manage. Gunakan null hanya ketika tidak ada Logical Session aktif. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -598,7 +596,7 @@ Mencari cached lightweight tool summaries dari enabled dynamic MCP servers. Dyna
 | `query` | `string` | `""` |  |
 | `server` | `string \| null` | `null` |  |
 | `limit` | `integer` | `20` |  |
-| `session_run_id` | `string \| null` | required | Selalu berikan field ini. Gunakan `null` saat tidak ada logical Session aktif; setelah start/resume `session_manage`, berikan `active_run.run_id` yang dikembalikan dan terus gunakan selama reconnect transport MCP. Setelah resume/takeover eksplisit, gunakan nilai baru. |
+| `logical_session_id` | `string \| null` | required | Logical Session untuk pemanggilan tool ini. Saat mengerjakan task, berikan session_id yang dikembalikan session_manage. Gunakan null hanya ketika tidak ada Logical Session aktif. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -609,7 +607,7 @@ Mengembalikan full cached schema dari dynamic MCP tool bernama `<server>:<tool>`
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
 | `name` | `string` | required |  |
-| `session_run_id` | `string \| null` | required | Selalu berikan field ini. Gunakan `null` saat tidak ada logical Session aktif; setelah start/resume `session_manage`, berikan `active_run.run_id` yang dikembalikan dan terus gunakan selama reconnect transport MCP. Setelah resume/takeover eksplisit, gunakan nilai baru. |
+| `logical_session_id` | `string \| null` | required | Logical Session untuk pemanggilan tool ini. Saat mengerjakan task, berikan session_id yang dikembalikan session_manage. Gunakan null hanya ketika tidak ada Logical Session aktif. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -622,7 +620,7 @@ Memanggil cached dynamic MCP tool bernama `<server>:<tool>`. Discover dengan `mc
 | `name` | `string` | required |  |
 | `arguments` | `object \| null` | `null` |  |
 | `timeout_s` | `integer \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Selalu berikan field ini. Gunakan `null` saat tidak ada logical Session aktif; setelah start/resume `session_manage`, berikan `active_run.run_id` yang dikembalikan dan terus gunakan selama reconnect transport MCP. Setelah resume/takeover eksplisit, gunakan nilai baru. |
+| `logical_session_id` | `string \| null` | required | Logical Session untuk pemanggilan tool ini. Saat mengerjakan task, berikan session_id yang dikembalikan session_manage. Gunakan null hanya ketika tidak ada Logical Session aktif. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -646,7 +644,7 @@ Memulai, mencantumkan, menutup, atau membersihkan persistent high-level browser 
 | `storage_state_path` | `string \| null` | `null` |  |
 | `save_storage_state_path` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Selalu berikan field ini. Gunakan `null` saat tidak ada logical Session aktif; setelah start/resume `session_manage`, berikan `active_run.run_id` yang dikembalikan dan terus gunakan selama reconnect transport MCP. Setelah resume/takeover eksplisit, gunakan nilai baru. |
+| `logical_session_id` | `string \| null` | required | Logical Session untuk pemanggilan tool ini. Saat mengerjakan task, berikan session_id yang dikembalikan session_manage. Gunakan null hanya ketika tidak ada Logical Session aktif. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -666,7 +664,7 @@ Capture persistent browser page: title, URL, bounded visible text, interactive e
 | `max_text_chars` | `integer` | `100000` |  |
 | `max_elements` | `integer` | `100` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Selalu berikan field ini. Gunakan `null` saat tidak ada logical Session aktif; setelah start/resume `session_manage`, berikan `active_run.run_id` yang dikembalikan dan terus gunakan selama reconnect transport MCP. Setelah resume/takeover eksplisit, gunakan nilai baru. |
+| `logical_session_id` | `string \| null` | required | Logical Session untuk pemanggilan tool ini. Saat mengerjakan task, berikan session_id yang dikembalikan session_manage. Gunakan null hanya ketika tidak ada Logical Session aktif. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -683,7 +681,7 @@ Menjalankan structured actions dalam persistent browser session. Mendukung navig
 | `page_id` | `string \| null` | `null` |  |
 | `timeout_ms` | `integer` | `30000` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Selalu berikan field ini. Gunakan `null` saat tidak ada logical Session aktif; setelah start/resume `session_manage`, berikan `active_run.run_id` yang dikembalikan dan terus gunakan selama reconnect transport MCP. Setelah resume/takeover eksplisit, gunakan nilai baru. |
+| `logical_session_id` | `string \| null` | required | Logical Session untuk pemanggilan tool ini. Saat mengerjakan task, berikan session_id yang dikembalikan session_manage. Gunakan null hanya ketika tidak ada Logical Session aktif. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -699,7 +697,7 @@ Menjalankan full Python Playwright script secara lokal atau pada remote machine.
 | `cwd` | `string` | `"."` |  |
 | `timeout_s` | `integer` | `60` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Selalu berikan field ini. Gunakan `null` saat tidak ada logical Session aktif; setelah start/resume `session_manage`, berikan `active_run.run_id` yang dikembalikan dan terus gunakan selama reconnect transport MCP. Setelah resume/takeover eksplisit, gunakan nilai baru. |
+| `logical_session_id` | `string \| null` | required | Logical Session untuk pemanggilan tool ini. Saat mengerjakan task, berikan session_id yang dikembalikan session_manage. Gunakan null hanya ketika tidak ada Logical Session aktif. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -719,7 +717,7 @@ Mengelola remote workers dengan action=invite, list, revoke, atau rename. invite
 | `ttl_s` | `integer \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
 | `new_name` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | Selalu berikan field ini. Gunakan `null` saat tidak ada logical Session aktif; setelah start/resume `session_manage`, berikan `active_run.run_id` yang dikembalikan dan terus gunakan selama reconnect transport MCP. Setelah resume/takeover eksplisit, gunakan nilai baru. |
+| `logical_session_id` | `string \| null` | required | Logical Session untuk pemanggilan tool ini. Saat mengerjakan task, berikan session_id yang dikembalikan session_manage. Gunakan null hanya ketika tidak ada Logical Session aktif. |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 

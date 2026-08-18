@@ -1,4 +1,4 @@
-<!-- i18n-source-sha256: 9e104b7a893f61206aea6ed76b78bb04387fc5349535c46ffafd8f2e4c9ccd3e -->
+<!-- i18n-source-sha256: 784cf8286b0aba665f54b0b14b7467047ff618447663c4b354d92176796c4001 -->
 # Tools reference
 
 यह page वास्तविक MCP tool schemas से बनती है। Public tool surface बदलने के बाद English reference update करने के लिए `python scripts/generate-tools-reference.py` चलाएँ।
@@ -24,13 +24,13 @@
 
 ### `workspace_open`
 
-Real-time human/agent collaboration के लिए interactive Live Workspace खोलती या reuse करती है। Active task के लिए एक बार call करें और बार-बार खोलने की बजाय self-reconnecting floating workspace reuse करें। Terminal output, files/diffs, jobs, remotes या audit activity workflow को materially बेहतर करे तब उपयोग करें।
+स्पष्ट रूप से दिए गए Logical Session को दिखाने वाला Live Workspace खोलें या पुनः उपयोग करें। session_manage से मिला सक्रिय session_id दें। Workspace कभी भी MCP transport से task identity का अनुमान नहीं लगाता; जब कोई Logical Session सक्रिय न हो तो स्पष्ट रूप से null दें।
 
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
+| `session_id` | `string \| null` | required |  |
 | `machine` | `string \| null` | `null` |  |
 | `cwd` | `string` | `"."` |  |
-| `session_run_id` | `string \| null` | required | यह field हमेशा दें। Active logical Session न होने पर `null` उपयोग करें; `session_manage` start/resume के बाद returned `active_run.run_id` दें और MCP transport reconnects के दौरान वही उपयोग करते रहें। Explicit resume/takeover के बाद नया value उपयोग करें। |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -45,7 +45,7 @@ Local या remote machine की version, workspace, auth, policy और envir
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | यह field हमेशा दें। Active logical Session न होने पर `null` उपयोग करें; `session_manage` start/resume के बाद returned `active_run.run_id` दें और MCP transport reconnects के दौरान वही उपयोग करते रहें। Explicit resume/takeover के बाद नया value उपयोग करें। |
+| `logical_session_id` | `string \| null` | required | इस tool call के लिए Logical Session। task पर काम करते समय session_manage से मिला session_id दें। null केवल तब दें जब कोई Logical Session सक्रिय न हो। |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -57,7 +57,7 @@ Installed Agent Skills को instructions load किए बिना सूच
 
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
-| `session_run_id` | `string \| null` | required | यह field हमेशा दें। Active logical Session न होने पर `null` उपयोग करें; `session_manage` start/resume के बाद returned `active_run.run_id` दें और MCP transport reconnects के दौरान वही उपयोग करते रहें। Explicit resume/takeover के बाद नया value उपयोग करें। |
+| `logical_session_id` | `string \| null` | required | इस tool call के लिए Logical Session। task पर काम करते समय session_manage से मिला session_id दें। null केवल तब दें जब कोई Logical Session सक्रिय न हो। |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -68,7 +68,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
 | `name` | `string` | required |  |
-| `session_run_id` | `string \| null` | required | यह field हमेशा दें। Active logical Session न होने पर `null` उपयोग करें; `session_manage` start/resume के बाद returned `active_run.run_id` दें और MCP transport reconnects के दौरान वही उपयोग करते रहें। Explicit resume/takeover के बाद नया value उपयोग करें। |
+| `logical_session_id` | `string \| null` | required | इस tool call के लिए Logical Session। task पर काम करते समय session_manage से मिला session_id दें। null केवल तब दें जब कोई Logical Session सक्रिय न हो। |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -80,7 +80,7 @@ Installed Skill की एक related text file पढ़ती है।
 |---|---|---|---|
 | `name` | `string` | required |  |
 | `path` | `string` | required |  |
-| `session_run_id` | `string \| null` | required | यह field हमेशा दें। Active logical Session न होने पर `null` उपयोग करें; `session_manage` start/resume के बाद returned `active_run.run_id` दें और MCP transport reconnects के दौरान वही उपयोग करते रहें। Explicit resume/takeover के बाद नया value उपयोग करें। |
+| `logical_session_id` | `string \| null` | required | इस tool call के लिए Logical Session। task पर काम करते समय session_manage से मिला session_id दें। null केवल तब दें जब कोई Logical Session सक्रिय न हो। |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -93,37 +93,35 @@ Commit या push से पहले local workspace text files में comm
 | `cwd` | `string` | `"."` |  |
 | `glob` | `string \| null` | `null` |  |
 | `max_results` | `integer` | `200` |  |
-| `session_run_id` | `string \| null` | required | यह field हमेशा दें। Active logical Session न होने पर `null` उपयोग करें; `session_manage` start/resume के बाद returned `active_run.run_id` दें और MCP transport reconnects के दौरान वही उपयोग करते रहें। Explicit resume/takeover के बाद नया value उपयोग करें। |
+| `logical_session_id` | `string \| null` | required | इस tool call के लिए Logical Session। task पर काम करते समय session_manage से मिला session_id दें। null केवल तब दें जब कोई Logical Session सक्रिय न हो। |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
 ### `session_manage`
 
-Machine और cwd से स्वतंत्र durable logical task Session manage करता है। Substantive tool work से पहले start करें, meaningful checkpoints पर progress report करें, और नए GPT/MCP run को काम सौंपने के लिए `session_id` से resume करें। `resume(takeover=true)` हमेशा नया agent run बनाता और पुराने को supersede करता है। Returned `active_run.run_id` को report/finish/cancel और आगे के tools में `session_run_id` के रूप में उपयोग करें। Actions: start, resume, get, report, list, finish, cancel, delete.
+एक durable Logical Session को प्रबंधित करें। start नई task बनाता है और उसका session_id लौटाता है। resume केवल उसी explicit session_id को जारी रखता है जो user ने दिया हो या इस conversation में पहले से मौजूद हो। start के अलावा हर action में session_id आवश्यक है। Actions: start, resume, get, report, finish, cancel, delete. report summary/findings/next/blockers/objective/label स्वीकार करता है; delete के लिए terminal Session आवश्यक है।
 
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
 | `action` | `string` | required |  |
 | `session_id` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | `null` |  |
 | `label` | `string \| null` | `null` |  |
 | `objective` | `string \| null` | `null` |  |
 | `summary` | `string \| null` | `null` |  |
 | `findings` | `array[string] \| null` | `null` |  |
 | `next` | `string \| null` | `null` |  |
 | `blockers` | `array[string] \| null` | `null` |  |
-| `takeover` | `boolean` | `false` |  |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
 ### `plan_manage`
 
-Current logical Session के optional Goal Plan को manage करता है। Active Plan 15 मिनट agent activity न होने पर automatic continuation सक्षम करता है, अधिकतम 10 attempts तक। पहले `session_manage` से Session start/resume करें; mutating actions में उसका `active_run.run_id` `session_run_id` के रूप में दें। Actions: start, get, update, block, resume, finish, cancel. start को objective और steps चाहिए; finish के लिए सभी steps completed या skipped होने चाहिए।
+Explicit Logical Session के optional Goal mode को प्रबंधित करें। active plan, agent activity न होने के 15 मिनट बाद automatic continuation सक्षम करता है, अधिकतम 10 attempts तक। session_id वही durable id होना चाहिए जो session_manage ने लौटाया है। Actions: start, get, update, block, resume, finish, cancel. start के लिए objective और steps आवश्यक हैं; finish के लिए सभी steps completed या skipped होने चाहिए।
 
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
 | `action` | `string` | required |  |
-| `session_run_id` | `string \| null` | `null` |  |
+| `session_id` | `string` | required |  |
 | `objective` | `string \| null` | `null` |  |
 | `steps` | `array[object] \| null` | `null` |  |
 | `step_id` | `string \| null` | `null` |  |
@@ -140,7 +138,7 @@ Recent local audit log entries पढ़ती है।
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
 | `lines` | `integer` | `100` |  |
-| `session_run_id` | `string \| null` | required | यह field हमेशा दें। Active logical Session न होने पर `null` उपयोग करें; `session_manage` start/resume के बाद returned `active_run.run_id` दें और MCP transport reconnects के दौरान वही उपयोग करते रहें। Explicit resume/takeover के बाद नया value उपयोग करें। |
+| `logical_session_id` | `string \| null` | required | इस tool call के लिए Logical Session। task पर काम करते समय session_manage से मिला session_id दें। null केवल तब दें जब कोई Logical Session सक्रिय न हो। |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -159,7 +157,7 @@ Local या remote machine पर एक non-interactive shell command चल�
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | यह field हमेशा दें। Active logical Session न होने पर `null` उपयोग करें; `session_manage` start/resume के बाद returned `active_run.run_id` दें और MCP transport reconnects के दौरान वही उपयोग करते रहें। Explicit resume/takeover के बाद नया value उपयोग करें। |
+| `logical_session_id` | `string \| null` | required | इस tool call के लिए Logical Session। task पर काम करते समय session_manage से मिला session_id दें। null केवल तब दें जब कोई Logical Session सक्रिय न हो। |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -177,7 +175,7 @@ Local या remote machine पर short Python script लिखकर चला
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | यह field हमेशा दें। Active logical Session न होने पर `null` उपयोग करें; `session_manage` start/resume के बाद returned `active_run.run_id` दें और MCP transport reconnects के दौरान वही उपयोग करते रहें। Explicit resume/takeover के बाद नया value उपयोग करें। |
+| `logical_session_id` | `string \| null` | required | इस tool call के लिए Logical Session। task पर काम करते समय session_manage से मिला session_id दें। null केवल तब दें जब कोई Logical Session सक्रिय न हो। |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -195,7 +193,7 @@ Local या remote machine पर persistent interactive shell शुरू क
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | यह field हमेशा दें। Active logical Session न होने पर `null` उपयोग करें; `session_manage` start/resume के बाद returned `active_run.run_id` दें और MCP transport reconnects के दौरान वही उपयोग करते रहें। Explicit resume/takeover के बाद नया value उपयोग करें। |
+| `logical_session_id` | `string \| null` | required | इस tool call के लिए Logical Session। task पर काम करते समय session_manage से मिला session_id दें। null केवल तब दें जब कोई Logical Session सक्रिय न हो। |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -211,7 +209,7 @@ Persistent local/remote shell session को input भेजती है।
 | `input_text` | `string` | required |  |
 | `enter` | `boolean` | `true` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | यह field हमेशा दें। Active logical Session न होने पर `null` उपयोग करें; `session_manage` start/resume के बाद returned `active_run.run_id` दें और MCP transport reconnects के दौरान वही उपयोग करते रहें। Explicit resume/takeover के बाद नया value उपयोग करें। |
+| `logical_session_id` | `string \| null` | required | इस tool call के लिए Logical Session। task पर काम करते समय session_manage से मिला session_id दें। null केवल तब दें जब कोई Logical Session सक्रिय न हो। |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -226,7 +224,7 @@ Persistent local/remote shell session का recent output पढ़ती ह�
 | `session_id` | `string` | required |  |
 | `lines` | `integer` | `200` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | यह field हमेशा दें। Active logical Session न होने पर `null` उपयोग करें; `session_manage` start/resume के बाद returned `active_run.run_id` दें और MCP transport reconnects के दौरान वही उपयोग करते रहें। Explicit resume/takeover के बाद नया value उपयोग करें। |
+| `logical_session_id` | `string \| null` | required | इस tool call के लिए Logical Session। task पर काम करते समय session_manage से मिला session_id दें। null केवल तब दें जब कोई Logical Session सक्रिय न हो। |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -240,7 +238,7 @@ Persistent local/remote shell session समाप्त करती है।
 |---|---|---|---|
 | `session_id` | `string` | required |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | यह field हमेशा दें। Active logical Session न होने पर `null` उपयोग करें; `session_manage` start/resume के बाद returned `active_run.run_id` दें और MCP transport reconnects के दौरान वही उपयोग करते रहें। Explicit resume/takeover के बाद नया value उपयोग करें। |
+| `logical_session_id` | `string \| null` | required | इस tool call के लिए Logical Session। task पर काम करते समय session_manage से मिला session_id दें। null केवल तब दें जब कोई Logical Session सक्रिय न हो। |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -253,7 +251,7 @@ Local या remote machine पर persistent shell sessions सूचीबद�
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | यह field हमेशा दें। Active logical Session न होने पर `null` उपयोग करें; `session_manage` start/resume के बाद returned `active_run.run_id` दें और MCP transport reconnects के दौरान वही उपयोग करते रहें। Explicit resume/takeover के बाद नया value उपयोग करें। |
+| `logical_session_id` | `string \| null` | required | इस tool call के लिए Logical Session। task पर काम करते समय session_manage से मिला session_id दें। null केवल तब दें जब कोई Logical Session सक्रिय न हो। |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -271,7 +269,7 @@ Local या remote machine पर tracked long-running job शुरू कर�
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | यह field हमेशा दें। Active logical Session न होने पर `null` उपयोग करें; `session_manage` start/resume के बाद returned `active_run.run_id` दें और MCP transport reconnects के दौरान वही उपयोग करते रहें। Explicit resume/takeover के बाद नया value उपयोग करें। |
+| `logical_session_id` | `string \| null` | required | इस tool call के लिए Logical Session। task पर काम करते समय session_manage से मिला session_id दें। null केवल तब दें जब कोई Logical Session सक्रिय न हो। |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -285,7 +283,7 @@ Local या remote machine पर tracked jobs सूचीबद्ध कर�
 |---|---|---|---|
 | `include_finished` | `boolean` | `true` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | यह field हमेशा दें। Active logical Session न होने पर `null` उपयोग करें; `session_manage` start/resume के बाद returned `active_run.run_id` दें और MCP transport reconnects के दौरान वही उपयोग करते रहें। Explicit resume/takeover के बाद नया value उपयोग करें। |
+| `logical_session_id` | `string \| null` | required | इस tool call के लिए Logical Session। task पर काम करते समय session_manage से मिला session_id दें। null केवल तब दें जब कोई Logical Session सक्रिय न हो। |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -300,7 +298,7 @@ Tracked local/remote job का recent output पढ़ती है।
 | `job_id` | `string` | required |  |
 | `lines` | `integer` | `200` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | यह field हमेशा दें। Active logical Session न होने पर `null` उपयोग करें; `session_manage` start/resume के बाद returned `active_run.run_id` दें और MCP transport reconnects के दौरान वही उपयोग करते रहें। Explicit resume/takeover के बाद नया value उपयोग करें। |
+| `logical_session_id` | `string \| null` | required | इस tool call के लिए Logical Session। task पर काम करते समय session_manage से मिला session_id दें। null केवल तब दें जब कोई Logical Session सक्रिय न हो। |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -314,7 +312,7 @@ Tracked local/remote job रोकती है।
 |---|---|---|---|
 | `job_id` | `string` | required |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | यह field हमेशा दें। Active logical Session न होने पर `null` उपयोग करें; `session_manage` start/resume के बाद returned `active_run.run_id` दें और MCP transport reconnects के दौरान वही उपयोग करते रहें। Explicit resume/takeover के बाद नया value उपयोग करें। |
+| `logical_session_id` | `string \| null` | required | इस tool call के लिए Logical Session। task पर काम करते समय session_manage से मिला session_id दें। null केवल तब दें जब कोई Logical Session सक्रिय न हो। |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -330,7 +328,7 @@ Stopped/exited tracked local/remote job पुनः शुरू करती �
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | यह field हमेशा दें। Active logical Session न होने पर `null` उपयोग करें; `session_manage` start/resume के बाद returned `active_run.run_id` दें और MCP transport reconnects के दौरान वही उपयोग करते रहें। Explicit resume/takeover के बाद नया value उपयोग करें। |
+| `logical_session_id` | `string \| null` | required | इस tool call के लिए Logical Session। task पर काम करते समय session_manage से मिला session_id दें। null केवल तब दें जब कोई Logical Session सक्रिय न हो। |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -348,7 +346,7 @@ Local या remote machine पर files और directories सूचीबद�
 | `recursive` | `boolean` | `false` |  |
 | `max_entries` | `integer` | `500` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | यह field हमेशा दें। Active logical Session न होने पर `null` उपयोग करें; `session_manage` start/resume के बाद returned `active_run.run_id` दें और MCP transport reconnects के दौरान वही उपयोग करते रहें। Explicit resume/takeover के बाद नया value उपयोग करें। |
+| `logical_session_id` | `string \| null` | required | इस tool call के लिए Logical Session। task पर काम करते समय session_manage से मिला session_id दें। null केवल तब दें जब कोई Logical Session सक्रिय न हो। |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -364,7 +362,7 @@ Local या remote machine पर compact directory tree लौटाती ह
 | `depth` | `integer` | `3` |  |
 | `max_entries` | `integer` | `500` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | यह field हमेशा दें। Active logical Session न होने पर `null` उपयोग करें; `session_manage` start/resume के बाद returned `active_run.run_id` दें और MCP transport reconnects के दौरान वही उपयोग करते रहें। Explicit resume/takeover के बाद नया value उपयोग करें। |
+| `logical_session_id` | `string \| null` | required | इस tool call के लिए Logical Session। task पर काम करते समय session_manage से मिला session_id दें। null केवल तब दें जब कोई Logical Session सक्रिय न हो। |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -380,7 +378,7 @@ Local या remote machine पर glob से paths खोजती है।
 | `cwd` | `string` | `"."` |  |
 | `max_results` | `integer` | `500` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | यह field हमेशा दें। Active logical Session न होने पर `null` उपयोग करें; `session_manage` start/resume के बाद returned `active_run.run_id` दें और MCP transport reconnects के दौरान वही उपयोग करते रहें। Explicit resume/takeover के बाद नया value उपयोग करें। |
+| `logical_session_id` | `string \| null` | required | इस tool call के लिए Logical Session। task पर काम करते समय session_manage से मिला session_id दें। null केवल तब दें जब कोई Logical Session सक्रिय न हो। |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -399,7 +397,7 @@ Local या remote machine पर file contents खोजती है।
 | `case_sensitive` | `boolean` | `true` |  |
 | `max_results` | `integer \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | यह field हमेशा दें। Active logical Session न होने पर `null` उपयोग करें; `session_manage` start/resume के बाद returned `active_run.run_id` दें और MCP transport reconnects के दौरान वही उपयोग करते रहें। Explicit resume/takeover के बाद नया value उपयोग करें। |
+| `logical_session_id` | `string \| null` | required | इस tool call के लिए Logical Session। task पर काम करते समय session_manage से मिला session_id दें। null केवल तब दें जब कोई Logical Session सक्रिय न हो। |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -417,7 +415,7 @@ Local या remote machine पर एक file या files की list पढ�
 | `binary_preview` | `string \| null` | `null` |  |
 | `binary_preview_bytes` | `integer` | `256` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | यह field हमेशा दें। Active logical Session न होने पर `null` उपयोग करें; `session_manage` start/resume के बाद returned `active_run.run_id` दें और MCP transport reconnects के दौरान वही उपयोग करते रहें। Explicit resume/takeover के बाद नया value उपयोग करें। |
+| `logical_session_id` | `string \| null` | required | इस tool call के लिए Logical Session। task पर काम करते समय session_manage से मिला session_id दें। null केवल तब दें जब कोई Logical Session सक्रिय न हो। |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -431,7 +429,7 @@ PNG, JPEG, GIF या WebP को native MCP image content के रूप म�
 |---|---|---|---|
 | `path` | `string` | required |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | यह field हमेशा दें। Active logical Session न होने पर `null` उपयोग करें; `session_manage` start/resume के बाद returned `active_run.run_id` दें और MCP transport reconnects के दौरान वही उपयोग करते रहें। Explicit resume/takeover के बाद नया value उपयोग करें। |
+| `logical_session_id` | `string \| null` | required | इस tool call के लिए Logical Session। task पर काम करते समय session_manage से मिला session_id दें। null केवल तब दें जब कोई Logical Session सक्रिय न हो। |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -449,7 +447,7 @@ Local या remote machine पर UTF-8 text file लिखती है।
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | यह field हमेशा दें। Active logical Session न होने पर `null` उपयोग करें; `session_manage` start/resume के बाद returned `active_run.run_id` दें और MCP transport reconnects के दौरान वही उपयोग करते रहें। Explicit resume/takeover के बाद नया value उपयोग करें। |
+| `logical_session_id` | `string \| null` | required | इस tool call के लिए Logical Session। task पर काम करते समय session_manage से मिला session_id दें। null केवल तब दें जब कोई Logical Session सक्रिय न हो। |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -466,7 +464,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | यह field हमेशा दें। Active logical Session न होने पर `null` उपयोग करें; `session_manage` start/resume के बाद returned `active_run.run_id` दें और MCP transport reconnects के दौरान वही उपयोग करते रहें। Explicit resume/takeover के बाद नया value उपयोग करें। |
+| `logical_session_id` | `string \| null` | required | इस tool call के लिए Logical Session। task पर काम करते समय session_manage से मिला session_id दें। null केवल तब दें जब कोई Logical Session सक्रिय न हो। |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -483,7 +481,7 @@ Local/remote file या directory हटाती है। `recursive=false` f
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | यह field हमेशा दें। Active logical Session न होने पर `null` उपयोग करें; `session_manage` start/resume के बाद returned `active_run.run_id` दें और MCP transport reconnects के दौरान वही उपयोग करते रहें। Explicit resume/takeover के बाद नया value उपयोग करें। |
+| `logical_session_id` | `string \| null` | required | इस tool call के लिए Logical Session। task पर काम करते समय session_manage से मिला session_id दें। null केवल तब दें जब कोई Logical Session सक्रिय न हो। |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -500,7 +498,7 @@ Local या remote unified diff या file_patch envelope check और apply �
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | यह field हमेशा दें। Active logical Session न होने पर `null` उपयोग करें; `session_manage` start/resume के बाद returned `active_run.run_id` दें और MCP transport reconnects के दौरान वही उपयोग करते रहें। Explicit resume/takeover के बाद नया value उपयोग करें। |
+| `logical_session_id` | `string \| null` | required | इस tool call के लिए Logical Session। task पर काम करते समय session_manage से मिला session_id दें। null केवल तब दें जब कोई Logical Session सक्रिय न हो। |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -520,7 +518,7 @@ Controller और remote machines के बीच file या directory copy �
 | `chunk_size` | `integer \| null` | `null` |  |
 | `purpose` | `string \| null` | `null` |  |
 | `explanation` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | यह field हमेशा दें। Active logical Session न होने पर `null` उपयोग करें; `session_manage` start/resume के बाद returned `active_run.run_id` दें और MCP transport reconnects के दौरान वही उपयोग करते रहें। Explicit resume/takeover के बाद नया value उपयोग करें। |
+| `logical_session_id` | `string \| null` | required | इस tool call के लिए Logical Session। task पर काम करते समय session_manage से मिला session_id दें। null केवल तब दें जब कोई Logical Session सक्रिय न हो। |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -537,7 +535,7 @@ Local file के लिए temporary browser-accessible URL बनाती ह
 | `filename` | `string \| null` | `null` |  |
 | `max_downloads` | `integer \| null` | `null` |  |
 | `inline` | `boolean` | `false` |  |
-| `session_run_id` | `string \| null` | required | यह field हमेशा दें। Active logical Session न होने पर `null` उपयोग करें; `session_manage` start/resume के बाद returned `active_run.run_id` दें और MCP transport reconnects के दौरान वही उपयोग करते रहें। Explicit resume/takeover के बाद नया value उपयोग करें। |
+| `logical_session_id` | `string \| null` | required | इस tool call के लिए Logical Session। task पर काम करते समय session_manage से मिला session_id दें। null केवल तब दें जब कोई Logical Session सक्रिय न हो। |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -548,7 +546,7 @@ Generated local file download URLs सूचीबद्ध करती है�
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
 | `include_expired` | `boolean` | `false` |  |
-| `session_run_id` | `string \| null` | required | यह field हमेशा दें। Active logical Session न होने पर `null` उपयोग करें; `session_manage` start/resume के बाद returned `active_run.run_id` दें और MCP transport reconnects के दौरान वही उपयोग करते रहें। Explicit resume/takeover के बाद नया value उपयोग करें। |
+| `logical_session_id` | `string \| null` | required | इस tool call के लिए Logical Session। task पर काम करते समय session_manage से मिला session_id दें। null केवल तब दें जब कोई Logical Session सक्रिय न हो। |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -559,7 +557,7 @@ Generated local file download URL revoke करती है।
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
 | `token` | `string` | required |  |
-| `session_run_id` | `string \| null` | required | यह field हमेशा दें। Active logical Session न होने पर `null` उपयोग करें; `session_manage` start/resume के बाद returned `active_run.run_id` दें और MCP transport reconnects के दौरान वही उपयोग करते रहें। Explicit resume/takeover के बाद नया value उपयोग करें। |
+| `logical_session_id` | `string \| null` | required | इस tool call के लिए Logical Session। task पर काम करते समय session_manage से मिला session_id दें। null केवल तब दें जब कोई Logical Session सक्रिय न हो। |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -585,7 +583,7 @@ Dynamic MCP servers के isolated environment/headers को register, list, g
 | `refresh` | `boolean` | `true` |  |
 | `key` | `string \| null` | `null` |  |
 | `value` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | यह field हमेशा दें। Active logical Session न होने पर `null` उपयोग करें; `session_manage` start/resume के बाद returned `active_run.run_id` दें और MCP transport reconnects के दौरान वही उपयोग करते रहें। Explicit resume/takeover के बाद नया value उपयोग करें। |
+| `logical_session_id` | `string \| null` | required | इस tool call के लिए Logical Session। task पर काम करते समय session_manage से मिला session_id दें। null केवल तब दें जब कोई Logical Session सक्रिय न हो। |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -598,7 +596,7 @@ Enabled dynamic MCP servers से cached lightweight tool summaries खोज�
 | `query` | `string` | `""` |  |
 | `server` | `string \| null` | `null` |  |
 | `limit` | `integer` | `20` |  |
-| `session_run_id` | `string \| null` | required | यह field हमेशा दें। Active logical Session न होने पर `null` उपयोग करें; `session_manage` start/resume के बाद returned `active_run.run_id` दें और MCP transport reconnects के दौरान वही उपयोग करते रहें। Explicit resume/takeover के बाद नया value उपयोग करें। |
+| `logical_session_id` | `string \| null` | required | इस tool call के लिए Logical Session। task पर काम करते समय session_manage से मिला session_id दें। null केवल तब दें जब कोई Logical Session सक्रिय न हो। |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -609,7 +607,7 @@ OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, 
 | Parameter | Type | Required/default | Description |
 |---|---|---|---|
 | `name` | `string` | required |  |
-| `session_run_id` | `string \| null` | required | यह field हमेशा दें। Active logical Session न होने पर `null` उपयोग करें; `session_manage` start/resume के बाद returned `active_run.run_id` दें और MCP transport reconnects के दौरान वही उपयोग करते रहें। Explicit resume/takeover के बाद नया value उपयोग करें। |
+| `logical_session_id` | `string \| null` | required | इस tool call के लिए Logical Session। task पर काम करते समय session_manage से मिला session_id दें। null केवल तब दें जब कोई Logical Session सक्रिय न हो। |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -622,7 +620,7 @@ Cached dynamic MCP tool `<server>:<tool>` call करती है। पहल�
 | `name` | `string` | required |  |
 | `arguments` | `object \| null` | `null` |  |
 | `timeout_s` | `integer \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | यह field हमेशा दें। Active logical Session न होने पर `null` उपयोग करें; `session_manage` start/resume के बाद returned `active_run.run_id` दें और MCP transport reconnects के दौरान वही उपयोग करते रहें। Explicit resume/takeover के बाद नया value उपयोग करें। |
+| `logical_session_id` | `string \| null` | required | इस tool call के लिए Logical Session। task पर काम करते समय session_manage से मिला session_id दें। null केवल तब दें जब कोई Logical Session सक्रिय न हो। |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -646,7 +644,7 @@ Local या remote persistent high-level browser sessions start, list, close �
 | `storage_state_path` | `string \| null` | `null` |  |
 | `save_storage_state_path` | `string \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | यह field हमेशा दें। Active logical Session न होने पर `null` उपयोग करें; `session_manage` start/resume के बाद returned `active_run.run_id` दें और MCP transport reconnects के दौरान वही उपयोग करते रहें। Explicit resume/takeover के बाद नया value उपयोग करें। |
+| `logical_session_id` | `string \| null` | required | इस tool call के लिए Logical Session। task पर काम करते समय session_manage से मिला session_id दें। null केवल तब दें जब कोई Logical Session सक्रिय न हो। |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -666,7 +664,7 @@ Persistent browser page capture करती है: title, URL, bounded visible
 | `max_text_chars` | `integer` | `100000` |  |
 | `max_elements` | `integer` | `100` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | यह field हमेशा दें। Active logical Session न होने पर `null` उपयोग करें; `session_manage` start/resume के बाद returned `active_run.run_id` दें और MCP transport reconnects के दौरान वही उपयोग करते रहें। Explicit resume/takeover के बाद नया value उपयोग करें। |
+| `logical_session_id` | `string \| null` | required | इस tool call के लिए Logical Session। task पर काम करते समय session_manage से मिला session_id दें। null केवल तब दें जब कोई Logical Session सक्रिय न हो। |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -683,7 +681,7 @@ Persistent browser session में structured actions चलाती है�
 | `page_id` | `string \| null` | `null` |  |
 | `timeout_ms` | `integer` | `30000` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | यह field हमेशा दें। Active logical Session न होने पर `null` उपयोग करें; `session_manage` start/resume के बाद returned `active_run.run_id` दें और MCP transport reconnects के दौरान वही उपयोग करते रहें। Explicit resume/takeover के बाद नया value उपयोग करें। |
+| `logical_session_id` | `string \| null` | required | इस tool call के लिए Logical Session। task पर काम करते समय session_manage से मिला session_id दें। null केवल तब दें जब कोई Logical Session सक्रिय न हो। |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -699,7 +697,7 @@ Local या remote machine पर full Python Playwright script चलाती
 | `cwd` | `string` | `"."` |  |
 | `timeout_s` | `integer` | `60` |  |
 | `machine` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | यह field हमेशा दें। Active logical Session न होने पर `null` उपयोग करें; `session_manage` start/resume के बाद returned `active_run.run_id` दें और MCP transport reconnects के दौरान वही उपयोग करते रहें। Explicit resume/takeover के बाद नया value उपयोग करें। |
+| `logical_session_id` | `string \| null` | required | इस tool call के लिए Logical Session। task पर काम करते समय session_manage से मिला session_id दें। null केवल तब दें जब कोई Logical Session सक्रिय न हो। |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 
@@ -719,7 +717,7 @@ action=invite, list, revoke या rename से remote workers manage करत
 | `ttl_s` | `integer \| null` | `null` |  |
 | `machine` | `string \| null` | `null` |  |
 | `new_name` | `string \| null` | `null` |  |
-| `session_run_id` | `string \| null` | required | यह field हमेशा दें। Active logical Session न होने पर `null` उपयोग करें; `session_manage` start/resume के बाद returned `active_run.run_id` दें और MCP transport reconnects के दौरान वही उपयोग करते रहें। Explicit resume/takeover के बाद नया value उपयोग करें। |
+| `logical_session_id` | `string \| null` | required | इस tool call के लिए Logical Session। task पर काम करते समय session_manage से मिला session_id दें। null केवल तब दें जब कोई Logical Session सक्रिय न हो। |
 
 OAuth scopes: `shell:read, shell:write, shell:execute, browser:use, file:share, remote:use`.
 

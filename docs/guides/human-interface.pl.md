@@ -1,4 +1,4 @@
-<!-- i18n-source-sha256: 8c683835be3adb3bf08d9d69b1731f61a39753bf255170fc663cf9456a0df54f -->
+<!-- i18n-source-sha256: 1cb4dc6f53744372145fad4e03a3d413bf105033e13844fea7684ea5f601d6ca -->
 # Interfejs użytkownika
 
 `local-shell-mcp` udostępnia dwa zgodne interfejsy człowieka nad tym samym service API, workspace, rejestrem persistent terminals, rejestrem remote workers i logiem audytu MCP:
@@ -18,24 +18,26 @@ local-shell-mcp --mode mcp
 
 ## ChatGPT Live Workspace
 
-Gdy ChatGPT może renderować MCP Apps, `workspace_open` otwiera pływający widok współpracy dla aktualnie podłączonej logical Session. Session posiada trwały stan zadania; Live Workspace jedynie prezentuje live activity i human controls. Dlatego reconnect aplikacji ani zmiana transportu ChatGPT/MCP nie resetuje Session.
+Gdy ChatGPT renderuje MCP Apps, `workspace_open(session_id=...)` otwiera pływający widok współpracy dla **jawnie wybranej Logical Session**. Session przechowuje trwały stan zadania — objective, progress, Plan i Activity — a Live Workspace jedynie prezentuje ten stan, aktywność na żywo i kontrolki dla człowieka. Nigdy nie wywnioskuje tożsamości zadania z transportu MCP.
 
-Typowy handoff wygląda tak:
+Typowy jawny handoff wygląda tak:
 
 ```text
 session_manage(action="start", objective=...)
         -> session_id
-... tool work + session_manage(action="report", ...) ...
-new agent run
-session_manage(action="resume", session_id=..., takeover=true)
-        -> inherited progress, Plan, and recent activity
-workspace_open()
-        -> reconnectable view of that Session
+... wywołania narzędzi z logical_session_id=session_id
+... session_manage(action="report", session_id=...) ...
+nowa rozmowa ChatGPT
+użytkownik przekazuje wcześniejszy session_id
+session_manage(action="resume", session_id=...)
+        -> istniejący progress, Plan i ostatnia Activity
+workspace_open(session_id=...)
+        -> widok tej samej Session
 ```
 
-`takeover=true` zastępuje starszy agent run, który nadal jest active. Każdy późniejszy tool call z zastąpionego runu jest odrzucany, dopóki ten agent jawnie ponownie nie wykona resume Session. Sessions nie są związane z machine ani working directory; zwykłe parametry narzędzi nadal wybierają targety local/remote i paths.
+`session_id` jest jedyną trwałą tożsamością zadania. Agent nie może listować, wnioskować ani automatycznie wybierać Session z innej rozmowy. Aby kontynuować pracę w nowej rozmowie, użytkownik jawnie przekazuje istniejący `session_id`. Agent powinien podawać aktywny `session_id` po start/resume, przy istotnych checkpointach postępu oraz przed zakończeniem turn, aby umożliwić ręczny handoff. Sessions nie są związane z machine ani working directory; zwykłe parametry narzędzi nadal wybierają lokalne/zdalne targets i paths.
 
-Opcjonalny Plan `plan_manage` włącza Goal mode dla Session. Jeśli Plan jest active i przez 15 minut nie ma agent activity, podłączony Live Workspace może poprosić ChatGPT o kontynuację. Continuation najpierw wykonuje resume tego samego `session_id` i jest ograniczona do 10 prób, zaakceptowanych lub odrzuconych. Plans blocked, completed i cancelled nie są automatycznie kontynuowane; active Plan, którego wszystkie steps są completed/skipped, pozostaje uprawniony do cleanup continuation, aby resumed agent mógł finish Plan. Human controls pause/resume/cancel aktualizują Plan należący do Session, a nie efemeryczny Live Workspace state.
+Opcjonalny Plan `plan_manage` włącza Goal mode dla Session. Jeśli Plan jest active i przez 15 minut nie ma agent activity, powiązany Live Workspace może poprosić ChatGPT o kontynuowanie. Continuation wznawia ten sam jawny `session_id` i jest ograniczona do 10 prób, zaakceptowanych lub odrzuconych. Plans blocked, completed i cancelled nie są automatycznie kontynuowane; active Plan, którego wszystkie steps są completed lub skipped, pozostaje dostępny dla końcowej continuation, aby wznowiony agent mógł zakończyć Plan. Kontrolki pause/resume/cancel obsługiwane przez człowieka aktualizują Plan należący do Session, a nie ulotny stan Live Workspace.
 
 ## Interfejs przeglądarkowy
 

@@ -1,4 +1,4 @@
-<!-- i18n-source-sha256: 8c683835be3adb3bf08d9d69b1731f61a39753bf255170fc663cf9456a0df54f -->
+<!-- i18n-source-sha256: 1cb4dc6f53744372145fad4e03a3d413bf105033e13844fea7684ea5f601d6ca -->
 # Interface humaine
 
 `local-shell-mcp` fournit deux interfaces humaines compatibles au-dessus de la même API de service, du même workspace, registre de terminaux persistants, registre de workers distants et journal d’audit MCP :
@@ -16,26 +16,28 @@ Démarrez `local-shell-mcp` normalement :
 local-shell-mcp --mode mcp
 ```
 
-## Live Workspace de ChatGPT
+## ChatGPT Live Workspace
 
-Lorsque ChatGPT peut rendre des MCP Apps, `workspace_open` ouvre une vue collaborative flottante pour la Session logique actuellement attachée. La Session possède l’état durable de la tâche ; Live Workspace ne fait que présenter l’activité en direct et les contrôles humains. Une reconnexion de l’app ou un changement de transport ChatGPT/MCP ne réinitialise donc pas la Session.
+Lorsque ChatGPT affiche les MCP Apps, `workspace_open(session_id=...)` ouvre une vue collaborative flottante de la **Logical Session explicitement sélectionnée**. La Session possède l’état durable de la tâche — objective, progress, Plan et Activity — tandis que Live Workspace ne fait qu’afficher cet état, l’activité en direct et les contrôles humains. Il ne déduit jamais l’identité de la tâche du transport MCP.
 
-Un handoff typique est :
+Un handoff explicite typique est le suivant :
 
 ```text
 session_manage(action="start", objective=...)
         -> session_id
-... tool work + session_manage(action="report", ...) ...
-new agent run
-session_manage(action="resume", session_id=..., takeover=true)
-        -> inherited progress, Plan, and recent activity
-workspace_open()
-        -> reconnectable view of that Session
+... appels d’outils avec logical_session_id=session_id
+... session_manage(action="report", session_id=...) ...
+nouvelle conversation ChatGPT
+l’utilisateur transmet le session_id précédent
+session_manage(action="resume", session_id=...)
+        -> progress, Plan et Activity récente existants
+workspace_open(session_id=...)
+        -> vue de la même Session
 ```
 
-`takeover=true` remplace un ancien agent run encore actif. Tout appel d’outil ultérieur venant du run remplacé est rejeté jusqu’à ce que cet agent reprenne explicitement la Session. Les Sessions ne sont liées ni à une machine ni à un working directory ; les paramètres ordinaires des outils continuent de choisir les cibles local/remote et les paths.
+`session_id` est l’unique identité durable de la tâche. Un agent ne doit ni lister, ni déduire, ni sélectionner automatiquement une Session provenant d’une autre conversation. Pour poursuivre le travail dans une nouvelle conversation, l’utilisateur transmet explicitement le `session_id` existant. L’agent doit indiquer le `session_id` actif après start/resume, aux checkpoints de progression significatifs et avant de terminer un turn afin de permettre un handoff manuel. Les Sessions ne sont liées ni à une machine ni à un working directory ; les paramètres ordinaires des outils continuent de choisir les cibles locales/distantes et les paths.
 
-Un Plan optionnel `plan_manage` active le Goal mode pour la Session. Si le Plan est actif et qu’aucune activité agent n’a lieu pendant 15 minutes, un Live Workspace attaché peut demander à ChatGPT de continuer. La continuation reprend d’abord le même `session_id` et est limitée à 10 tentatives, acceptées ou rejetées. Les Plans blocked, completed ou cancelled ne sont pas continués automatiquement ; un Plan actif dont tous les steps sont completed/skipped reste éligible à une continuation de nettoyage afin que l’agent repris puisse finish le Plan. Les contrôles humains pause/resume/cancel mettent à jour le Plan possédé par la Session, pas un état Live Workspace éphémère.
+Un Plan `plan_manage` facultatif active le Goal mode de la Session. Si le Plan est active et qu’aucune agent activity n’a lieu pendant 15 minutes, un Live Workspace associé peut demander à ChatGPT de continuer. La continuation reprend le même `session_id` explicite et est limitée à 10 tentatives, acceptées ou refusées. Les Plans blocked, completed et cancelled ne sont pas poursuivis automatiquement ; un Plan active dont tous les steps sont completed ou skipped reste éligible à une continuation de finalisation afin que l’agent repris puisse terminer le Plan. Les contrôles humains pause/resume/cancel modifient le Plan détenu par la Session plutôt qu’un état éphémère du Live Workspace.
 
 ## Interface navigateur
 

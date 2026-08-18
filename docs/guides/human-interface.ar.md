@@ -1,4 +1,4 @@
-<!-- i18n-source-sha256: 8c683835be3adb3bf08d9d69b1731f61a39753bf255170fc663cf9456a0df54f -->
+<!-- i18n-source-sha256: 1cb4dc6f53744372145fad4e03a3d413bf105033e13844fea7684ea5f601d6ca -->
 # واجهة المستخدم
 
 يوفر `local-shell-mcp` واجهتين بشريتين متوافقتين فوق نفس service API وworkspace وسجل persistent terminals وسجل remote workers وسجل تدقيق MCP:
@@ -18,24 +18,26 @@ local-shell-mcp --mode mcp
 
 ## ChatGPT Live Workspace
 
-عندما يستطيع ChatGPT عرض MCP Apps، يفتح `workspace_open` عرضًا تعاونيًا عائمًا للـ logical Session المرتبطة حاليًا. تمتلك Session حالة المهمة الدائمة؛ أما Live Workspace فيعرض النشاط المباشر وتحكم الإنسان فقط. لذلك لا تؤدي إعادة اتصال التطبيق أو تغيير ChatGPT/MCP transport إلى إعادة ضبط Session.
+عندما يعرض ChatGPT تطبيقات MCP، يفتح `workspace_open(session_id=...)` عرضًا تعاونيًا عائمًا للـ **Logical Session المحددة صراحةً**. تحتفظ الـ Session بحالة المهمة الدائمة—objective وprogress وPlan وActivity—بينما يعرض Live Workspace هذه الحالة والنشاط المباشر وأدوات التحكم البشرية فقط. ولا يستنتج هوية المهمة من MCP transport.
 
-يكون handoff النموذجي كما يلي:
+يكون التسليم الصريح المعتاد كالتالي:
 
 ```text
 session_manage(action="start", objective=...)
         -> session_id
-... tool work + session_manage(action="report", ...) ...
-new agent run
-session_manage(action="resume", session_id=..., takeover=true)
-        -> inherited progress, Plan, and recent activity
-workspace_open()
-        -> reconnectable view of that Session
+... استدعاءات الأدوات مع logical_session_id=session_id
+... session_manage(action="report", session_id=...) ...
+محادثة ChatGPT جديدة
+يمرر المستخدم session_id السابقة
+session_manage(action="resume", session_id=...)
+        -> progress وPlan وActivity الحديثة الموجودة
+workspace_open(session_id=...)
+        -> عرض الـ Session نفسها
 ```
 
-يستبدل `takeover=true` agent run أقدم ما زال active. تُرفض أي tool call لاحقة من run المستبدلة حتى ينفذ ذلك agent resume صريحًا للـ Session مرة أخرى. لا ترتبط Sessions بـ machine أو working directory؛ وتظل معلمات الأدوات العادية هي التي تختار أهداف local/remote والمسارات.
+`session_id` هي هوية المهمة الدائمة الوحيدة. لا يجوز للـ Agent سرد Session من محادثة أخرى أو استنتاجها أو اختيارها تلقائيًا. لمتابعة العمل في محادثة جديدة، يمرر المستخدم `session_id` الموجودة صراحةً. ينبغي للـ Agent إبلاغ المستخدم بالـ `session_id` النشطة بعد start/resume، وعند نقاط التقدم المهمة، وقبل إنهاء turn حتى يمكن تسليمها يدويًا. لا ترتبط Sessions بـ machine أو working directory؛ وتستمر معاملات الأدوات العادية في اختيار الأهداف local/remote والمسارات.
 
-يُمكّن Plan اختياري عبر `plan_manage` وضع Goal للـ Session. إذا كان Plan active ولم يحدث agent activity لمدة 15 دقيقة، يمكن لـ Live Workspace المرتبط طلب المتابعة من ChatGPT. تبدأ continuation بتنفيذ resume لنفس `session_id` وتُحد بحد أقصى 10 محاولات سواء قُبلت أو رُفضت. لا تستمر Plans ذات الحالات blocked أو completed أو cancelled تلقائيًا؛ وتبقى Plan active التي أصبحت كل steps فيها completed/skipped مؤهلة لـ cleanup continuation كي يتمكن agent المستأنف من finish Plan. تحدّث أدوات تحكم الإنسان pause/resume/cancel الـ Plan المملوكة للـ Session، لا حالة Live Workspace المؤقتة.
+يتيح Plan اختياري عبر `plan_manage` وضع Goal mode للـ Session. إذا كان Plan في حالة active ولم يحدث agent activity لمدة 15 دقيقة، يمكن لـ Live Workspace المرتبط أن يطلب من ChatGPT المتابعة. تستأنف continuation نفس `session_id` الصريحة وتقتصر على 10 محاولات سواء قُبلت أم رُفضت. لا تتم متابعة Plans ذات الحالات blocked أو completed أو cancelled تلقائيًا؛ ويظل Plan active الذي أصبحت كل steps فيه completed أو skipped مؤهلًا لـ continuation ختامية حتى يتمكن الـ Agent المستأنف من إنهاء Plan. تعدّل أدوات pause/resume/cancel البشرية الـ Plan المملوك للـ Session بدلًا من حالة Live Workspace المؤقتة.
 
 ## واجهة المتصفح
 
