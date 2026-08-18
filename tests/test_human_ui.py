@@ -38,6 +38,7 @@ from local_shell_mcp.human_ui import (
 )
 from local_shell_mcp.oauth import issue_access_token, public_base_url
 from local_shell_mcp.remote import execute_worker_tool
+from local_shell_mcp.session_runtime import get_session_runtime_manager
 from local_shell_mcp.settings import get_settings
 from local_shell_mcp.ui_security import UI_LOCAL_TOKEN_HEADER, get_or_create_ui_local_token
 
@@ -50,6 +51,47 @@ def _configure(tmp_path, monkeypatch, *, auth_mode: str = "none") -> None:
     monkeypatch.setenv("LOCAL_SHELL_MCP_REMOTE_ENABLED", "false")
     get_settings.cache_clear()
 
+
+
+def test_webui_logical_sessions_api_is_principal_scoped(tmp_path, monkeypatch):
+    _configure(tmp_path, monkeypatch)
+    manager = get_session_runtime_manager()
+    own = manager.manage(
+        "anonymous", action="start", label="WebUI task", objective="Inspect durable work"
+    )
+    manager.manage(
+        "anonymous",
+        action="report",
+        session_id=own["session_id"],
+        summary="Checkpoint saved",
+        findings=["Session is visible"],
+        next="Open details",
+        blockers=[],
+    )
+    private = manager.manage("other-user", action="start", label="Private task")
+    client = TestClient(build_http_app())
+
+    listing = client.get("/api/ui/logical-sessions")
+
+    assert listing.status_code == 200
+    payload = listing.json()["data"]
+    assert payload["counts"] == {"active": 1, "completed": 0, "cancelled": 0, "total": 1}
+    assert [item["session_id"] for item in payload["sessions"]] == [own["session_id"]]
+    assert payload["sessions"][0]["recent_activity"] == []
+
+    detail = client.get(
+        "/api/ui/logical-sessions/detail", params={"session_id": own["session_id"]}
+    )
+    assert detail.status_code == 200
+    detail_payload = detail.json()["data"]
+    assert detail_payload["progress"]["summary"] == "Checkpoint saved"
+    assert detail_payload["progress"]["findings"] == ["Session is visible"]
+    assert detail_payload["recent_activity"][-1]["type"] == "session.reported"
+
+    hidden = client.get(
+        "/api/ui/logical-sessions/detail", params={"session_id": private["session_id"]}
+    )
+    assert hidden.status_code == 404
 
 
 def test_webui_shell_uses_available_viewport_without_fixed_desktop_cap():
@@ -69,7 +111,7 @@ def test_webui_visual_regressions_are_packaged():
 
     assert "<strong>TUI</strong><small>Terminal interface</small>" in html
     assert "<strong>OpenTUI</strong><small>Terminal interface</small>" not in html
-    for view in ("files", "terminals", "remotes", "audit"):
+    for view in ("files", "terminals", "sessions", "remotes", "audit"):
         assert f'data-view="{view}"' in html
     assert "Open TUI" in html
     assert "scrollbar-width:none!important" in css
@@ -92,6 +134,8 @@ def test_webui_visual_regressions_are_packaged():
     assert "/ws/shell" in script
     assert "Persistent terminal" in script
     assert "Loading terminals" in script
+    assert "Logical Sessions" in script
+    assert "/logical-sessions" in script
     assert "row-menu" not in script
 
 

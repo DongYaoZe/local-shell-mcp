@@ -67,6 +67,28 @@ def test_session_progress_and_plan_survive_manager_reload(tmp_path):
     assert any(event["type"] == "session.reported" for event in state["recent_activity"])
 
 
+def test_session_list_is_principal_scoped_sorted_and_compact(tmp_path):
+    manager = SessionRuntimeManager(tmp_path / ".state")
+    older = manager.manage("user", action="start", label="Older")
+    other = manager.manage("other-user", action="start", label="Private")
+    time.sleep(0.001)
+    newer = manager.manage("user", action="start", label="Newer")
+    manager.manage("user", action="report", session_id=newer["session_id"], summary="checkpoint")
+
+    sessions = manager.list_sessions(subject="user")
+
+    assert [item["session_id"] for item in sessions] == [newer["session_id"], older["session_id"]]
+    assert all(item["session_id"] != other["session_id"] for item in sessions)
+    assert all(item["recent_activity"] == [] for item in sessions)
+    assert manager.get(newer["session_id"], subject="user")["recent_activity"]
+
+
+def test_session_list_requires_subject(tmp_path):
+    manager = SessionRuntimeManager(tmp_path / ".state")
+    with pytest.raises(ValueError, match="subject is required"):
+        manager.list_sessions(subject="")
+
+
 def test_session_public_state_exposes_full_rolling_activity_window(tmp_path):
     state_dir = tmp_path / ".state"
     manager = SessionRuntimeManager(state_dir)

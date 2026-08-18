@@ -199,6 +199,44 @@ button.summary-card { cursor: pointer; }
 .invite-command { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 8px; align-items: center; padding: 10px; color: #dbe5f3; background: #0c1422; border: 1px solid #29364c; border-radius: 8px; }
 .invite-command code { overflow: auto; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; word-break: break-all; }
 
+/* Logical Sessions — durable task list + checkpoint/plan/activity detail */
+.sessions-summary { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 9px; }
+.sessions-filter { display: flex; align-items: center; gap: 7px; color: #7f8898; font-size: 12px; font-weight: 650; }
+.sessions-filter select { height: 32px; min-width: 140px; padding: 0 9px; color: #394255; background: #fff; border: 1px solid #dfe3eb; border-radius: 8px; outline: none; font-size: 12px; }
+.sessions-filter select:focus { border-color: #8f84ed; box-shadow: 0 0 0 3px rgba(103,89,231,.1); }
+.sessions-layout { display: grid; grid-template-columns: minmax(520px,.95fr) minmax(470px,1.05fr); gap: 10px; min-height: 590px; height: calc(100vh - 260px); }
+.sessions-list-panel, .sessions-detail-panel { display: grid; grid-template-rows: auto minmax(0,1fr); }
+.sessions-list, .session-detail { min-height: 0; overflow: auto; }
+.sessions-table th:nth-child(1) { width: 15%; }
+.sessions-table th:nth-child(2) { width: 27%; }
+.sessions-table th:nth-child(3) { width: 40%; }
+.sessions-table th:nth-child(4) { width: 18%; }
+.session-detail { display: grid; align-content: start; gap: 10px; padding: 11px; background: #f8f9fb; }
+.session-identity, .session-section, .session-detail-block { min-width: 0; background: #fff; border: 1px solid #e7e9ef; border-radius: 9px; }
+.session-identity { padding: 10px 12px; }
+.session-section { padding: 11px; }
+.session-section-title { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 9px; }
+.session-section-title h4, .session-detail-block h4 { margin: 0; color: #30384a; font-size: 13px; }
+.session-section-title > span:not(.status-chip) { color: #929aaa; font-size: 11px; }
+.session-progress-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
+.session-detail-block { padding: 10px; }
+.session-detail-block p { margin: 7px 0 0; color: #667085; line-height: 1.5; white-space: pre-wrap; }
+.session-detail-block ul { display: grid; gap: 5px; margin: 7px 0 0; padding-left: 18px; color: #667085; line-height: 1.45; }
+.session-muted { color: #a1a8b5; }
+.session-plan-objective, .session-note { margin: 0 0 9px; color: #667085; line-height: 1.5; }
+.session-note { padding: 7px 9px; color: #7a6d3a; background: #fff9e8; border-radius: 7px; }
+.session-plan-steps { display: grid; gap: 6px; }
+.session-plan-steps article { display: grid; grid-template-columns: auto minmax(0,1fr); align-items: start; gap: 8px; padding: 8px; background: #fafbfc; border: 1px solid #eceef2; border-radius: 8px; }
+.session-plan-steps strong { display: block; color: #465063; font-size: 12px; line-height: 1.4; }
+.session-plan-steps small { display: block; margin-top: 3px; color: #929aaa; font-size: 11px; }
+.session-activity { display: grid; gap: 7px; }
+.session-activity-row { display: grid; gap: 6px; padding: 8px; background: #fafbfc; border: 1px solid #eceef2; border-radius: 8px; }
+.session-activity-row > div { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.session-activity-row strong { color: #465063; font-size: 12px; }
+.session-activity-row span { color: #929aaa; font-size: 11px; }
+.session-activity-row pre { max-height: 160px; margin: 0; padding: 7px; overflow: auto; color: #687184; background: #f4f5f7; border-radius: 6px; font: 11px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; word-break: break-word; }
+.native-empty.compact { min-height: 70px; }
+
 /* Audit — mirrors TUI filter/list/result/input structure */
 .audit-filter-strip { display: grid; grid-template-columns: repeat(4,minmax(130px,1fr)) auto; gap: 8px; align-items: stretch; }
 .audit-filter-strip > label { display: grid; grid-template-rows: auto 1fr; gap: 4px; min-height: 54px; padding: 7px 9px; color: #8a93a3; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--shadow); font-size: 12px; font-weight: 700; text-transform: uppercase; }
@@ -275,6 +313,9 @@ button.summary-card { cursor: pointer; }
   .remotes-layout { grid-template-columns: 1fr; height: auto; }
   .remote-list-panel { min-height: 430px; }
   .remote-detail-panel { min-height: 400px; }
+  .sessions-layout { grid-template-columns: 1fr; height: auto; }
+  .sessions-list-panel { min-height: 430px; }
+  .sessions-detail-panel { min-height: 520px; }
 }
 
 @media (max-width: 850px) {
@@ -299,7 +340,7 @@ button.summary-card { cursor: pointer; }
   .native-page { gap: 8px; }
   .native-toolbar { border-radius: 9px; }
   .native-button { height: 31px; padding: 0 8px; }
-  .remote-summary { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  .remote-summary, .sessions-summary { grid-template-columns: repeat(2,minmax(0,1fr)); }
   .summary-card { min-height: 50px; }
   .files-layout { min-height: 0; }
   .file-list-panel, .file-preview-panel { min-height: 370px; }
@@ -322,6 +363,12 @@ button.summary-card { cursor: pointer; }
   .remote-table th:nth-child(1) { width: 24%; }
   .remote-table th:nth-child(2) { width: 42%; }
   .remote-table th:nth-child(5) { width: 34%; }
+  .sessions-table th:nth-child(3), .sessions-table td:nth-child(3) { display: none; }
+  .sessions-table th:nth-child(1) { width: 25%; }
+  .sessions-table th:nth-child(2) { width: 50%; }
+  .sessions-table th:nth-child(4) { width: 25%; }
+  .session-progress-grid { grid-template-columns: 1fr; }
+  .session-activity-row > div { align-items: flex-start; flex-direction: column; }
   .audit-list-panel { height: 390px; }
   .audit-table th:nth-child(2), .audit-table td:nth-child(2), .audit-table th:nth-child(3), .audit-table td:nth-child(3) { display: none; }
   .audit-table th:nth-child(1) { width: 23%; }
@@ -338,7 +385,7 @@ button.summary-card { cursor: pointer; }
   .native-toolbar, .native-panel, .summary-card { background: #141d2b; border-color: #293449; }
   .native-toolbar strong, .native-panel > header h3, .native-table td strong, .file-name, .image-preview-meta strong, .directory-preview-head strong, .summary-card strong, .remote-title h2, .audit-detail-card h4 { color: #edf2fa; }
   .native-panel > header, .remote-title, .image-preview-meta, .directory-preview-head { border-color: #293449; }
-  .native-toolbar select, .native-toolbar input, .audit-filter-strip select, .audit-advanced input, .native-field input, .native-field textarea { color: #dce5f2; background: #0f1724; border-color: #344158; }
+  .native-toolbar select, .native-toolbar input, .sessions-filter select, .audit-filter-strip select, .audit-advanced input, .native-field input, .native-field textarea { color: #dce5f2; background: #0f1724; border-color: #344158; }
   .native-button { color: #c4cedd; background: #1b2637; border-color: #344158; }
   .native-button:hover:not(:disabled) { color: #dedaff; background: #29264b; border-color: #6f66bd; }
   .native-button.danger { color: #ffb5bd; background: #351e25; border-color: #60313a; }
@@ -360,6 +407,13 @@ button.summary-card { cursor: pointer; }
   .status-chip.error { color: #ffb5bd; background: #351e25; }
   .status-chip.warning { color: #edc37d; background: #352916; }
   .status-chip.neutral { color: #a7b2c2; background: #202a3b; }
+  .session-detail { background: #101722; }
+  .session-identity, .session-section, .session-detail-block { background: #141d2b; border-color: #293449; }
+  .session-section-title h4, .session-detail-block h4, .session-plan-steps strong, .session-activity-row strong { color: #edf2fa; }
+  .session-detail-block p, .session-detail-block ul, .session-plan-objective { color: #b7c1d1; }
+  .session-plan-steps article, .session-activity-row { background: #111927; border-color: #293449; }
+  .session-activity-row pre { color: #b7c2d2; background: #0f1724; }
+  .session-note { color: #edc37d; background: #352916; }
   .audit-filter-strip > label { color: #8996a9; background: #141d2b; border-color: #293449; }
   .audit-advanced, .audit-details { background: #101722; border-color: #293449; }
   .audit-detail-card { background: #141d2b; border-color: #293449; }

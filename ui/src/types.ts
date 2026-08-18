@@ -98,6 +98,65 @@ export interface AuditPayload {
   total_matched: number
 }
 
+export interface LogicalSessionProgress {
+  summary?: string | null
+  findings: string[]
+  next?: string | null
+  blockers: string[]
+  updated_at?: number | null
+}
+
+export interface LogicalSessionPlanStep {
+  id: string
+  text: string
+  status: string
+  note?: string | null
+}
+
+export interface LogicalSessionPlan {
+  plan_id: string
+  objective: string
+  status: string
+  steps: LogicalSessionPlanStep[]
+  created_at: number
+  updated_at: number
+  note?: string | null
+  continuation_count?: number
+  continuation_pending?: boolean
+  continuation_due?: boolean
+  in_flight_calls?: number
+}
+
+export interface LogicalSessionActivity {
+  seq: number
+  ts: number
+  type: string
+  actor: string
+  data: Record<string, unknown>
+}
+
+export interface LogicalSession {
+  session_id: string
+  label?: string | null
+  objective?: string | null
+  status: string
+  created_at: number
+  updated_at: number
+  progress: LogicalSessionProgress
+  plan?: LogicalSessionPlan | null
+  recent_activity: LogicalSessionActivity[]
+}
+
+export interface LogicalSessionsPayload {
+  sessions: LogicalSession[]
+  counts: {
+    active: number
+    completed: number
+    cancelled: number
+    total: number
+  }
+}
+
 export interface InvitePayload {
   code: string
   name?: string | null
