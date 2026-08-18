@@ -84,6 +84,21 @@ describe("live workspace utilities", () => {
     expect(css).toContain(".timeline-purpose { color: var(--ls-text-2); font-family: var(--ls-font); font-weight: 500; }")
   })
 
+  test("wide workspaces merge navigation into the top header", async () => {
+    const source = await Bun.file(new URL("./live-workspace.ts", import.meta.url)).text()
+    const css = await Bun.file(new URL("./live-workspace.css", import.meta.url)).text()
+    const shellStart = source.indexOf("function shell")
+    const shellEnd = source.indexOf("function tabButton", shellStart)
+    const shellSource = source.slice(shellStart, shellEnd)
+    const headerStart = shellSource.indexOf('<header class="topbar">')
+    const headerEnd = shellSource.indexOf("</header>", headerStart)
+    const headerSource = shellSource.slice(headerStart, headerEnd)
+    expect(headerSource).toContain('<nav class="tabs" aria-label="Workspace views">')
+    expect(css).toContain(".topbar { flex: 0 0 auto; min-height: 42px; display: grid; grid-template-columns: minmax(0, 1fr) auto auto;")
+    expect(css).toContain("@media (max-width: 900px)")
+    expect(css).toContain(".tabs { grid-column: 1 / -1; grid-row: 2;")
+  })
+
   test("workspace tabs distinguish initial loading from confirmed empty states", async () => {
     const source = await Bun.file(new URL("./live-workspace.ts", import.meta.url)).text()
     const css = await Bun.file(new URL("./live-workspace.css", import.meta.url)).text()

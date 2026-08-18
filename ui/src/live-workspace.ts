@@ -239,13 +239,13 @@ function shell(): void {
             <div class="subtitle" data-role="subtitle">local-shell-mcp · real-time execution</div>
           </div>
         </div>
+        <nav class="tabs" aria-label="Workspace views">
+          ${tabButton("activity", "Activity")}${tabButton("terminal", "Terminal")}${tabButton("files", "Files")}${tabButton("jobs", "Jobs")}${tabButton("remotes", "Remotes")}${tabButton("audit", "Audit")}
+        </nav>
         <div class="top-actions">
           <button class="icon-button" data-action="expand" title="Fullscreen">${icon("expand")}</button>
         </div>
       </header>
-      <nav class="tabs" aria-label="Workspace views">
-        ${tabButton("activity", "Activity")}${tabButton("terminal", "Terminal")}${tabButton("files", "Files")}${tabButton("jobs", "Jobs")}${tabButton("remotes", "Remotes")}${tabButton("audit", "Audit")}
-      </nav>
       <main class="workspace-main" data-role="main"><div class="loading"><span></span>${escapeHtml(connectionMessage)}</div></main>
       <div class="toast-stack" data-role="toasts" aria-live="polite"></div>
       <dialog class="live-dialog" data-role="dialog"><form method="dialog"><h3 data-role="dialog-title"></h3><p data-role="dialog-description"></p><label data-role="dialog-label"><span></span><input data-role="dialog-input"/></label><menu><button value="cancel">Cancel</button><button class="primary" value="confirm">Continue</button></menu></form></dialog>

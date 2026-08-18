@@ -67,7 +67,7 @@ svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width:
 .live-shell { position: relative; display: flex; flex-direction: column; width: 100%; height: 100%; min-height: 0; background: linear-gradient(180deg, color-mix(in srgb, var(--ls-bg-elevated) 88%, transparent), var(--ls-bg)); border: 1px solid var(--ls-border); border-radius: var(--ls-radius); overflow: hidden; box-shadow: var(--ls-shadow); }
 :root[data-display-mode="fullscreen"] .live-shell { border: 0; border-radius: 0; box-shadow: none; }
 
-.topbar { flex: 0 0 auto; min-height: 42px; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 5px 9px; border-bottom: 1px solid var(--ls-border); background: color-mix(in srgb, var(--ls-bg-elevated) 92%, transparent); backdrop-filter: blur(18px); }
+.topbar { flex: 0 0 auto; min-height: 42px; display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 10px; padding: 5px 9px; border-bottom: 1px solid var(--ls-border); background: color-mix(in srgb, var(--ls-bg-elevated) 92%, transparent); backdrop-filter: blur(18px); }
 .brand-area { display: flex; align-items: center; min-width: 0; gap: 8px; }
 .brand-mark { display: grid; place-items: center; width: 24px; height: 24px; flex: 0 0 24px; overflow: hidden; border-radius: 6px; box-shadow: 0 4px 14px color-mix(in srgb, var(--ls-accent) 18%, transparent); }
 .brand-mark .brand-logo { display: block; width: 24px; height: 24px; }
@@ -78,13 +78,13 @@ svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width:
 .subtitle { color: var(--ls-text-3); font-size: 10.5px; margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .connection-dot { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 999px; background: var(--ls-warning); box-shadow: 0 0 0 3px var(--ls-warning-soft); }
 .connection-dot.connected { background: var(--ls-success); box-shadow: 0 0 0 3px var(--ls-success-soft); }
-.top-actions { display: flex; align-items: center; gap: 7px; }
+.top-actions { display: flex; align-items: center; justify-self: end; gap: 7px; }
 .icon-button { display: grid; place-items: center; width: 29px; height: 29px; border: 1px solid var(--ls-border); border-radius: 7px; background: transparent; color: var(--ls-text-2); cursor: pointer; }
 .icon-button:hover { background: var(--ls-panel-strong); color: var(--ls-text); border-color: var(--ls-border-strong); }
 .icon-button.active { background: var(--ls-accent-soft); color: var(--ls-accent-strong); border-color: color-mix(in srgb, var(--ls-accent) 35%, var(--ls-border)); }
 .icon-button svg { width: 15px; height: 15px; }
 
-.tabs { flex: 0 0 auto; display: flex; align-items: center; gap: 2px; min-height: 32px; padding: 2px 6px; border-bottom: 1px solid var(--ls-border); overflow-x: auto; scrollbar-width: none; }
+.tabs { min-width: 0; display: flex; align-items: center; justify-content: flex-end; gap: 2px; min-height: 30px; padding: 0; overflow-x: auto; scrollbar-width: none; }
 .tabs::-webkit-scrollbar { display: none; }
 .tabs button { display: inline-flex; align-items: center; gap: 5px; min-height: 26px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; color: var(--ls-text-3); font-size: 10.5px; white-space: nowrap; cursor: pointer; }
 .tabs button svg { width: 14px; height: 14px; }
@@ -274,6 +274,12 @@ select:hover, input:hover, textarea:hover { border-color: var(--ls-border-strong
 .live-dialog menu { display: flex; justify-content: flex-end; gap: 6px; margin: 14px 0 0; padding: 0; }
 .live-dialog menu button { min-height: 30px; padding: 0 10px; border: 1px solid var(--ls-border); border-radius: 7px; background: var(--ls-panel-strong); color: var(--ls-text-2); font-size: 10px; }
 .live-dialog menu button.primary { background: var(--ls-accent); border-color: transparent; color: #fff; }
+
+@media (max-width: 900px) {
+  .topbar { grid-template-columns: minmax(0, 1fr) auto; row-gap: 4px; padding-bottom: 0; }
+  .tabs { grid-column: 1 / -1; grid-row: 2; justify-content: flex-start; min-height: 32px; margin: 0 -9px; padding: 2px 6px; }
+  .top-actions { grid-column: 2; grid-row: 1; }
+}
 
 @media (max-width: 760px) {
   .live-shell { min-height: 0; }
