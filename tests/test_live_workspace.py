@@ -1178,7 +1178,7 @@ async def test_mcp_app_resource_and_render_result_hide_live_token(tmp_path, monk
     assert render_tool.meta["openai/outputTemplate"] == LIVE_RESOURCE_VERSIONED_URI
     assert render_tool.meta["openai/widgetAccessible"] is True
     assert "live_id" not in render_tool.inputSchema["properties"]
-    assert render_tool.meta["securitySchemes"][0]["scopes"] == list(ALL_OAUTH_SCOPES)
+    assert render_tool.meta["securitySchemes"] == [{"type": "noauth"}]
     assert render_tool.outputSchema["title"] == "LiveChannelResult"
     assert "session_run_id" in render_tool.inputSchema["properties"]
     assert "session_run_id" in render_tool.inputSchema["required"]

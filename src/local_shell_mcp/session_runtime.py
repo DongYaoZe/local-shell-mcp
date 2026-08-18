@@ -811,6 +811,18 @@ class SessionRuntimeManager:
         normalized_action = str(action).strip().lower()
         with self._lock:
             self._ensure_loaded_locked()
+            if (
+                session_run_id is not None
+                and normalized_action not in {"start", "resume", "list", "delete"}
+            ):
+                attachment = self._attachments.get(session_key)
+                if attachment is None or attachment[1] != session_run_id:
+                    self._recover_attachment_by_run_id_locked(
+                        session_key,
+                        session_run_id,
+                        subject=subject,
+                        refresh_shared=not _state_locks_held,
+                    )
             if not _state_locks_held and normalized_action not in {"get", "list"}:
                 attachment = self._attachments.get(session_key)
                 lock_ids: list[str] = []
@@ -1300,14 +1312,30 @@ class SessionRuntimeManager:
         """
         with self._lock:
             self._ensure_loaded_locked()
-            if session_key not in self._attachments:
+            attachment = self._attachments.get(session_key)
+            if attachment is None or (
+                expected_run_id is not None and attachment[1] != expected_run_id
+            ):
                 if expected_run_id is None:
                     return None
-                logical = self._find_active_run_locked(
-                    expected_run_id,
-                    subject=subject,
-                    refresh_shared=not _state_lock_held,
-                )
+                try:
+                    logical = self._find_active_run_locked(
+                        expected_run_id,
+                        subject=subject,
+                        refresh_shared=not _state_lock_held,
+                    )
+                except RuntimeError:
+                    if attachment is not None:
+                        # Preserve the existing stale-token fencing error when the
+                        # supplied run id is no longer active. Cross-transport
+                        # recovery is only valid for another current active run.
+                        self._assert_attachment_locked(
+                            session_key,
+                            expected_run_id=expected_run_id,
+                            require_run_token=require_run_token,
+                            subject=subject,
+                        )
+                    raise
                 if not _state_lock_held and self._uses_shared_state_backend():
                     with self._shared_session_locks_locked([logical.session_id]):
                         self._refresh_session_locked(logical.session_id)
@@ -1616,6 +1644,16 @@ class SessionRuntimeManager:
             self._ensure_loaded_locked()
             normalized_action = action.strip().lower()
             attachment = self._attachments.get(session_key)
+            if session_run_id is not None and (
+                attachment is None or attachment[1] != session_run_id
+            ):
+                self._recover_attachment_by_run_id_locked(
+                    session_key,
+                    session_run_id,
+                    subject=self._authenticated_subject(),
+                    refresh_shared=not _state_lock_held,
+                )
+                attachment = self._attachments.get(session_key)
             if (
                 not _state_lock_held
                 and normalized_action != "get"

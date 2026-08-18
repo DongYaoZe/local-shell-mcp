@@ -365,7 +365,8 @@ async def test_python_and_playwright_tools_honor_configured_interpreter_and_clea
 
     monkeypatch.setattr(tools_module, "run_shell", fake_run)
     await tools_module._run_python("print('x')")
-    assert commands[-1].startswith("'/opt/custom python' ")
+    expected_python = tools_module.quote_shell_executable("/opt/custom python")
+    assert commands[-1].startswith(f"{expected_python} ")
 
     stale = tmp_path / "screenshots" / "page.png"
     stale.parent.mkdir()
