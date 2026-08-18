@@ -320,6 +320,51 @@ def test_wallpaper_rejects_invalid_bing_url(tmp_path, monkeypatch):
     assert response.status_code == 204
 
 
+def test_wallpaper_rejects_oversized_bing_image(tmp_path, monkeypatch):
+    _configure(tmp_path, monkeypatch)
+    monkeypatch.setenv("LOCAL_SHELL_MCP_UI_WALLPAPER", "bing")
+    get_settings.cache_clear()
+
+    class HugeContent:
+        def __len__(self):
+            return 20_000_001
+
+    class Response:
+        def __init__(self, *, payload=None, content=b""):
+            self._payload = payload
+            self.content = content
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self._payload
+
+    class Client:
+        def __init__(self):
+            self.calls = 0
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def get(self, url, **kwargs):  # noqa: ARG002
+            self.calls += 1
+            if self.calls == 1:
+                return Response(payload={"images": [{"url": "/wallpaper.jpg"}]})
+            return Response(content=HugeContent())
+
+    import httpx
+
+    monkeypatch.setattr(httpx, "AsyncClient", lambda *args, **kwargs: Client())
+
+    response = asyncio.run(ui.ui_wallpaper(_request()))
+
+    assert response.status_code == 204
+
+
 def test_asset_cache_and_wallpaper_branches(tmp_path, monkeypatch):
     _configure(tmp_path, monkeypatch)
     assets = tmp_path / "assets"
