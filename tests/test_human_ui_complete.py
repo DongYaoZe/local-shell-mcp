@@ -279,6 +279,14 @@ def test_index_assets_principal_and_basic_helpers(tmp_path, monkeypatch):
         ui._split_tui_command("   ", windows=False)
 
 
+def test_wallpaper_disabled_returns_no_content(tmp_path, monkeypatch):
+    _configure(tmp_path, monkeypatch)
+
+    response = asyncio.run(ui.ui_wallpaper(_request()))
+
+    assert response.status_code == 204
+
+
 def test_asset_cache_and_wallpaper_branches(tmp_path, monkeypatch):
     _configure(tmp_path, monkeypatch)
     assets = tmp_path / "assets"
