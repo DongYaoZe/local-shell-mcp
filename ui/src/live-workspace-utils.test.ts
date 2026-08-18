@@ -435,4 +435,44 @@ describe("live workspace utilities", () => {
 
     expect(result?.structuredContent).toEqual({ live_id: "live-2" })
   })
+
+  test("ChatGPT compatibility globals prefer current toolOutput over stale metadata content", () => {
+    const result = toolResultFromOpenAiGlobals({
+      toolOutput: {
+        live_id: "live-current",
+        session_id: "s_current",
+        machine: "local",
+        cwd: "/workspace/local-shell-mcp",
+      },
+      toolResponseMetadata: {
+        mcp_tool_result: {
+          _meta: {
+            "local-shell-mcp/live": {
+              token: "current-or-refreshable-token",
+              apiBase: "https://lsm.example.test",
+            },
+          },
+          structuredContent: {
+            live_id: "live-stale",
+            session_id: "s_stale",
+            machine: "local",
+            cwd: "/workspace/capos",
+          },
+        },
+      },
+    })
+
+    expect(result?.structuredContent).toEqual({
+      live_id: "live-current",
+      session_id: "s_current",
+      machine: "local",
+      cwd: "/workspace/local-shell-mcp",
+    })
+    expect(result?._meta).toEqual({
+      "local-shell-mcp/live": {
+        token: "current-or-refreshable-token",
+        apiBase: "https://lsm.example.test",
+      },
+    })
+  })
 })

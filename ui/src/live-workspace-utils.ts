@@ -25,10 +25,10 @@ export function toolResultFromOpenAiGlobals(globals: unknown): JsonRecord | null
   const envelope = jsonRecord(metadata.mcp_tool_result) || jsonRecord(metadata.call_tool_result)
   if (!envelope) return null
 
-  if (jsonRecord(envelope.structuredContent)) return envelope
-
   const structuredContent = jsonRecord(openai.toolOutput)
-  return structuredContent ? { ...envelope, structuredContent } : envelope
+  if (structuredContent) return { ...envelope, structuredContent }
+
+  return envelope
 }
 
 export function escapeHtml(value: unknown): string {
