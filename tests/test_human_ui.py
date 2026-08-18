@@ -17,6 +17,7 @@ from starlette.routing import Route
 from starlette.websockets import WebSocket
 
 import local_shell_mcp.audit as audit_module
+from local_shell_mcp import __version__
 from local_shell_mcp.audit import audit, query_audit, suppress_audit
 from local_shell_mcp.auth import Principal
 from local_shell_mcp.http_app import build_http_app
@@ -32,6 +33,7 @@ from local_shell_mcp.human_ui import (
     _parent_path,
     _path_name,
     _split_tui_command,
+    _ui_index_html,
     _UnixPtyProcess,
     _validate_tui_api_base,
     _WindowsPtyProcess,
@@ -283,6 +285,17 @@ def test_webui_shell_uses_available_viewport_without_fixed_desktop_cap():
     assert "1540px" not in css
     assert "960px" not in css
     assert ":fullscreen .shell" in css
+
+
+def test_webui_index_versions_static_assets_for_cache_busting(tmp_path, monkeypatch):
+    _configure(tmp_path, monkeypatch)
+
+    html = _ui_index_html()
+
+    assert f"/ui/assets/web.css?v={__version__}" in html
+    assert f"/ui/assets/web.js?v={__version__}" in html
+    assert f"/ui/assets/logo.svg?v={__version__}" in html
+    assert "__LSM_UI_ASSET_VERSION__" not in html
 
 
 def test_webui_visual_regressions_are_packaged():
