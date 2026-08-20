@@ -162,6 +162,65 @@ def test_install_without_existing_config_rejects_incomplete_bundle(tmp_path, mon
         installer.install_or_update_runtime("https://s")
 
 
+
+def test_worker_dependency_bootstrap_is_noop_off_windows(tmp_path, monkeypatch):
+    _configure(tmp_path, monkeypatch)
+    monkeypatch.setattr(installer.sys, "platform", "linux")
+    monkeypatch.setattr(installer.sys, "path", list(installer.sys.path))
+    monkeypatch.setenv("PYTHONPATH", "")
+
+    result = installer.ensure_platform_dependencies()
+
+    assert result["available"] is True
+    assert result["installed"] is False
+
+
+def test_windows_worker_reuses_existing_pywinpty(tmp_path, monkeypatch):
+    _configure(tmp_path, monkeypatch)
+    monkeypatch.setattr(installer.sys, "platform", "win32")
+    monkeypatch.setattr(installer.sys, "path", list(installer.sys.path))
+    monkeypatch.setenv("PYTHONPATH", "")
+    monkeypatch.setattr(
+        installer.importlib,
+        "import_module",
+        lambda name: SimpleNamespace(PtyProcess=object()),
+    )
+    monkeypatch.setattr(
+        installer.subprocess,
+        "run",
+        lambda *args, **kwargs: pytest.fail("pip should not run when pywinpty is available"),
+    )
+
+    result = installer.ensure_platform_dependencies()
+
+    assert result["available"] is True
+    assert result["installed"] is False
+
+
+def test_windows_worker_reports_failed_import_after_successful_pip(tmp_path, monkeypatch):
+    _configure(tmp_path, monkeypatch)
+    monkeypatch.setattr(installer.sys, "platform", "win32")
+    monkeypatch.setattr(installer.sys, "path", list(installer.sys.path))
+    monkeypatch.setenv("PYTHONPATH", "")
+    def missing(name):
+        raise ImportError(name)
+
+    monkeypatch.setattr(installer.importlib, "import_module", missing)
+    monkeypatch.setattr(installer.importlib, "invalidate_caches", lambda: None)
+    monkeypatch.setattr(
+        installer.subprocess,
+        "run",
+        lambda argv, **kwargs: subprocess.CompletedProcess(
+            argv, 0, stdout="installed but unavailable", stderr=""
+        ),
+    )
+
+    result = installer.ensure_platform_dependencies()
+
+    assert result["available"] is False
+    assert result["installed"] is False
+    assert result["error"] == "installed but unavailable"
+
 def test_windows_worker_installs_pywinpty_into_state_dir(tmp_path, monkeypatch):
     _configure(tmp_path, monkeypatch)
     monkeypatch.setattr(installer.sys, "platform", "win32")
