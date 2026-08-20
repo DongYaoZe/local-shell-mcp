@@ -9,6 +9,17 @@ from local_shell_mcp.errors import ShellExecutableNotFoundError
 from local_shell_mcp.settings import get_settings
 
 
+def test_conpty_availability_retries_import_after_worker_dependency_bootstrap(monkeypatch):
+    monkeypatch.setattr(conpty_ops, "winpty", None)
+    monkeypatch.setattr(
+        conpty_ops.importlib,
+        "import_module",
+        lambda name: SimpleNamespace(PtyProcess=object()),
+    )
+
+    assert conpty_ops.is_available() is True
+
+
 class FakePtyProcess:
     spawned = []
 
@@ -138,7 +149,7 @@ async def test_windows_falls_back_to_native_when_pywinpty_unavailable(tmp_path, 
     monkeypatch.setenv("LOCAL_SHELL_MCP_WORKSPACE_ROOT", str(tmp_path))
     get_settings.cache_clear()
     monkeypatch.setattr(ops, "_use_native_persistent_shell_backend", lambda: True)
-    monkeypatch.setattr(conpty_ops, "winpty", None)
+    monkeypatch.setattr(conpty_ops, "is_available", lambda: False)
 
     async def fake_native_start(cwd=".", name=None, command=None):
         return {"session_id": name, "cwd": cwd, "command": command or "shell", "backend": "native"}

@@ -15,14 +15,19 @@ async def test_native_persistent_shell_backend_roundtrip(tmp_path, monkeypatch):
     monkeypatch.setattr(ops.conpty_ops, "is_available", lambda: False)
     session = await ops.start_shell(name="native-roundtrip")
     try:
-        await ops.send_shell(session["session_id"], "echo native-ok")
+        command = (
+            "Write-Output ('native-' + 'executed')"
+            if ops.sys.platform == "win32"
+            else "printf 'native-%s\\n' executed"
+        )
+        await ops.send_shell(session["session_id"], command)
         data = {"output": ""}
         for _ in range(100):
             data = await ops.read_shell(session["session_id"], lines=20)
-            if "native-ok" in data["output"]:
+            if "native-executed" in data["output"]:
                 break
             await asyncio.sleep(0.05)
-        assert "native-ok" in data["output"]
+        assert "native-executed" in data["output"]
         assert session["backend"] == "native"
         listed = await ops.list_shells()
         assert any(item["session_id"] == session["session_id"] for item in listed["sessions"])

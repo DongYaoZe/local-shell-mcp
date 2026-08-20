@@ -431,9 +431,15 @@ def test_conpty_helpers_cleanup_start_send_read_kill_and_list(tmp_path, monkeypa
         assert conpty._shell_command_args("x")[1:] == suffix
     assert isinstance(conpty._spawn_command(["a", "b c"]), str)
 
-    monkeypatch.setattr(conpty, "winpty", None)
-    with pytest.raises(RuntimeError, match="not available"):
-        conpty._spawn_pty(["x"], tmp_path)
+    with monkeypatch.context() as patch:
+        patch.setattr(conpty, "winpty", None)
+
+        def missing_winpty(name):
+            raise ImportError(name)
+
+        patch.setattr(conpty.importlib, "import_module", missing_winpty)
+        with pytest.raises(RuntimeError, match="not available"):
+            conpty._spawn_pty(["x"], tmp_path)
 
     class Process:
         def __init__(self, alive=True):
