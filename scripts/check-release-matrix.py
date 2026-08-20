@@ -8,6 +8,7 @@ import yaml
 REPO = Path(__file__).resolve().parents[1]
 RELEASE = REPO / ".github" / "workflows" / "release.yml"
 DOCKERFILE = REPO / "Dockerfile"
+SNAPCRAFT = REPO / "snap" / "snapcraft.yaml"
 VSCODE_PACKAGE_SCRIPT = REPO / "vscode-extension" / "scripts" / "package-vsix.cjs"
 EXPECTED_BINARY_ARTIFACTS = {
     "linux-x86_64",
@@ -17,6 +18,7 @@ EXPECTED_BINARY_ARTIFACTS = {
     "windows-x86_64",
 }
 EXPECTED_PYTHON_ARTIFACTS = EXPECTED_BINARY_ARTIFACTS
+EXPECTED_SNAP_ARTIFACTS = {"linux-x86_64", "linux-aarch64"}
 EXPECTED_DOCKER_PLATFORMS = {"linux/amd64", "linux/arm64"}
 
 
@@ -116,6 +118,39 @@ def main() -> int:
         print("Release binary artifact upload must include extensionless raw executables.")
         return 1
 
+    snapcraft = yaml.safe_load(SNAPCRAFT.read_text(encoding="utf-8"))
+    if snapcraft.get("name") != "local-shell-mcp" or snapcraft.get("confinement") != "classic":
+        print("Snapcraft package must publish local-shell-mcp with classic confinement.")
+        return 1
+    snap_apps = snapcraft.get("apps", {})
+    if snap_apps.get("local-shell-mcp", {}).get("command") != "bin/local-shell-mcp":
+        print("Snapcraft package must expose the local-shell-mcp command.")
+        return 1
+    snap_part = snapcraft.get("parts", {}).get("local-shell-mcp", {})
+    if snap_part.get("organize", {}).get("local-shell-mcp") != "bin/local-shell-mcp":
+        print("Snapcraft package must stage the release binary at bin/local-shell-mcp.")
+        return 1
+    snap_job = jobs.get("build-snap", {})
+    snap_artifacts = matrix_values(snap_job, "artifact")
+    missing_snap = sorted(EXPECTED_SNAP_ARTIFACTS - snap_artifacts)
+    extra_snap = sorted(snap_artifacts - EXPECTED_SNAP_ARTIFACTS)
+    if missing_snap or extra_snap:
+        print("Release Snap matrix mismatch.")
+        print(f"missing: {missing_snap}")
+        print(f"extra: {extra_snap}")
+        return 1
+    snap_stage_script = step_script(snap_job, "Stage Snap payload")
+    if "needs.validate-release.outputs.version" not in release_text or "snap/version" not in snap_stage_script:
+        print("Snap builds must derive their version from validated release metadata.")
+        return 1
+    snap_build_step = next(
+        (step for step in snap_job.get("steps", []) if step.get("name") == "Build Snap package"),
+        {},
+    )
+    if snap_build_step.get("uses") != "snapcore/action-build@v1":
+        print("Release workflow must build snaps with snapcore/action-build@v1.")
+        return 1
+
     github_release_job = jobs.get("github-release", {})
     checksum_script = step_script(github_release_job, "Generate SHA256 checksums")
     if "find . -maxdepth 1 -type f" not in checksum_script:
@@ -132,6 +167,25 @@ def main() -> int:
         return 1
     if "--tag next" not in npm_publish_script or "--tag latest" not in npm_publish_script:
         print("npm prereleases must use a non-latest dist-tag while stable releases update latest.")
+        return 1
+
+    snap_publish_job = jobs.get("publish-snap", {})
+    if snap_publish_job.get("environment") != "snapcraft":
+        print("Snap Store publication must run from the protected snapcraft environment.")
+        return 1
+    if "SNAP_PUBLISH_ENABLED" not in str(snap_publish_job.get("if") or ""):
+        print("Snap Store publication must be controlled by SNAP_PUBLISH_ENABLED.")
+        return 1
+    snap_publish_step = next(
+        (step for step in snap_publish_job.get("steps", []) if step.get("name") == "Publish Snap package"),
+        {},
+    )
+    if snap_publish_step.get("uses") != "snapcore/action-publish@v1":
+        print("Release workflow must publish snaps with snapcore/action-publish@v1.")
+        return 1
+    snap_release = str(snap_publish_step.get("with", {}).get("release", ""))
+    if "edge" not in snap_release or "stable" not in snap_release or "prerelease" not in snap_release:
+        print("Snap prereleases must publish to edge while stable releases publish to stable.")
         return 1
 
     pypi_job = jobs.get("publish-pypi", {})

@@ -1,0 +1,31 @@
+name: local-shell-mcp
+base: core24
+adopt-info: local-shell-mcp
+summary: ChatGPT-ready MCP control plane for local development
+description: |
+  local-shell-mcp gives ChatGPT and other MCP clients controlled access to
+  shell commands, files, browser automation, durable sessions, and optional
+  remote workers.
+
+  This package uses classic confinement because its purpose is to operate on
+  user-selected host workspaces and invoke host development tools.
+grade: stable
+confinement: classic
+license: MIT
+website: https://fwerkor.github.io/local-shell-mcp/
+source-code: https://github.com/fwerkor/local-shell-mcp
+issues: https://github.com/fwerkor/local-shell-mcp/issues
+
+apps:
+  local-shell-mcp:
+    command: bin/local-shell-mcp
+
+parts:
+  local-shell-mcp:
+    plugin: dump
+    source: snap/payload
+    organize:
+      local-shell-mcp: bin/local-shell-mcp
+    override-build: |
+      craftctl default
+      craftctl set version="$(cat "$CRAFT_PROJECT_DIR/snap/version")"
