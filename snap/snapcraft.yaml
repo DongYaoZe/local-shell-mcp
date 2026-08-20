@@ -24,6 +24,8 @@ parts:
   local-shell-mcp:
     plugin: dump
     source: snap/payload
+    organize:
+      local-shell-mcp: bin/local-shell-mcp
     override-build: |
       craftctl default
       craftctl set version="$(cat "$CRAFT_PROJECT_DIR/snap/version")"

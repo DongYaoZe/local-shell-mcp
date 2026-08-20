@@ -126,6 +126,10 @@ def main() -> int:
     if snap_apps.get("local-shell-mcp", {}).get("command") != "bin/local-shell-mcp":
         print("Snapcraft package must expose the local-shell-mcp command.")
         return 1
+    snap_part = snapcraft.get("parts", {}).get("local-shell-mcp", {})
+    if snap_part.get("organize", {}).get("local-shell-mcp") != "bin/local-shell-mcp":
+        print("Snapcraft package must stage the release binary at bin/local-shell-mcp.")
+        return 1
     snap_job = jobs.get("build-snap", {})
     snap_artifacts = matrix_values(snap_job, "artifact")
     missing_snap = sorted(EXPECTED_SNAP_ARTIFACTS - snap_artifacts)
