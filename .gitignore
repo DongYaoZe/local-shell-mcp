@@ -22,3 +22,8 @@ dist/
 
 src/local_shell_mcp/helpers/*/tmux
 src/local_shell_mcp/ui_runtime/
+
+# Snap release staging
+snap/payload/
+snap/version
+*.snap
