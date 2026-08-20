@@ -3,7 +3,9 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import subprocess
 import tarfile
+from types import SimpleNamespace
 
 import pytest
 
@@ -158,3 +160,60 @@ def test_install_without_existing_config_rejects_incomplete_bundle(tmp_path, mon
     monkeypatch.setattr(installer, "_fetch_bytes", lambda *args, **kwargs: payload)
     with pytest.raises(ValueError, match="does not contain local_shell_mcp"):
         installer.install_or_update_runtime("https://s")
+
+
+def test_windows_worker_installs_pywinpty_into_state_dir(tmp_path, monkeypatch):
+    _configure(tmp_path, monkeypatch)
+    monkeypatch.setattr(installer.sys, "platform", "win32")
+    monkeypatch.setattr(installer.sys, "path", list(installer.sys.path))
+    monkeypatch.setenv("PYTHONPATH", "")
+    imports = []
+
+    def import_module(name):
+        imports.append(name)
+        if len(imports) == 1:
+            raise ImportError(name)
+        return SimpleNamespace(PtyProcess=object())
+
+    captured = {}
+
+    def run(argv, **kwargs):
+        captured["argv"] = argv
+        captured["kwargs"] = kwargs
+        return subprocess.CompletedProcess(argv, 0, stdout="installed", stderr="")
+
+    monkeypatch.setattr(installer.importlib, "import_module", import_module)
+    monkeypatch.setattr(installer.importlib, "invalidate_caches", lambda: None)
+    monkeypatch.setattr(installer.subprocess, "run", run)
+
+    result = installer.ensure_platform_dependencies()
+
+    target = installer.worker_dependency_dir()
+    assert result["available"] is True
+    assert result["installed"] is True
+    assert captured["argv"][-1] == "pywinpty>=2.0.13"
+    assert captured["argv"][captured["argv"].index("--target") + 1] == str(target)
+    assert str(target.resolve()) in installer.sys.path
+    assert captured["kwargs"]["timeout"] == 60
+
+
+def test_windows_worker_falls_back_when_pywinpty_install_fails(tmp_path, monkeypatch):
+    _configure(tmp_path, monkeypatch)
+    monkeypatch.setattr(installer.sys, "platform", "win32")
+    monkeypatch.setattr(installer.sys, "path", list(installer.sys.path))
+    monkeypatch.setenv("PYTHONPATH", "")
+
+    def missing(name):
+        raise ImportError(name)
+
+    def timeout(*args, **kwargs):
+        raise subprocess.TimeoutExpired(args[0], 60)
+
+    monkeypatch.setattr(installer.importlib, "import_module", missing)
+    monkeypatch.setattr(installer.subprocess, "run", timeout)
+
+    result = installer.ensure_platform_dependencies()
+
+    assert result["available"] is False
+    assert result["installed"] is False
+    assert "timed out" in result["error"]

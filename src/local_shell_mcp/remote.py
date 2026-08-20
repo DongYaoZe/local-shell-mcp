@@ -2202,6 +2202,17 @@ async def _run_worker_locked(
     workdir: str | None = None,
     persist: bool = False,
 ) -> None:  # noqa: ARG001
+    if sys.platform == "win32":
+        from .remote_worker_installer import ensure_platform_dependencies
+
+        dependency_status = await asyncio.to_thread(ensure_platform_dependencies)
+        if not dependency_status.get("available"):
+            print(
+                "Warning: pywinpty is unavailable; persistent shells will use the native "
+                f"pipe fallback: {dependency_status.get('error') or 'installation failed'}",
+                file=sys.stderr,
+                flush=True,
+            )
     workdir = str(Path(workdir or os.getcwd()).expanduser().resolve())
     os.environ["LOCAL_SHELL_MCP_WORKSPACE_ROOT"] = workdir
     os.environ["LOCAL_SHELL_MCP_ALLOW_FULL_CONTAINER"] = "true"

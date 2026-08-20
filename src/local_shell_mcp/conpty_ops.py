@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import importlib
 import re
 import subprocess
 import time
@@ -56,6 +57,10 @@ class ConPtyShellSession:
 
 
 def is_available() -> bool:
+    global winpty
+    if winpty is None:
+        with contextlib.suppress(ImportError, OSError):
+            winpty = importlib.import_module("winpty")
     return winpty is not None and hasattr(winpty, "PtyProcess")
 
 

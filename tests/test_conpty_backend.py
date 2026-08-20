@@ -9,6 +9,17 @@ from local_shell_mcp.errors import ShellExecutableNotFoundError
 from local_shell_mcp.settings import get_settings
 
 
+def test_conpty_availability_retries_import_after_worker_dependency_bootstrap(monkeypatch):
+    monkeypatch.setattr(conpty_ops, "winpty", None)
+    monkeypatch.setattr(
+        conpty_ops.importlib,
+        "import_module",
+        lambda name: SimpleNamespace(PtyProcess=object()),
+    )
+
+    assert conpty_ops.is_available() is True
+
+
 class FakePtyProcess:
     spawned = []
 

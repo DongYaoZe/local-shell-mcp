@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import hashlib
+import importlib
 import json
 import os
 import shutil
+import subprocess
+import sys
 import tarfile
 import tempfile
 import urllib.parse
@@ -20,6 +23,84 @@ from .remote_worker_state import (
 )
 
 _WORKER_MANIFEST_PATH = "/remote/worker-bundle.tgz?manifest=1"
+_WINDOWS_PTY_REQUIREMENT = "pywinpty>=2.0.13"
+
+
+def worker_dependency_dir() -> Path:
+    python_tag = f"py{sys.version_info.major}{sys.version_info.minor}"
+    return worker_state_dir() / "dependencies" / python_tag
+
+
+def _activate_worker_dependency_dir(path: Path) -> None:
+    value = str(path.resolve())
+    if value not in sys.path:
+        sys.path.insert(0, value)
+    current = [entry for entry in os.environ.get("PYTHONPATH", "").split(os.pathsep) if entry]
+    if value not in current:
+        os.environ["PYTHONPATH"] = os.pathsep.join([value, *current])
+
+
+def ensure_platform_dependencies() -> dict[str, Any]:
+    path = worker_dependency_dir()
+    _activate_worker_dependency_dir(path)
+    if sys.platform != "win32":
+        return {"available": True, "installed": False, "path": str(path)}
+    try:
+        module = importlib.import_module("winpty")
+    except (ImportError, OSError):
+        module = None
+    if module is not None and hasattr(module, "PtyProcess"):
+        return {"available": True, "installed": False, "path": str(path)}
+
+    path.mkdir(parents=True, exist_ok=True)
+    argv = [
+        sys.executable,
+        "-m",
+        "pip",
+        "install",
+        "--disable-pip-version-check",
+        "--no-input",
+        "--retries",
+        "1",
+        "--timeout",
+        "5",
+        "--target",
+        str(path),
+        _WINDOWS_PTY_REQUIREMENT,
+    ]
+    try:
+        completed = subprocess.run(
+            argv,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=60,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return {
+            "available": False,
+            "installed": False,
+            "path": str(path),
+            "error": str(exc),
+        }
+    importlib.invalidate_caches()
+    try:
+        module = importlib.import_module("winpty")
+    except (ImportError, OSError):
+        module = None
+    available = module is not None and hasattr(module, "PtyProcess")
+    result: dict[str, Any] = {
+        "available": available,
+        "installed": available and completed.returncode == 0,
+        "path": str(path),
+    }
+    if not available:
+        result["error"] = (
+            completed.stderr.strip()
+            or completed.stdout.strip()
+            or f"pip exited with code {completed.returncode}"
+        )
+    return result
 
 
 def _fetch_bytes(url: str, timeout: float = 60) -> bytes:
