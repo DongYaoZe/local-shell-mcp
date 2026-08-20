@@ -205,9 +205,12 @@ The public MCP surface includes:
 
 The detailed tool reference, including purpose, inputs, returns, combinations, and notes for every tool, is available in the [docs](https://fwerkor.github.io/local-shell-mcp/reference/tools/).
 
-## Alternative workspace-bound session model
+## Related projects
 
-Mainline LSM Sessions are logical task contexts and intentionally do not bind tools, machines, working directories, jobs, or transfers to a Session. The independently maintained [rijuyuezhu/local-shell-mcp](https://github.com/rijuyuezhu/local-shell-mcp) fork uses a different, execution-oriented session model that binds workspace context and related resources to explicit sessions. It has its own tool surface and release lifecycle.
+The following independently maintained projects explore adjacent session and orchestration models around LSM:
+
+- [rijuyuezhu/local-shell-mcp](https://github.com/rijuyuezhu/local-shell-mcp) uses a different, execution-oriented session model that binds workspace context and related resources to explicit sessions. It has its own tool surface and release lifecycle.
+- [DongYaoZe/localshell-web-supervisor](https://github.com/DongYaoZe/localshell-web-supervisor) is a local reliability and orchestration layer for browser-driven agents using Local Shell MCP. It supervises replaceable browser workers while reconciling durable LSM sessions, Goals/jobs, and actual workspace/Git state, with guarded lease, handoff, takeover, and recovery flows. It is not part of the LSM runtime or release lifecycle.
 
 ## Security model
 
