@@ -67,6 +67,38 @@ def test_session_progress_and_plan_survive_manager_reload(tmp_path):
     assert any(event["type"] == "session.reported" for event in state["recent_activity"])
 
 
+def test_completed_session_can_resume_after_manager_reload(tmp_path):
+    state_dir = tmp_path / ".state"
+    manager = SessionRuntimeManager(state_dir)
+    started = manager.manage("user", action="start", objective="Durable task")
+    session_id = started["session_id"]
+    manager.manage(
+        "user", action="report", session_id=session_id, summary="Initial work complete"
+    )
+    manager.manage("user", action="finish", session_id=session_id)
+
+    restored = SessionRuntimeManager(state_dir)
+    resumed = restored.manage("user", action="resume", session_id=session_id)
+
+    assert resumed["status"] == "active"
+    assert resumed["progress"]["summary"] == "Initial work complete"
+    assert resumed["recent_activity"][-1]["type"] == "session.resumed"
+    reported = restored.manage(
+        "user", action="report", session_id=session_id, summary="Follow-up work started"
+    )
+    assert reported["progress"]["summary"] == "Follow-up work started"
+
+
+def test_cancelled_session_cannot_resume(tmp_path):
+    manager = SessionRuntimeManager(tmp_path / ".state")
+    started = manager.manage("user", action="start", objective="Abandoned task")
+    session_id = started["session_id"]
+    manager.manage("user", action="cancel", session_id=session_id)
+
+    with pytest.raises(ValueError, match="Cannot resume a cancelled session"):
+        manager.manage("user", action="resume", session_id=session_id)
+
+
 def test_session_list_is_principal_scoped_sorted_and_compact(tmp_path):
     manager = SessionRuntimeManager(tmp_path / ".state")
     older = manager.manage("user", action="start", label="Older")
@@ -766,8 +798,10 @@ def test_plan_validation_update_and_terminal_edges(tmp_path):
         manager.manage_plan(session_id, action="unknown")
     terminal = manager.manage("user", action="finish", session_id=session_id)
     assert terminal["status"] == "completed"
-    with pytest.raises(ValueError, match="Cannot resume a completed session"):
-        manager.manage("user", action="resume", session_id=session_id)
+    resumed_session = manager.manage("user", action="resume", session_id=session_id)
+    assert resumed_session["status"] == "active"
+    assert resumed_session["plan"]["status"] == "completed"
+    assert resumed_session["recent_activity"][-1]["type"] == "session.resumed"
 
 
 def test_plan_cancel_and_continuation_pending_expiry(tmp_path, monkeypatch):
