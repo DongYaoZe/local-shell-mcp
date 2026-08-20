@@ -19,8 +19,6 @@ issues: https://github.com/fwerkor/local-shell-mcp/issues
 apps:
   local-shell-mcp:
     command: bin/local-shell-mcp
-  lsm:
-    command: bin/local-shell-mcp
 
 parts:
   local-shell-mcp:

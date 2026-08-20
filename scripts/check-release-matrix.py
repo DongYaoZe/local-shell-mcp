@@ -126,10 +126,6 @@ def main() -> int:
     if snap_apps.get("local-shell-mcp", {}).get("command") != "bin/local-shell-mcp":
         print("Snapcraft package must expose the local-shell-mcp command.")
         return 1
-    if snap_apps.get("lsm", {}).get("command") != "bin/local-shell-mcp":
-        print("Snapcraft package must expose the lsm command alias.")
-        return 1
-
     snap_job = jobs.get("build-snap", {})
     snap_artifacts = matrix_values(snap_job, "artifact")
     missing_snap = sorted(EXPECTED_SNAP_ARTIFACTS - snap_artifacts)
