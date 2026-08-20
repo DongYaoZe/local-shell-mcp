@@ -1064,7 +1064,7 @@ async def _run_python(code: str, cwd: str = ".", timeout_s: int = 60) -> dict[st
     script.parent.mkdir(parents=True, exist_ok=True)
     await asyncio.to_thread(script.write_text, code, encoding="utf-8")
     result = await run_shell(
-        f"{quote_shell_argument(get_settings().python_bin)} {quote_shell_argument(str(script))}",
+        f"{quote_shell_executable(get_settings().python_bin)} {quote_shell_argument(str(script))}",
         cwd=cwd,
         timeout_s=public_run_shell_timeout(timeout_s),
         max_output_bytes=1_000_000,
