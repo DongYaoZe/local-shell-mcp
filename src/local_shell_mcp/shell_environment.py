@@ -34,6 +34,16 @@ def persistent_shell_args(shell: str, command: str | None = None) -> list[str]:
     return [shell]
 
 
+def persistent_pipe_shell_args(shell: str, command: str | None = None) -> list[str]:
+    if command:
+        return shell_command_args(shell, command)
+    name = shell_program_name(shell)
+    powershell = "power" + "shell"
+    if name in {powershell + ".exe", powershell, "pwsh.exe", "pwsh"}:
+        return [shell, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "-"]
+    return [shell]
+
+
 def is_frozen_app() -> bool:
     return bool(getattr(sys, "frozen", False) or getattr(sys, "_MEIPASS", None))
 

@@ -24,6 +24,7 @@ from .models import CommandResult
 from .process_utils import managed_process_kwargs
 from .settings import get_settings
 from .shell_environment import (
+    persistent_pipe_shell_args,
     persistent_shell_args,
     shell_command_args,
     subprocess_env,
@@ -198,6 +199,10 @@ def _shell_command_args(command: str) -> list[str]:
 
 def _persistent_shell_args(command: str | None = None) -> list[str]:
     return persistent_shell_args(get_settings().shell_executable, command)
+
+
+def _persistent_pipe_shell_args(command: str | None = None) -> list[str]:
+    return persistent_pipe_shell_args(get_settings().shell_executable, command)
 
 
 def _use_native_persistent_shell_backend() -> bool:
@@ -586,7 +591,7 @@ async def _native_start_shell(
 
     initial = command or get_settings().shell_executable
     check_command_policy(initial)
-    args = _persistent_shell_args(command)
+    args = _persistent_pipe_shell_args(command)
     try:
         proc = await asyncio.create_subprocess_exec(
             *args,

@@ -634,6 +634,29 @@ def test_worker_upload_protocol_and_generated_execution_edges(tmp_path, monkeypa
 
 
 @pytest.mark.asyncio
+async def test_worker_run_python_invokes_quoted_executable_in_powershell(
+    tmp_path, monkeypatch
+):
+    _configure(
+        tmp_path,
+        monkeypatch,
+        LOCAL_SHELL_MCP_SHELL_EXECUTABLE="powershell.exe",
+        LOCAL_SHELL_MCP_PYTHON_BIN=r"C:\Program Files\Python\python.exe",
+    )
+    captured = {}
+
+    async def fake_run_shell(command, **kwargs):
+        captured["command"] = command
+        return _result()
+
+    monkeypatch.setattr(remote, "run_shell", fake_run_shell)
+
+    await remote._run_python("print('ok')", ".", 5)
+
+    assert captured["command"].startswith("& 'C:\\Program Files\\Python\\python.exe' '")
+
+
+@pytest.mark.asyncio
 async def test_worker_apply_patch_honors_nested_cwd_in_git_worktree(
     tmp_path, monkeypatch
 ):
