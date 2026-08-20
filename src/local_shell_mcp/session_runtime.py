@@ -702,10 +702,11 @@ class SessionRuntimeManager:
                 return {"session_id": logical.session_id, "deleted": True}
 
             if normalized_action == "resume":
-                if logical.status != "active":
+                if logical.status not in {"active", "completed"}:
                     raise ValueError(f"Cannot resume a {logical.status} session")
                 snapshot = copy.deepcopy(logical)
                 try:
+                    logical.status = "active"
                     self._append_activity_locked(
                         logical,
                         "session.resumed",
