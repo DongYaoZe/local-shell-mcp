@@ -4,8 +4,23 @@ import pytest
 from conftest import python_shell_command
 
 from local_shell_mcp.settings import get_settings
-from local_shell_mcp.shell_environment import subprocess_env
+from local_shell_mcp.shell_environment import persistent_pipe_shell_args, subprocess_env
 from local_shell_mcp.shell_ops import run_shell
+
+
+def test_persistent_pipe_powershell_reads_commands_from_stdin():
+    assert persistent_pipe_shell_args("powershell.exe") == [
+        "powershell.exe",
+        "-NoLogo",
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        "-",
+    ]
+
+
+def test_persistent_pipe_shell_keeps_regular_interactive_invocation():
+    assert persistent_pipe_shell_args("/bin/bash") == ["/bin/bash"]
 
 
 @pytest.mark.asyncio
