@@ -149,7 +149,7 @@ async def test_windows_falls_back_to_native_when_pywinpty_unavailable(tmp_path, 
     monkeypatch.setenv("LOCAL_SHELL_MCP_WORKSPACE_ROOT", str(tmp_path))
     get_settings.cache_clear()
     monkeypatch.setattr(ops, "_use_native_persistent_shell_backend", lambda: True)
-    monkeypatch.setattr(conpty_ops, "winpty", None)
+    monkeypatch.setattr(conpty_ops, "is_available", lambda: False)
 
     async def fake_native_start(cwd=".", name=None, command=None):
         return {"session_id": name, "cwd": cwd, "command": command or "shell", "backend": "native"}
