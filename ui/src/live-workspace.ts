@@ -179,6 +179,9 @@ let shuttingDown = false
 let passiveRefreshTimer: number | null = null
 let planContinuationTimer: number | null = null
 let countdownRenderTimer: number | null = null
+type SmoothWheelState = { target: number; frame: number | null }
+const smoothWheelStates = new WeakMap<HTMLElement, SmoothWheelState>()
+const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)")
 let dshModelContext = ""
 let dshPromptSequence = 0
 const dshPromptWaiters = new Map<string, {
@@ -446,6 +449,44 @@ function onRootClick(event: MouseEvent): void {
   if (target.dataset.action) void handleAction(target.dataset.action, target)
 }
 
+function smoothWheelScroll(scroller: HTMLElement, deltaY: number): boolean {
+  const maxScrollTop = Math.max(0, scroller.scrollHeight - scroller.clientHeight)
+  if (maxScrollTop <= 0) return false
+
+  let state = smoothWheelStates.get(scroller)
+  if (!state) {
+    state = { target: scroller.scrollTop, frame: null }
+    smoothWheelStates.set(scroller, state)
+  }
+  const base = state.frame === null ? scroller.scrollTop : state.target
+  const nextTarget = Math.min(maxScrollTop, Math.max(0, base + deltaY))
+  if (nextTarget === base) return false
+  state.target = nextTarget
+
+  if (reducedMotion.matches) {
+    scroller.scrollTop = nextTarget
+    return true
+  }
+  if (state.frame !== null) return true
+
+  const animate = () => {
+    if (!scroller.isConnected) {
+      state!.frame = null
+      return
+    }
+    const distance = state!.target - scroller.scrollTop
+    if (Math.abs(distance) < 0.5) {
+      scroller.scrollTop = state!.target
+      state!.frame = null
+      return
+    }
+    scroller.scrollTop += distance * 0.28
+    state!.frame = window.requestAnimationFrame(animate)
+  }
+  state.frame = window.requestAnimationFrame(animate)
+  return true
+}
+
 function onRootWheel(event: WheelEvent): void {
   if (activeTab !== "activity" || Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return
   const target = event.target instanceof Element ? event.target : null
@@ -463,16 +504,12 @@ function onRootWheel(event: WheelEvent): void {
   if (!candidates.length) return
 
   for (const scroller of candidates) {
-    const maxScrollTop = Math.max(0, scroller.scrollHeight - scroller.clientHeight)
-    if (maxScrollTop <= 0) continue
     const scale = event.deltaMode === WheelEvent.DOM_DELTA_LINE
       ? 16
       : event.deltaMode === WheelEvent.DOM_DELTA_PAGE
         ? Math.max(1, scroller.clientHeight)
         : 1
-    const nextScrollTop = Math.min(maxScrollTop, Math.max(0, scroller.scrollTop + event.deltaY * scale))
-    if (nextScrollTop === scroller.scrollTop) continue
-    scroller.scrollTop = nextScrollTop
+    if (!smoothWheelScroll(scroller, event.deltaY * scale)) continue
     event.preventDefault()
     event.stopPropagation()
     return
