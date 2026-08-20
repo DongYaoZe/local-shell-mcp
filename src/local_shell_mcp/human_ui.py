@@ -26,6 +26,7 @@ from starlette.responses import FileResponse, HTMLResponse, JSONResponse, Redire
 from starlette.routing import Route, WebSocketRoute
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
+from . import __version__
 from .audit import get_audit_entry, query_audit, suppress_audit
 from .auth import Principal, require_scopes, verify_request
 from .fs_ops import (
@@ -549,8 +550,10 @@ def _ui_index_html() -> str:
     if path.exists():
         html = path.read_text(encoding="utf-8")
         config = json.dumps({"uiPath": ui_path, "apiPrefix": UI_API_PREFIX})
-        return html.replace("__LSM_UI_PATH__", ui_path).replace(
-            "__LSM_UI_CONFIG_JSON__", config
+        return (
+            html.replace("__LSM_UI_PATH__", ui_path)
+            .replace("__LSM_UI_ASSET_VERSION__", __version__)
+            .replace("__LSM_UI_CONFIG_JSON__", config)
         )
     return """<!doctype html><html><head><meta charset=\"utf-8\"><title>local-shell-mcp UI</title></head>
 <body style=\"background:#050812;color:#dbeafe;font:16px system-ui;padding:48px\">
