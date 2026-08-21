@@ -146,6 +146,18 @@ def test_file_and_memory_state_store_round_trip(tmp_path):
         assert first.read_bytes("key") == b"one"
     first.delete("key")
     assert first.read_bytes("key") is None
+    assert state_store_module._MEMORY_LOCKS == {}
+
+    with first.lock("held"):
+        first.write_bytes("held", b"value")
+        assert len(state_store_module._MEMORY_LOCKS) == 1
+    assert state_store_module._MEMORY_LOCKS == {}
+
+    for index in range(1_000):
+        key = f"ephemeral/{index}"
+        first.write_bytes(key, b"value")
+        first.delete(key)
+    assert state_store_module._MEMORY_LOCKS == {}
 
 
 def test_redis_state_store_round_trip_and_lock(monkeypatch):
