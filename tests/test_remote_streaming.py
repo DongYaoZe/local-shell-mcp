@@ -236,6 +236,27 @@ def test_stale_orphan_download_snapshot_is_scavenged(tmp_path, monkeypatch):
     assert not snapshot.exists()
 
 
+def test_active_download_snapshot_temporary_is_not_scavenged(tmp_path, monkeypatch):
+    _client(tmp_path, monkeypatch)
+    transfer_dir = tmp_path / ".state" / "remote-transfers"
+    transfer_dir.mkdir(parents=True, exist_ok=True)
+    temporary = transfer_dir / "active.bin.deadbeef.tmp"
+    temporary.write_bytes(b"in progress")
+    stale_now = temporary.stat().st_mtime + remote_transfer._ticket_ttl_s() + 1
+
+    with remote_transfer._TICKET_LOCK:
+        remote_transfer._ACTIVE_SNAPSHOT_TEMPORARIES.add(str(temporary))
+        try:
+            remote_transfer._prune_orphan_download_snapshots_locked(stale_now)
+        finally:
+            remote_transfer._ACTIVE_SNAPSHOT_TEMPORARIES.discard(str(temporary))
+
+    assert temporary.exists()
+    with remote_transfer._TICKET_LOCK:
+        remote_transfer._prune_orphan_download_snapshots_locked(stale_now)
+    assert not temporary.exists()
+
+
 def test_ticket_claims_do_not_rescan_orphan_directory(tmp_path, monkeypatch):
     _client(tmp_path, monkeypatch)
     data = b"payload"
