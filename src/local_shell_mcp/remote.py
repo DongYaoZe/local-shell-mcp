@@ -380,11 +380,12 @@ class RemoteManager:
         try:
             store.write_bytes(REMOTE_WORKER_REGISTRY_BACKUP_FILE_NAME, payload)
         except Exception as exc:
-            audit(
-                "remote_worker_registry_backup_write_failed",
-                path=REMOTE_WORKER_REGISTRY_BACKUP_FILE_NAME,
-                error=repr(exc),
-            )
+            with contextlib.suppress(Exception):
+                audit(
+                    "remote_worker_registry_backup_write_failed",
+                    path=REMOTE_WORKER_REGISTRY_BACKUP_FILE_NAME,
+                    error=repr(exc),
+                )
 
     def _join_url(self, base_url: str | None = None) -> str:
         settings = get_settings()
@@ -496,7 +497,8 @@ class RemoteManager:
                     invite.used = False
                     self.invites[code] = invite
                     raise
-        audit("remote_worker_registered", machine=name)
+        with contextlib.suppress(Exception):
+            audit("remote_worker_registered", machine=name)
         return {
             "token": token,
             "name": name,
@@ -524,7 +526,8 @@ class RemoteManager:
                 worker.capabilities = list(payload.get("capabilities") or worker.capabilities)
                 worker.info = dict(payload.get("info") or worker.info)
                 self._save_registry_unlocked()
-        audit("remote_worker_resumed", machine=name)
+        with contextlib.suppress(Exception):
+            audit("remote_worker_resumed", machine=name)
         return {
             "token": access,
             "name": name,

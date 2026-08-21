@@ -1801,13 +1801,14 @@ async def _delete_s3_transfer_object(client: Any, bucket: str, key: str) -> str 
             last_error = f"{type(exc).__name__}: {exc}"
             if attempt < 2:
                 await asyncio.sleep(0.05 * (2**attempt))
-    audit(
-        "remote_transfer_object_cleanup_failed",
-        bucket=bucket,
-        key=key,
-        error=last_error,
-        attempts=3,
-    )
+    with suppress(Exception):
+        audit(
+            "remote_transfer_object_cleanup_failed",
+            bucket=bucket,
+            key=key,
+            error=last_error,
+            attempts=3,
+        )
     return last_error
 
 

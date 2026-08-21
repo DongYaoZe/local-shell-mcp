@@ -449,12 +449,12 @@ async def test_remote_registry_backup_failure_does_not_undo_primary_commit(tmp_p
     store = get_state_store()
     original_write = store.write_bytes
 
-    def fail_backup(key: str, value: bytes) -> None:
-        if key == remote_module.REMOTE_WORKER_REGISTRY_BACKUP_FILE_NAME:
-            raise OSError("backup unavailable")
+    def fail_secondary_writes(key: str, value: bytes) -> None:
+        if key != remote_module.REMOTE_WORKER_REGISTRY_FILE_NAME:
+            raise OSError("secondary storage unavailable")
         original_write(key, value)
 
-    monkeypatch.setattr(store, "write_bytes", fail_backup)
+    monkeypatch.setattr(store, "write_bytes", fail_secondary_writes)
     manager = remote_module.RemoteManager()
     invite = await manager.create_invite(name="worker-a", workdir="/srv/work")
     registered = await manager.register_worker(
@@ -465,6 +465,7 @@ async def test_remote_registry_backup_failure_does_not_undo_primary_commit(tmp_p
         }
     )
 
+    monkeypatch.setattr(store, "write_bytes", original_write)
     reloaded = remote_module.RemoteManager()
     resumed = await reloaded.resume_worker(registered["token"], {"name": "worker-a"})
     assert resumed["name"] == "worker-a"
