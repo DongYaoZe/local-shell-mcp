@@ -35,6 +35,8 @@ REMOTE_TRANSFER_DOWNLOAD_PREFIX = f"{REMOTE_TRANSFER_PREFIX}/download/"
 _TRANSFER_CHUNK_BYTES = 1024 * 1024
 _CONTENT_RANGE_RE = re.compile(r"^bytes (\d+)-(\d+)/(\d+)$")
 _TICKET_LOCK = threading.RLock()
+_ORPHAN_PRUNE_INTERVAL_S = 60.0
+_LAST_ORPHAN_PRUNE_AT = 0.0
 
 
 @dataclass
@@ -133,7 +135,14 @@ def _prune_locked(now: float | None = None) -> None:
             removed = _TICKETS.pop(token, None)
             if removed is not None:
                 _cleanup_ticket_file(removed)
-    _prune_orphan_download_snapshots_locked(current)
+
+
+def _maybe_prune_orphan_download_snapshots_locked(now: float) -> None:
+    global _LAST_ORPHAN_PRUNE_AT
+    if _LAST_ORPHAN_PRUNE_AT and now < _LAST_ORPHAN_PRUNE_AT + _ORPHAN_PRUNE_INTERVAL_S:
+        return
+    _LAST_ORPHAN_PRUNE_AT = now
+    _prune_orphan_download_snapshots_locked(now)
 
 
 def _create_ticket(
@@ -166,6 +175,7 @@ def _create_ticket(
     )
     with _TICKET_LOCK:
         _prune_locked(now)
+        _maybe_prune_orphan_download_snapshots_locked(now)
         _TICKETS[token] = ticket
     audit(
         "remote_transfer_ticket_created",

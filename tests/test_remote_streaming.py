@@ -228,11 +228,34 @@ def test_stale_orphan_download_snapshot_is_scavenged(tmp_path, monkeypatch):
 
     with remote_transfer._TICKET_LOCK:
         remote_transfer._TICKETS.clear()
-        remote_transfer._prune_locked(
-            now=snapshot.stat().st_mtime + remote_transfer._ticket_ttl_s() + 1
+        remote_transfer._LAST_ORPHAN_PRUNE_AT = 0.0
+        remote_transfer._maybe_prune_orphan_download_snapshots_locked(
+            snapshot.stat().st_mtime + remote_transfer._ticket_ttl_s() + 1
         )
 
     assert not snapshot.exists()
+
+
+def test_ticket_claims_do_not_rescan_orphan_directory(tmp_path, monkeypatch):
+    _client(tmp_path, monkeypatch)
+    data = b"payload"
+    source = tmp_path / "source.bin"
+    source.write_bytes(data)
+    ticket_info = create_download_ticket("source.bin", len(data), hashlib.sha256(data).hexdigest())
+    scans = 0
+
+    def count_scan(now):
+        nonlocal scans
+        del now
+        scans += 1
+
+    monkeypatch.setattr(remote_transfer, "_prune_orphan_download_snapshots_locked", count_scan)
+    for _ in range(3):
+        remote_transfer._claim_ticket(ticket_info["token"], "download")
+        remote_transfer._release_ticket(ticket_info["token"])
+
+    assert scans == 0
+    revoke_transfer_ticket(ticket_info["token"])
 
 
 def _worker_identity(tmp_path):
