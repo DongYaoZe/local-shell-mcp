@@ -943,3 +943,52 @@ async def test_object_store_transfer_uses_presigned_urls_and_deletes_object(tmp_
         "download",
         "delete",
     ]
+
+
+@pytest.mark.asyncio
+async def test_object_store_cleanup_failure_retries_and_is_reported(tmp_path, monkeypatch):
+    _configure_workspace(
+        tmp_path,
+        monkeypatch,
+        remote_transfer_strategy="object_store",
+        remote_transfer_s3_bucket="transfer-bucket",
+    )
+    content = b"object-store-transfer"
+    digest = hashlib.sha256(content).hexdigest()
+
+    class FakeS3:
+        def __init__(self) -> None:
+            self.delete_attempts = 0
+
+        def generate_presigned_url(self, operation, *, Params, ExpiresIn, HttpMethod):
+            del ExpiresIn, HttpMethod
+            return f"https://storage.test/{Params['Bucket']}/{Params['Key']}?op={operation}"
+
+        def delete_object(self, *, Bucket, Key):
+            del Bucket, Key
+            self.delete_attempts += 1
+            raise OSError("cleanup failed")
+
+    fake_s3 = FakeS3()
+    monkeypatch.setattr(tools, "_s3_transfer_client", lambda: fake_s3)
+
+    async def transfer(machine: str, tool: str, args: dict[str, Any], timeout_s=None):
+        del machine, timeout_s
+        if tool == "transfer_stat":
+            return {"type": "file", "path": "source.bin", "size": len(content), "sha256": digest}
+        if tool == "transfer_put_url":
+            return {"bytes": len(content), "sha256": digest}
+        if tool == "transfer_get_url":
+            return {"path": args["path"], "bytes": len(content), "sha256": digest}
+        raise AssertionError(f"unexpected tool: {tool}")
+
+    monkeypatch.setattr(tools, "_remote_transfer_data", transfer)
+    result = await tools._copy_remote_file_to_remote(
+        "source-worker", "source.bin", "destination-worker", "destination.bin", True
+    )
+
+    assert result["transport"] == "s3-presigned"
+    assert result["cleanup_error"] == "OSError: cleanup failed"
+    assert fake_s3.delete_attempts == 3
+    rows = audit_module.query_audit(search="remote_transfer_object_cleanup_failed")
+    assert rows["count"] >= 1
