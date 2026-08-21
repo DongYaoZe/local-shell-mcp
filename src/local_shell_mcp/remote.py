@@ -252,7 +252,7 @@ class RemoteManager:
         return get_settings().state_dir / REMOTE_WORKER_REGISTRY_BACKUP_FILE_NAME
 
     @staticmethod
-    def _read_registry(raw: bytes | Path, source: str | None = None) -> list[dict[str, Any]]:
+    def _read_registry(raw: bytes | Path, source: str | None = None) -> dict[str, list[dict[str, Any]]]:
         if isinstance(raw, Path):
             source = source or str(raw)
             raw = raw.read_bytes()
@@ -260,10 +260,16 @@ class RemoteManager:
         data = json.loads(raw.decode("utf-8"))
         if not isinstance(data, dict) or data.get("version") != 1:
             raise ValueError(f"unsupported or invalid remote worker registry: {source}")
-        rows = data.get("workers")
-        if not isinstance(rows, list):
+        workers = data.get("workers")
+        if not isinstance(workers, list):
             raise ValueError(f"remote worker registry workers field is invalid: {source}")
-        return [item for item in rows if isinstance(item, dict)]
+        invites = data.get("invites", [])
+        if not isinstance(invites, list):
+            raise ValueError(f"remote worker registry invites field is invalid: {source}")
+        return {
+            "workers": [item for item in workers if isinstance(item, dict)],
+            "invites": [item for item in invites if isinstance(item, dict)],
+        }
 
     def _load_registry_unlocked(self) -> None:
         if self._registry_loaded:
@@ -274,12 +280,12 @@ class RemoteManager:
         if raw is None and backup_raw is None:
             self._registry_loaded = True
             return
-        rows: list[dict[str, Any]] | None = None
+        registry: dict[str, list[dict[str, Any]]] | None = None
         main_error: Exception | None = None
         recovered_from_backup = False
         try:
             if raw is not None:
-                rows = self._read_registry(raw, REMOTE_WORKER_REGISTRY_FILE_NAME)
+                registry = self._read_registry(raw, REMOTE_WORKER_REGISTRY_FILE_NAME)
         except (OSError, ValueError, json.JSONDecodeError) as exc:
             main_error = exc
             audit(
@@ -287,9 +293,9 @@ class RemoteManager:
                 path=REMOTE_WORKER_REGISTRY_FILE_NAME,
                 error=repr(exc),
             )
-        if rows is None and backup_raw is not None:
+        if registry is None and backup_raw is not None:
             try:
-                rows = self._read_registry(backup_raw, REMOTE_WORKER_REGISTRY_BACKUP_FILE_NAME)
+                registry = self._read_registry(backup_raw, REMOTE_WORKER_REGISTRY_BACKUP_FILE_NAME)
             except (OSError, ValueError, json.JSONDecodeError) as exc:
                 audit(
                     "remote_worker_registry_backup_unreadable",
@@ -303,12 +309,12 @@ class RemoteManager:
                     path=REMOTE_WORKER_REGISTRY_FILE_NAME,
                     backup_path=REMOTE_WORKER_REGISTRY_BACKUP_FILE_NAME,
                 )
-        if rows is None:
+        if registry is None:
             raise RuntimeError(
                 "Remote worker registry is unreadable and no valid backup is available; "
                 "refusing to reset it"
             ) from main_error
-        for item in rows:
+        for item in registry["workers"]:
             if not isinstance(item, dict):
                 continue
             name = str(item.get("name") or "").strip()
@@ -326,11 +332,24 @@ class RemoteManager:
                 info=dict(item.get("info") or {}),
             )
             self.tokens[access] = name
+        now = _utc()
+        for item in registry["invites"]:
+            code = str(item.get("code") or "").strip()
+            expires_at = float(item.get("expires_at") or 0)
+            if not code or expires_at < now or bool(item.get("used")):
+                continue
+            self.invites[code] = RemoteInvite(
+                code=code,
+                name=str(item["name"]) if item.get("name") is not None else None,
+                workdir=str(item["workdir"]) if item.get("workdir") is not None else None,
+                expires_at=expires_at,
+            )
         self._registry_loaded = True
         if recovered_from_backup:
             self._save_registry_unlocked()
 
     def _save_registry_unlocked(self) -> None:
+        now = _utc()
         data = {
             "version": 1,
             "workers": [
@@ -344,11 +363,28 @@ class RemoteManager:
                 }
                 for worker in sorted(self.workers.values(), key=lambda item: item.name)
             ],
+            "invites": [
+                {
+                    "code": invite.code,
+                    "name": invite.name,
+                    "workdir": invite.workdir,
+                    "expires_at": invite.expires_at,
+                }
+                for invite in sorted(self.invites.values(), key=lambda item: item.code)
+                if not invite.used and invite.expires_at >= now
+            ],
         }
         payload = json.dumps(data, indent=2, sort_keys=True).encode("utf-8")
         store = get_state_store()
         store.write_bytes(REMOTE_WORKER_REGISTRY_FILE_NAME, payload)
-        store.write_bytes(REMOTE_WORKER_REGISTRY_BACKUP_FILE_NAME, payload)
+        try:
+            store.write_bytes(REMOTE_WORKER_REGISTRY_BACKUP_FILE_NAME, payload)
+        except Exception as exc:
+            audit(
+                "remote_worker_registry_backup_write_failed",
+                path=REMOTE_WORKER_REGISTRY_BACKUP_FILE_NAME,
+                error=repr(exc),
+            )
 
     def _join_url(self, base_url: str | None = None) -> str:
         settings = get_settings()
@@ -385,7 +421,11 @@ class RemoteManager:
                 if len(self.invites) >= MAX_REMOTE_INVITES:
                     raise RuntimeError("Too many pending remote invites")
                 self.invites[code] = invite
-                self._save_registry_unlocked()
+                try:
+                    self._save_registry_unlocked()
+                except Exception:
+                    self.invites.pop(code, None)
+                    raise
         join_url = self._join_url(base_url)
         command = f"curl -fsSL {shlex.quote(join_url)} | bash -s -- --invite {shlex.quote(code)}"
         if normalized_name:
@@ -448,7 +488,14 @@ class RemoteManager:
                 self.tokens[token] = name
                 invite.used = True
                 self.invites.pop(code, None)
-                self._save_registry_unlocked()
+                try:
+                    self._save_registry_unlocked()
+                except Exception:
+                    self.workers.pop(name, None)
+                    self.tokens.pop(token, None)
+                    invite.used = False
+                    self.invites[code] = invite
+                    raise
         audit("remote_worker_registered", machine=name)
         return {
             "token": token,

@@ -386,6 +386,79 @@ async def test_memory_stateless_remote_identity_is_invalid_after_cold_start(tmp_
 
 
 @pytest.mark.asyncio
+async def test_shared_state_remote_invite_survives_manager_restart(tmp_path, monkeypatch):
+    _configure_stateless(tmp_path, monkeypatch)
+    first = remote_module.RemoteManager()
+    invite = await first.create_invite(name="worker-a", workdir="/srv/work")
+
+    second = remote_module.RemoteManager()
+    registered = await second.register_worker(
+        {
+            "invite": invite["code"],
+            "name": "worker-a",
+            "workdir": "/srv/work",
+        }
+    )
+
+    assert registered["token"].startswith("lsmcp_wk_")
+    third = remote_module.RemoteManager()
+    resumed = await third.resume_worker(registered["token"], {"name": "worker-a"})
+    assert resumed["name"] == "worker-a"
+
+
+@pytest.mark.asyncio
+async def test_remote_registration_rolls_back_on_registry_commit_failure(tmp_path, monkeypatch):
+    _configure_stateless(tmp_path, monkeypatch)
+    manager = remote_module.RemoteManager()
+    invite = await manager.create_invite(name="worker-a", workdir="/srv/work")
+
+    def fail_save():
+        raise OSError("state unavailable")
+
+    monkeypatch.setattr(manager, "_save_registry_unlocked", fail_save)
+    with pytest.raises(OSError, match="state unavailable"):
+        await manager.register_worker(
+            {
+                "invite": invite["code"],
+                "name": "worker-a",
+                "workdir": "/srv/work",
+            }
+        )
+
+    assert invite["code"] in manager.invites
+    assert manager.invites[invite["code"]].used is False
+    assert "worker-a" not in manager.workers
+    assert manager.tokens == {}
+
+
+@pytest.mark.asyncio
+async def test_remote_registry_backup_failure_does_not_undo_primary_commit(tmp_path, monkeypatch):
+    _configure_stateless(tmp_path, monkeypatch)
+    store = get_state_store()
+    original_write = store.write_bytes
+
+    def fail_backup(key: str, value: bytes) -> None:
+        if key == remote_module.REMOTE_WORKER_REGISTRY_BACKUP_FILE_NAME:
+            raise OSError("backup unavailable")
+        original_write(key, value)
+
+    monkeypatch.setattr(store, "write_bytes", fail_backup)
+    manager = remote_module.RemoteManager()
+    invite = await manager.create_invite(name="worker-a", workdir="/srv/work")
+    registered = await manager.register_worker(
+        {
+            "invite": invite["code"],
+            "name": "worker-a",
+            "workdir": "/srv/work",
+        }
+    )
+
+    reloaded = remote_module.RemoteManager()
+    resumed = await reloaded.resume_worker(registered["token"], {"name": "worker-a"})
+    assert resumed["name"] == "worker-a"
+
+
+@pytest.mark.asyncio
 async def test_stateless_managed_job_and_audit_stay_off_disk(tmp_path, monkeypatch):
     _configure_stateless(tmp_path, monkeypatch)
     kind = f"serverless-test-{tmp_path.name}"
