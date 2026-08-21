@@ -284,8 +284,8 @@ class RemoteManager:
             "invites": invite_rows,
         }
 
-    def _load_registry_unlocked(self) -> None:
-        if self._registry_loaded:
+    def _load_registry_unlocked(self, *, force: bool = False) -> None:
+        if self._registry_loaded and not force:
             return
         store = get_state_store()
         raw = store.read_bytes(REMOTE_WORKER_REGISTRY_FILE_NAME)
@@ -293,8 +293,13 @@ class RemoteManager:
         generation_raw = store.read_bytes(REMOTE_WORKER_REGISTRY_GENERATION_FILE_NAME)
         recovery_generation = None
         if generation_raw is not None:
-            recovery_generation = generation_raw.decode("ascii", errors="replace").strip() or "<invalid>"
+            recovery_generation = (
+                generation_raw.decode("ascii", errors="replace").strip() or "<invalid>"
+            )
         if raw is None and backup_raw is None:
+            self.workers = {}
+            self.tokens = {}
+            self.invites = {}
             self._registry_loaded = True
             return
         registry: dict[str, list[dict[str, Any]]] | None = None
@@ -339,39 +344,57 @@ class RemoteManager:
                 "Remote worker registry is unreadable and no valid backup is available; "
                 "refusing to reset it"
             ) from main_error
+        existing_workers = {worker.token: worker for worker in self.workers.values()}
+        workers: dict[str, RemoteWorker] = {}
+        tokens: dict[str, str] = {}
         for item in registry["workers"]:
             if not isinstance(item, dict):
                 continue
             name = str(item.get("name") or "").strip()
             access = str(item.get("access") or item.get("to" + "ken") or "").strip()
-            if not name or not access or name in self.workers or access in self.tokens:
+            if not name or not access or name in workers or access in tokens:
                 continue
-            self.workers[name] = RemoteWorker(
-                name=name,
-                token=access,
-                workdir=str(item.get("workdir") or ""),
-                created_at=float(item.get("created_at") or _utc()),
-                last_seen=0.0,
-                status="offline",
-                capabilities=list(item.get("capabilities") or []),
-                info=dict(item.get("info") or {}),
-            )
-            self.tokens[access] = name
+            worker = existing_workers.get(access)
+            if worker is None:
+                worker = RemoteWorker(
+                    name=name,
+                    token=access,
+                    last_seen=0.0,
+                    status="offline",
+                )
+            worker.name = name
+            worker.workdir = str(item.get("workdir") or "")
+            worker.created_at = float(item.get("created_at") or _utc())
+            worker.capabilities = list(item.get("capabilities") or [])
+            worker.info = dict(item.get("info") or {})
+            workers[name] = worker
+            tokens[access] = name
         now = _utc()
+        invites: dict[str, RemoteInvite] = {}
         for item in registry["invites"]:
             code = str(item.get("code") or "").strip()
             expires_at = float(item.get("expires_at") or 0)
             if not code or expires_at < now or bool(item.get("used")):
                 continue
-            self.invites[code] = RemoteInvite(
+            invites[code] = RemoteInvite(
                 code=code,
                 name=str(item["name"]) if item.get("name") is not None else None,
                 workdir=str(item["workdir"]) if item.get("workdir") is not None else None,
                 expires_at=expires_at,
             )
+        self.workers = workers
+        self.tokens = tokens
+        self.invites = invites
         self._registry_loaded = True
         if recovered_from_backup:
             self._save_registry_unlocked()
+
+    @contextlib.contextmanager
+    def _registry_transaction_unlocked(self):
+        store = get_state_store()
+        with store.lock(REMOTE_WORKER_REGISTRY_FILE_NAME):
+            self._load_registry_unlocked(force=True)
+            yield
 
     def _save_registry_unlocked(self) -> None:
         now = _utc()
@@ -403,8 +426,26 @@ class RemoteManager:
         }
         payload = json.dumps(data, indent=2, sort_keys=True).encode("utf-8")
         store = get_state_store()
+        previous_generation = store.read_bytes(REMOTE_WORKER_REGISTRY_GENERATION_FILE_NAME)
         store.write_bytes(REMOTE_WORKER_REGISTRY_GENERATION_FILE_NAME, generation.encode("ascii"))
-        store.write_bytes(REMOTE_WORKER_REGISTRY_FILE_NAME, payload)
+        try:
+            store.write_bytes(REMOTE_WORKER_REGISTRY_FILE_NAME, payload)
+        except Exception:
+            try:
+                if previous_generation is None:
+                    store.delete(REMOTE_WORKER_REGISTRY_GENERATION_FILE_NAME)
+                else:
+                    store.write_bytes(
+                        REMOTE_WORKER_REGISTRY_GENERATION_FILE_NAME, previous_generation
+                    )
+            except Exception as rollback_exc:
+                with contextlib.suppress(Exception):
+                    audit(
+                        "remote_worker_registry_generation_rollback_failed",
+                        path=REMOTE_WORKER_REGISTRY_GENERATION_FILE_NAME,
+                        error=repr(rollback_exc),
+                    )
+            raise
         try:
             store.write_bytes(REMOTE_WORKER_REGISTRY_BACKUP_FILE_NAME, payload)
         except Exception as exc:
@@ -439,8 +480,7 @@ class RemoteManager:
             expires_at=expires_at,
         )
         async with self._lock:
-            with self._state_lock:
-                self._load_registry_unlocked()
+            with self._state_lock, self._registry_transaction_unlocked():
                 now = _utc()
                 self.invites = {
                     invite_code: item
@@ -489,8 +529,7 @@ class RemoteManager:
         code = str(payload.get("invite") or "")
         requested_name = str(payload.get("name") or "").strip() or None
         async with self._lock:
-            with self._state_lock:
-                self._load_registry_unlocked()
+            with self._state_lock, self._registry_transaction_unlocked():
                 invite = self.invites.get(code)
                 if not invite:
                     raise ValueError("invalid invite code")
@@ -537,8 +576,7 @@ class RemoteManager:
 
     async def resume_worker(self, access: str, payload: dict[str, Any]) -> dict[str, Any]:
         async with self._lock:
-            with self._state_lock:
-                self._load_registry_unlocked()
+            with self._state_lock, self._registry_transaction_unlocked():
                 name = self.tokens.get(access)
                 if not name:
                     raise PermissionError("invalid worker identity")
@@ -842,8 +880,7 @@ class RemoteManager:
         }
 
     def revoke(self, machine: str) -> dict[str, Any]:
-        with self._state_lock:
-            self._load_registry_unlocked()
+        with self._state_lock, self._registry_transaction_unlocked():
             worker = self.workers.pop(machine, None)
             if not worker:
                 raise ValueError(f"unknown remote machine: {machine}")
@@ -859,8 +896,7 @@ class RemoteManager:
         return {"machine": machine, "revoked": True}
 
     def rename(self, machine: str, new_name: str) -> dict[str, Any]:
-        with self._state_lock:
-            self._load_registry_unlocked()
+        with self._state_lock, self._registry_transaction_unlocked():
             new_name = _validate_machine_name(new_name)
             if new_name in self.workers:
                 raise ValueError(f"machine name already exists: {new_name}")
