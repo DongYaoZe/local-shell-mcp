@@ -297,9 +297,6 @@ class RemoteManager:
                 generation_raw.decode("ascii", errors="replace").strip() or "<invalid>"
             )
         if raw is None and backup_raw is None:
-            self.workers = {}
-            self.tokens = {}
-            self.invites = {}
             self._registry_loaded = True
             return
         registry: dict[str, list[dict[str, Any]]] | None = None
