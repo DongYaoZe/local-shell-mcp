@@ -103,6 +103,29 @@ def _cleanup_ticket_file(ticket: _TransferTicket) -> None:
         Path(ticket.cleanup_path).unlink(missing_ok=True)
 
 
+def _prune_orphan_download_snapshots_locked(now: float) -> None:
+    directory = get_settings().state_dir / "remote-transfers"
+    if not directory.is_dir():
+        return
+    referenced = {
+        str(Path(ticket.cleanup_path))
+        for ticket in _TICKETS.values()
+        if ticket.cleanup_path
+    }
+    cutoff = now - _ticket_ttl_s()
+    for path in directory.iterdir():
+        if not path.is_file() or str(path) in referenced:
+            continue
+        if path.suffix != ".bin" and not path.name.endswith(".tmp"):
+            continue
+        try:
+            if path.stat().st_mtime > cutoff:
+                continue
+            path.unlink(missing_ok=True)
+        except OSError:
+            continue
+
+
 def _prune_locked(now: float | None = None) -> None:
     current = _now() if now is None else now
     for token, ticket in list(_TICKETS.items()):
@@ -110,6 +133,7 @@ def _prune_locked(now: float | None = None) -> None:
             removed = _TICKETS.pop(token, None)
             if removed is not None:
                 _cleanup_ticket_file(removed)
+    _prune_orphan_download_snapshots_locked(current)
 
 
 def _create_ticket(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+from pathlib import Path
 
 import pytest
 from starlette.applications import Starlette
@@ -214,6 +215,24 @@ def test_stream_download_is_exact_and_one_time(tmp_path, monkeypatch):
     assert response.headers["content-length"] == str(len(data))
     assert response.headers["x-content-sha256"] == digest
     assert client.get(ticket["url"]).status_code == 404
+
+
+def test_stale_orphan_download_snapshot_is_scavenged(tmp_path, monkeypatch):
+    _client(tmp_path, monkeypatch)
+    data = b"orphaned"
+    source = tmp_path / "source.bin"
+    source.write_bytes(data)
+    ticket = create_download_ticket("source.bin", len(data), hashlib.sha256(data).hexdigest())
+    snapshot = Path(remote_transfer._TICKETS[ticket["token"]].cleanup_path or "")
+    assert snapshot.is_file()
+
+    with remote_transfer._TICKET_LOCK:
+        remote_transfer._TICKETS.clear()
+        remote_transfer._prune_locked(
+            now=snapshot.stat().st_mtime + remote_transfer._ticket_ttl_s() + 1
+        )
+
+    assert not snapshot.exists()
 
 
 def _worker_identity(tmp_path):
