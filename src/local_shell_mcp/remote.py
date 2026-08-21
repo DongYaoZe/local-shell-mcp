@@ -104,6 +104,7 @@ _WORKER_POLL_TIMEOUT_GRACE_S = 10.0
 REMOTE_WORKER_DISTRIBUTIONS: tuple[str, ...] = ()
 REMOTE_WORKER_REGISTRY_FILE_NAME = "remote-workers.json"
 REMOTE_WORKER_REGISTRY_BACKUP_FILE_NAME = "remote-workers.json.bak"
+REMOTE_WORKER_REGISTRY_GENERATION_FILE_NAME = "remote-workers.generation"
 REMOTE_WORKER_IDENTITY_FILE_NAME = "identity.json"
 MAX_REMOTE_INVITES = 1_024
 MAX_REMOTE_MACHINE_NAME_LENGTH = 128
@@ -252,7 +253,7 @@ class RemoteManager:
         return get_settings().state_dir / REMOTE_WORKER_REGISTRY_BACKUP_FILE_NAME
 
     @staticmethod
-    def _read_registry(raw: bytes | Path, source: str | None = None) -> dict[str, list[dict[str, Any]]]:
+    def _read_registry(raw: bytes | Path, source: str | None = None) -> dict[str, Any]:
         if isinstance(raw, Path):
             source = source or str(raw)
             raw = raw.read_bytes()
@@ -266,9 +267,21 @@ class RemoteManager:
         invites = data.get("invites", [])
         if not isinstance(invites, list):
             raise ValueError(f"remote worker registry invites field is invalid: {source}")
+        invite_rows = [item for item in invites if isinstance(item, dict)]
+        for item in invite_rows:
+            try:
+                float(item.get("expires_at") or 0)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"remote worker registry invite expires_at is invalid: {source}"
+                ) from exc
+        generation = data.get("generation")
+        if generation is not None and (not isinstance(generation, str) or not generation.strip()):
+            raise ValueError(f"remote worker registry generation is invalid: {source}")
         return {
+            "generation": generation,
             "workers": [item for item in workers if isinstance(item, dict)],
-            "invites": [item for item in invites if isinstance(item, dict)],
+            "invites": invite_rows,
         }
 
     def _load_registry_unlocked(self) -> None:
@@ -277,6 +290,10 @@ class RemoteManager:
         store = get_state_store()
         raw = store.read_bytes(REMOTE_WORKER_REGISTRY_FILE_NAME)
         backup_raw = store.read_bytes(REMOTE_WORKER_REGISTRY_BACKUP_FILE_NAME)
+        generation_raw = store.read_bytes(REMOTE_WORKER_REGISTRY_GENERATION_FILE_NAME)
+        recovery_generation = None
+        if generation_raw is not None:
+            recovery_generation = generation_raw.decode("ascii", errors="replace").strip() or "<invalid>"
         if raw is None and backup_raw is None:
             self._registry_loaded = True
             return
@@ -295,7 +312,15 @@ class RemoteManager:
             )
         if registry is None and backup_raw is not None:
             try:
-                registry = self._read_registry(backup_raw, REMOTE_WORKER_REGISTRY_BACKUP_FILE_NAME)
+                backup_registry = self._read_registry(
+                    backup_raw, REMOTE_WORKER_REGISTRY_BACKUP_FILE_NAME
+                )
+                if (
+                    recovery_generation is not None
+                    and backup_registry.get("generation") != recovery_generation
+                ):
+                    raise ValueError("remote worker registry backup is stale")
+                registry = backup_registry
             except (OSError, ValueError, json.JSONDecodeError) as exc:
                 audit(
                     "remote_worker_registry_backup_unreadable",
@@ -350,8 +375,10 @@ class RemoteManager:
 
     def _save_registry_unlocked(self) -> None:
         now = _utc()
+        generation = secrets.token_hex(16)
         data = {
             "version": 1,
+            "generation": generation,
             "workers": [
                 {
                     "name": worker.name,
@@ -376,6 +403,7 @@ class RemoteManager:
         }
         payload = json.dumps(data, indent=2, sort_keys=True).encode("utf-8")
         store = get_state_store()
+        store.write_bytes(REMOTE_WORKER_REGISTRY_GENERATION_FILE_NAME, generation.encode("ascii"))
         store.write_bytes(REMOTE_WORKER_REGISTRY_FILE_NAME, payload)
         try:
             store.write_bytes(REMOTE_WORKER_REGISTRY_BACKUP_FILE_NAME, payload)

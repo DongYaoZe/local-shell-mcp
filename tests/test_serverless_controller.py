@@ -450,7 +450,7 @@ async def test_remote_registry_backup_failure_does_not_undo_primary_commit(tmp_p
     original_write = store.write_bytes
 
     def fail_secondary_writes(key: str, value: bytes) -> None:
-        if key != remote_module.REMOTE_WORKER_REGISTRY_FILE_NAME:
+        if key in {remote_module.REMOTE_WORKER_REGISTRY_BACKUP_FILE_NAME, "audit.jsonl"}:
             raise OSError("secondary storage unavailable")
         original_write(key, value)
 
@@ -469,6 +469,62 @@ async def test_remote_registry_backup_failure_does_not_undo_primary_commit(tmp_p
     reloaded = remote_module.RemoteManager()
     resumed = await reloaded.resume_worker(registered["token"], {"name": "worker-a"})
     assert resumed["name"] == "worker-a"
+
+
+@pytest.mark.asyncio
+async def test_remote_registry_rejects_stale_backup_after_partial_save(tmp_path, monkeypatch):
+    _configure_stateless(tmp_path, monkeypatch)
+    store = get_state_store()
+    manager = remote_module.RemoteManager()
+    invite = await manager.create_invite(name="worker-a", workdir="/srv/work")
+    registered = await manager.register_worker(
+        {
+            "invite": invite["code"],
+            "name": "worker-a",
+            "workdir": "/srv/work",
+        }
+    )
+    original_write = store.write_bytes
+
+    def fail_backup(key: str, value: bytes) -> None:
+        if key == remote_module.REMOTE_WORKER_REGISTRY_BACKUP_FILE_NAME:
+            raise OSError("backup unavailable")
+        original_write(key, value)
+
+    monkeypatch.setattr(store, "write_bytes", fail_backup)
+    manager.revoke("worker-a")
+    monkeypatch.setattr(store, "write_bytes", original_write)
+    original_write(remote_module.REMOTE_WORKER_REGISTRY_FILE_NAME, b"{corrupt")
+
+    reloaded = remote_module.RemoteManager()
+    with pytest.raises(RuntimeError, match="no valid backup"):
+        await reloaded.resume_worker(registered["token"], {"name": "worker-a"})
+
+
+@pytest.mark.asyncio
+async def test_remote_registry_malformed_invite_uses_valid_backup(tmp_path, monkeypatch):
+    _configure_stateless(tmp_path, monkeypatch)
+    store = get_state_store()
+    manager = remote_module.RemoteManager()
+    invite = await manager.create_invite(name="worker-a", workdir="/srv/work")
+    raw = store.read_bytes(remote_module.REMOTE_WORKER_REGISTRY_FILE_NAME)
+    assert raw is not None
+    registry = json.loads(raw)
+    registry["invites"][0]["expires_at"] = "not-a-number"
+    store.write_bytes(
+        remote_module.REMOTE_WORKER_REGISTRY_FILE_NAME,
+        json.dumps(registry).encode("utf-8"),
+    )
+
+    reloaded = remote_module.RemoteManager()
+    registered = await reloaded.register_worker(
+        {
+            "invite": invite["code"],
+            "name": "worker-a",
+            "workdir": "/srv/work",
+        }
+    )
+    assert registered["token"].startswith("lsmcp_wk_")
 
 
 @pytest.mark.asyncio
