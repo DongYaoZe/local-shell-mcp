@@ -261,6 +261,40 @@ async def test_local_to_remote_snapshot_runs_off_event_loop(tmp_path, monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_cancelled_local_to_remote_snapshot_is_revoked(tmp_path, monkeypatch):
+    root = _workspace(tmp_path, monkeypatch)
+    (root / "payload.bin").write_bytes(b"content")
+    started = threading.Event()
+    release = threading.Event()
+    revoked = threading.Event()
+
+    def create_ticket(source_path, expected_bytes, expected_sha256):
+        del source_path, expected_bytes, expected_sha256
+        started.set()
+        assert release.wait(timeout=5)
+        return {"token": "ticket", "url": "http://testserver/remote/transfer/download/ticket"}
+
+    def revoke_ticket(token):
+        assert token == "ticket"
+        revoked.set()
+        return {"revoked": True}
+
+    monkeypatch.setattr(tools, "create_download_ticket", create_ticket)
+    monkeypatch.setattr(tools, "revoke_transfer_ticket", revoke_ticket)
+
+    transfer = asyncio.create_task(
+        tools._copy_local_file_to_remote("payload.bin", "dst", "copied.bin")
+    )
+    assert await asyncio.to_thread(started.wait, 2)
+    transfer.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await transfer
+    release.set()
+
+    assert await asyncio.to_thread(revoked.wait, 2)
+
+
+@pytest.mark.asyncio
 async def test_transfer_path_starts_tracked_managed_job(tmp_path, monkeypatch):
     root = _workspace(tmp_path, monkeypatch)
     (root / "src-machine").mkdir()

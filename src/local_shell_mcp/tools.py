@@ -1421,6 +1421,17 @@ async def _remote_transfer_data(
     return _unwrap_remote_transfer_result(result, machine=machine, tool=tool)
 
 
+def _revoke_cancelled_snapshot_ticket(task: asyncio.Task[dict[str, Any]]) -> None:
+    if task.cancelled():
+        return
+    try:
+        ticket = task.result()
+    except Exception:
+        return
+    with suppress(Exception):
+        revoke_transfer_ticket(ticket["token"])
+
+
 async def _copy_local_file_to_remote(
     source_path: str,
     dst_machine: str,
@@ -1433,12 +1444,19 @@ async def _copy_local_file_to_remote(
     if stat.get("type") != "file":
         raise ValueError(f"source is not a file: {source_path}")
     effective_chunk_size = stat["size"] if chunk_size is None else normalize_chunk_size(chunk_size)
-    ticket = await asyncio.to_thread(
-        create_download_ticket,
-        source_path,
-        stat["size"],
-        stat["sha256"],
+    ticket_task = asyncio.create_task(
+        asyncio.to_thread(
+            create_download_ticket,
+            source_path,
+            stat["size"],
+            stat["sha256"],
+        )
     )
+    try:
+        ticket = await asyncio.shield(ticket_task)
+    except asyncio.CancelledError:
+        ticket_task.add_done_callback(_revoke_cancelled_snapshot_ticket)
+        raise
     try:
         finish = await _remote_transfer_data(
             dst_machine,
