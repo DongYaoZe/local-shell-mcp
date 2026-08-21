@@ -1433,7 +1433,8 @@ async def _copy_local_file_to_remote(
     if stat.get("type") != "file":
         raise ValueError(f"source is not a file: {source_path}")
     effective_chunk_size = stat["size"] if chunk_size is None else normalize_chunk_size(chunk_size)
-    ticket = create_download_ticket(
+    ticket = await asyncio.to_thread(
+        create_download_ticket,
         source_path,
         stat["size"],
         stat["sha256"],
