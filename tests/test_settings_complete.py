@@ -72,6 +72,14 @@ port: 9001
 
     monkeypatch.setattr(settings, "yaml", yaml)
     workspace = tmp_path / "workspace"
+    for name in (
+        "LOCAL_SHELL_MCP_MODE",
+        "LOCAL_SHELL_MCP_DISABLE_LOCAL",
+        "LOCAL_SHELL_MCP_UI_WALLPAPER",
+        "LOCAL_SHELL_MCP_REMOTE_ENABLED",
+        "LOCAL_SHELL_MCP_PORT",
+    ):
+        monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("LOCAL_SHELL_MCP_CONFIG", str(config))
     monkeypatch.setenv("LOCAL_SHELL_MCP_WORKSPACE_ROOT", str(workspace))
     monkeypatch.setenv("LOCAL_SHELL_MCP_STATE_DIR", str(tmp_path / "state"))
