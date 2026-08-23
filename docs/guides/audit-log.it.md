@@ -1,4 +1,4 @@
-<!-- i18n-source-sha256: a5b96c45536a4d18d1e09f2c47a873e568d0594539aa630ed159b4ddbf3cc25d -->
+<!-- i18n-source-sha256: 25bb55459e83ee02b923876bad8d288c7a2055c4474f2098d58ce1e4a5e72605 -->
 # Log di audit
 
 `local-shell-mcp` scrive voci di audit strutturate per aiutare a ricostruire ciò che ha fatto un client connesso.
@@ -50,7 +50,7 @@ I log di audit sono particolarmente utili per:
 
 Il file `audit.jsonl` attivo è limitato per impostazione predefinita a 20 MB da `LOCAL_SHELL_MCP_MAX_AUDIT_LOG_BYTES`. Durante la manutenzione della retention, i record più vecchi vengono spostati in archivi Zstandard autosufficienti `audit-archive/*.jsonl.zst` invece di essere eliminati; anche i grandi audit payload esternalizzati vengono inclusi nell’archivio prima della pulizia dello storage attivo.
 
-Gli archivi compressi hanno un limite separato definito da `LOCAL_SHELL_MCP_MAX_AUDIT_ARCHIVE_BYTES`, pari a 512 MB per impostazione predefinita. Superato il limite, vengono eliminati prima gli archivi più vecchi. Impostare `0` per disabilitare la conservazione compressa a lungo termine. Le query recenti leggono solo l’hot log e consultano gli archivi quando serve la cronologia precedente.
+Gli archivi compressi hanno un limite separato definito da `LOCAL_SHELL_MCP_MAX_AUDIT_ARCHIVE_BYTES`, pari a 512 MB per impostazione predefinita. Superato il limite, vengono eliminati prima gli archivi più vecchi. Impostare `0` per disabilitare la conservazione compressa a lungo termine. La Web UI, le query Activity/Audit e `audit_tail` leggono solo l’hot log attivo. Gli archivi compressi sono cold storage per conservazione o esportazione e non vengono decompressi automaticamente dalle normali query della UI.
 
 ## Limitazioni
 

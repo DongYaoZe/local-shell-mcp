@@ -1,4 +1,4 @@
-<!-- i18n-source-sha256: a5b96c45536a4d18d1e09f2c47a873e568d0594539aa630ed159b4ddbf3cc25d -->
+<!-- i18n-source-sha256: 25bb55459e83ee02b923876bad8d288c7a2055c4474f2098d58ce1e4a5e72605 -->
 # Registro de auditoría
 
 `local-shell-mcp` escribe entradas de auditoría estructuradas para ayudar a reconstruir lo que hizo un client conectado.
@@ -50,7 +50,7 @@ Los registros de auditoría son especialmente útiles para:
 
 El `audit.jsonl` activo está limitado de forma predeterminada a 20 MB por `LOCAL_SHELL_MCP_MAX_AUDIT_LOG_BYTES`. Durante el mantenimiento de retención, los registros antiguos se trasladan a archivos Zstandard autocontenidos en `audit-archive/*.jsonl.zst` en lugar de descartarse; los audit payloads grandes externalizados también se incorporan al archivo antes de podarse del almacenamiento activo.
 
-Los archivos comprimidos tienen un límite independiente definido por `LOCAL_SHELL_MCP_MAX_AUDIT_ARCHIVE_BYTES`, 512 MB de forma predeterminada. Al superarlo se eliminan primero los archivos más antiguos. Establézcalo en `0` para desactivar la retención comprimida a largo plazo. Las consultas recientes leen solo el hot log y consultan los archivos cuando se necesita historial.
+Los archivos comprimidos tienen un límite independiente definido por `LOCAL_SHELL_MCP_MAX_AUDIT_ARCHIVE_BYTES`, 512 MB de forma predeterminada. Al superarlo se eliminan primero los archivos más antiguos. Establézcalo en `0` para desactivar la retención comprimida a largo plazo. La Web UI, las consultas de Activity/Audit y `audit_tail` leen únicamente el hot log activo. Los archivos comprimidos son almacenamiento frío para retención o exportación y las consultas normales de la UI no los descomprimen automáticamente.
 
 ## Limitaciones
 

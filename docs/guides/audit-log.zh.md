@@ -1,4 +1,4 @@
-<!-- i18n-source-sha256: a5b96c45536a4d18d1e09f2c47a873e568d0594539aa630ed159b4ddbf3cc25d -->
+<!-- i18n-source-sha256: 25bb55459e83ee02b923876bad8d288c7a2055c4474f2098d58ce1e4a5e72605 -->
 # 审计日志
 
 `local-shell-mcp` 会写入结构化审计记录，帮助还原已连接客户端做过什么。
@@ -50,7 +50,7 @@ tail -n 100 /workspace/.local-shell-mcp/audit.jsonl
 
 活动 `audit.jsonl` 默认受 `LOCAL_SHELL_MCP_MAX_AUDIT_LOG_BYTES` 限制为 20 MB。执行保留维护时，旧记录会移动到 `audit-archive/*.jsonl.zst` 的自包含 Zstandard 归档，而不是直接丢弃；外置的大型 audit payload 也会先写入归档。
 
-压缩归档由 `LOCAL_SHELL_MCP_MAX_AUDIT_ARCHIVE_BYTES` 单独限制，默认 512 MB；超过后优先删除最旧归档。将其设为 `0` 可禁用长期压缩保留。近期查询只读取热日志，需要历史记录时才查询归档。
+压缩归档由 `LOCAL_SHELL_MCP_MAX_AUDIT_ARCHIVE_BYTES` 单独限制，默认 512 MB；超过后优先删除最旧归档。将其设为 `0` 可禁用长期压缩保留。Web UI、Activity/Audit 查询和 `audit_tail` 只读取活动热日志。压缩归档仅作为保留或导出的冷存储，普通 UI 查询不会自动解压归档。
 
 ## 限制
 

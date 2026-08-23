@@ -1,4 +1,4 @@
-<!-- i18n-source-sha256: a5b96c45536a4d18d1e09f2c47a873e568d0594539aa630ed159b4ddbf3cc25d -->
+<!-- i18n-source-sha256: 25bb55459e83ee02b923876bad8d288c7a2055c4474f2098d58ce1e4a5e72605 -->
 # 審計日誌
 
 `local-shell-mcp` 會寫入結構化審計記錄，幫助還原已連接客戶端做過什麼。
@@ -50,7 +50,7 @@ tail -n 100 /workspace/.local-shell-mcp/audit.jsonl
 
 作用中的 `audit.jsonl` 預設由 `LOCAL_SHELL_MCP_MAX_AUDIT_LOG_BYTES` 限制為 20 MB。執行保留維護時，較舊記錄會移入 `audit-archive/*.jsonl.zst` 的自包含 Zstandard 封存，而不是直接丟棄；外置的大型 audit payload 也會先寫入封存。
 
-壓縮封存由 `LOCAL_SHELL_MCP_MAX_AUDIT_ARCHIVE_BYTES` 另行限制，預設為 512 MB；超過後會先刪除最舊封存。設為 `0` 可停用長期壓縮保留。近期查詢只讀取熱日誌，需要歷史記錄時才查詢封存。
+壓縮封存由 `LOCAL_SHELL_MCP_MAX_AUDIT_ARCHIVE_BYTES` 另行限制，預設為 512 MB；超過後會先刪除最舊封存。設為 `0` 可停用長期壓縮保留。Web UI、Activity/Audit 查詢和 `audit_tail` 只讀取作用中的熱日誌。壓縮封存僅作為保留或匯出的冷儲存，普通 UI 查詢不會自動解壓封存。
 
 ## 限制
 
