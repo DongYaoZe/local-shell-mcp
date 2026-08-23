@@ -1,4 +1,4 @@
-<!-- i18n-source-sha256: 2bcd86ff1a9c7b28a9724edc24196f114958a7a0936d07018462cc50022c1468 -->
+<!-- i18n-source-sha256: b345d7a6aeb17e42ecca284d4b2f80db2dbf2719bed9e300a2e07737c75ddca3 -->
 # Configuration
 
 Repository एक copyable starter file देता है: [`.env.example`](https://github.com/fwerkor/local-shell-mcp/blob/main/.env.example)। Docker Compose उससे बने `.env` को automatically पढ़ता है, और अन्य runtimes वही `LOCAL_SHELL_MCP_` environment variables उपयोग कर सकते हैं। YAML binary/source deployments के लिए optional advanced input रहता है; file explicitly बनाएँ और `LOCAL_SHELL_MCP_CONFIG` या `--config` से चुनें। Environment variables YAML values को override करती हैं, इसलिए intentional override के अलावा वही setting दोनों जगह define न करें। YAML keys नीचे दिखाए field names उपयोग करती हैं।
@@ -66,6 +66,7 @@ Local-only testing के लिए `auth_bypass_localhost` default enabled ह�
 | `max_jobs` | `LOCAL_SHELL_MCP_MAX_JOBS` | `1000` | Maximum retained long-running job records; active jobs prune नहीं होते। |
 | `max_audit_tail_bytes` | `LOCAL_SHELL_MCP_MAX_AUDIT_TAIL_BYTES` | `1000000` |  |
 | `max_audit_log_bytes` | `LOCAL_SHELL_MCP_MAX_AUDIT_LOG_BYTES` | `20000000` |  |
+| `max_audit_archive_bytes` | `LOCAL_SHELL_MCP_MAX_AUDIT_ARCHIVE_BYTES` | `512000000` |  |
 | `max_tmp_files` | `LOCAL_SHELL_MCP_MAX_TMP_FILES` | `500` |  |
 | `max_tmp_bytes` | `LOCAL_SHELL_MCP_MAX_TMP_BYTES` | `50000000` |  |
 | `max_transfer_archive_entries` | `LOCAL_SHELL_MCP_MAX_TRANSFER_ARCHIVE_ENTRIES` | `100000` | Transferred directory archive unpack करते समय maximum accepted entries। |

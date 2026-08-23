@@ -1,4 +1,4 @@
-<!-- i18n-source-sha256: 4aec137923c38de0ed4a1b760b5dbd6ce99090d508ce3fe838d35ad44b4ba4f1 -->
+<!-- i18n-source-sha256: a5b96c45536a4d18d1e09f2c47a873e568d0594539aa630ed159b4ddbf3cc25d -->
 # Nhật ký audit
 
 `local-shell-mcp` ghi các mục audit có cấu trúc để giúp dựng lại những gì một client đã kết nối thực hiện.
@@ -48,7 +48,9 @@ Nhật ký audit đặc biệt hữu ích để:
 
 ## Lưu giữ
 
-Nhật ký bị giới hạn bởi `LOCAL_SHELL_MCP_MAX_AUDIT_LOG_BYTES`. Hãy xoay vòng hoặc export ra bên ngoài nếu cần lưu giữ lâu.
+`audit.jsonl` đang hoạt động mặc định được giới hạn ở 20 MB bởi `LOCAL_SHELL_MCP_MAX_AUDIT_LOG_BYTES`. Khi bảo trì retention, các record cũ được chuyển sang archive Zstandard tự chứa `audit-archive/*.jsonl.zst` thay vì bị bỏ; các audit payload lớn đã tách riêng cũng được đưa vào archive trước khi bị prune khỏi hot store.
+
+Archive nén có giới hạn riêng `LOCAL_SHELL_MCP_MAX_AUDIT_ARCHIVE_BYTES`, mặc định 512 MB. Khi vượt giới hạn, archive cũ nhất bị xóa trước. Đặt thành `0` để tắt lưu trữ nén dài hạn. Các truy vấn gần đây chỉ đọc hot log và chỉ mở archive khi cần lịch sử cũ.
 
 ## Giới hạn
 

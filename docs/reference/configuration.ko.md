@@ -1,4 +1,4 @@
-<!-- i18n-source-sha256: 2bcd86ff1a9c7b28a9724edc24196f114958a7a0936d07018462cc50022c1468 -->
+<!-- i18n-source-sha256: b345d7a6aeb17e42ecca284d4b2f80db2dbf2719bed9e300a2e07737c75ddca3 -->
 # 구성
 
 Repository에는 복사 가능한 시작 파일 [`.env.example`](https://github.com/fwerkor/local-shell-mcp/blob/main/.env.example)이 포함됩니다. Docker Compose는 생성된 `.env`를 자동으로 읽고, 다른 runtime도 동일한 `LOCAL_SHELL_MCP_` environment variables를 사용할 수 있습니다. YAML은 binary 또는 source deployment를 위한 optional advanced input입니다. 파일을 명시적으로 만들고 `LOCAL_SHELL_MCP_CONFIG` 또는 `--config`로 선택합니다. Environment variables가 YAML values를 override하므로 의도적인 override가 아니라면 같은 setting을 두 곳에 정의하지 마십시오. YAML keys는 아래 field names를 사용합니다.
@@ -66,6 +66,7 @@ Local-only testing에서는 `auth_bypass_localhost`가 기본 활성화됩니다
 | `max_jobs` | `LOCAL_SHELL_MCP_MAX_JOBS` | `1000` | 유지할 long-running job records 최대치. Active jobs는 prune하지 않습니다. |
 | `max_audit_tail_bytes` | `LOCAL_SHELL_MCP_MAX_AUDIT_TAIL_BYTES` | `1000000` |  |
 | `max_audit_log_bytes` | `LOCAL_SHELL_MCP_MAX_AUDIT_LOG_BYTES` | `20000000` |  |
+| `max_audit_archive_bytes` | `LOCAL_SHELL_MCP_MAX_AUDIT_ARCHIVE_BYTES` | `512000000` |  |
 | `max_tmp_files` | `LOCAL_SHELL_MCP_MAX_TMP_FILES` | `500` |  |
 | `max_tmp_bytes` | `LOCAL_SHELL_MCP_MAX_TMP_BYTES` | `50000000` |  |
 | `max_transfer_archive_entries` | `LOCAL_SHELL_MCP_MAX_TRANSFER_ARCHIVE_ENTRIES` | `100000` | Transferred directory archive unpack 시 허용할 entries 최대치. |

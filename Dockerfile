@@ -137,6 +137,7 @@ RUN set -eux; \
 COPY --from=ui-builder /source/src/local_shell_mcp/ui_static /app/src/local_shell_mcp/ui_static
 COPY --from=ui-builder /source/ui/dist/local-shell-mcp-tui /usr/local/bin/local-shell-mcp-tui
 RUN pip install --no-cache-dir -e ".[dev]" "playwright==${PLAYWRIGHT_VERSION}" \
+  && python -c "import zstandard" \
   && chmod 0755 /usr/local/bin/local-shell-mcp-tui \
   && test -s /app/src/local_shell_mcp/ui_static/index.html \
   && test -s /app/src/local_shell_mcp/ui_static/web.js \

@@ -1,4 +1,4 @@
-<!-- i18n-source-sha256: 4aec137923c38de0ed4a1b760b5dbd6ce99090d508ce3fe838d35ad44b4ba4f1 -->
+<!-- i18n-source-sha256: a5b96c45536a4d18d1e09f2c47a873e568d0594539aa630ed159b4ddbf3cc25d -->
 # Registro de auditoría
 
 `local-shell-mcp` escribe entradas de auditoría estructuradas para ayudar a reconstruir lo que hizo un client conectado.
@@ -48,7 +48,9 @@ Los registros de auditoría son especialmente útiles para:
 
 ## Retención
 
-El registro está limitado por `LOCAL_SHELL_MCP_MAX_AUDIT_LOG_BYTES`. Rótelo o expórtelo externamente si necesita conservarlo durante más tiempo.
+El `audit.jsonl` activo está limitado de forma predeterminada a 20 MB por `LOCAL_SHELL_MCP_MAX_AUDIT_LOG_BYTES`. Durante el mantenimiento de retención, los registros antiguos se trasladan a archivos Zstandard autocontenidos en `audit-archive/*.jsonl.zst` en lugar de descartarse; los audit payloads grandes externalizados también se incorporan al archivo antes de podarse del almacenamiento activo.
+
+Los archivos comprimidos tienen un límite independiente definido por `LOCAL_SHELL_MCP_MAX_AUDIT_ARCHIVE_BYTES`, 512 MB de forma predeterminada. Al superarlo se eliminan primero los archivos más antiguos. Establézcalo en `0` para desactivar la retención comprimida a largo plazo. Las consultas recientes leen solo el hot log y consultan los archivos cuando se necesita historial.
 
 ## Limitaciones
 

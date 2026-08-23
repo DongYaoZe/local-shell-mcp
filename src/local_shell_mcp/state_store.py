@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import os
 import threading
 import uuid
 from collections.abc import Iterator
@@ -17,6 +18,8 @@ class StateStore(Protocol):
     def read_bytes(self, key: str) -> bytes | None: ...
 
     def write_bytes(self, key: str, value: bytes) -> None: ...
+
+    def append_bytes(self, key: str, value: bytes) -> int: ...
 
     def delete(self, key: str) -> None: ...
 
@@ -55,6 +58,17 @@ class FileStateStore:
             temporary.replace(path)
         finally:
             temporary.unlink(missing_ok=True)
+
+    def append_bytes(self, key: str, value: bytes) -> int:
+        path = self._path(key)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        with os.fdopen(descriptor, "ab") as handle:
+            handle.write(value)
+            handle.flush()
+        with contextlib.suppress(OSError):
+            path.chmod(0o600)
+        return path.stat().st_size
 
     def delete(self, key: str) -> None:
         self._path(key).unlink(missing_ok=True)
@@ -104,6 +118,13 @@ class MemoryStateStore:
         namespaced = self._key(key)
         with self._lock_for(key):
             _MEMORY_VALUES[namespaced] = bytes(value)
+
+    def append_bytes(self, key: str, value: bytes) -> int:
+        namespaced = self._key(key)
+        with self._lock_for(key):
+            combined = _MEMORY_VALUES.get(namespaced, b"") + bytes(value)
+            _MEMORY_VALUES[namespaced] = combined
+            return len(combined)
 
     def delete(self, key: str) -> None:
         namespaced = self._key(key)
@@ -156,6 +177,10 @@ class RedisStateStore:
     def write_bytes(self, key: str, value: bytes) -> None:
         self._refresh_active_locks()
         self._client.set(self._key(key), value)
+
+    def append_bytes(self, key: str, value: bytes) -> int:
+        self._refresh_active_locks()
+        return int(self._client.append(self._key(key), value))
 
     def delete(self, key: str) -> None:
         self._refresh_active_locks()

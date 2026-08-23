@@ -123,10 +123,11 @@ def test_file_and_memory_state_store_round_trip(tmp_path):
     assert file_store.list_keys() == []
     file_store.write_bytes("nested/value.bin", b"value")
     file_store.write_bytes("other.bin", b"other")
-    assert file_store.read_bytes("nested/value.bin") == b"value"
+    assert file_store.append_bytes("nested/value.bin", b"+") == 6
+    assert file_store.read_bytes("nested/value.bin") == b"value+"
     assert file_store.list_keys("nested/") == ["nested/value.bin"]
     with file_store.lock("nested/value.bin"):
-        assert file_store.read_bytes("nested/value.bin") == b"value"
+        assert file_store.read_bytes("nested/value.bin") == b"value+"
     file_store.delete("nested/value.bin")
     assert file_store.read_bytes("nested/value.bin") is None
     with pytest.raises(ValueError, match="escapes state directory"):
@@ -139,11 +140,12 @@ def test_file_and_memory_state_store_round_trip(tmp_path):
     first.write_bytes("key", b"one")
     first.write_bytes("nested/key", b"two")
     second.write_bytes("key", b"other")
-    assert first.read_bytes("key") == b"one"
+    assert first.append_bytes("key", b"+") == 4
+    assert first.read_bytes("key") == b"one+"
     assert second.read_bytes("key") == b"other"
     assert first.list_keys("nested/") == ["nested/key"]
     with first.lock("key"):
-        assert first.read_bytes("key") == b"one"
+        assert first.read_bytes("key") == b"one+"
     first.delete("key")
     assert first.read_bytes("key") is None
 
@@ -182,6 +184,10 @@ def test_redis_state_store_round_trip_and_lock(monkeypatch):
         def set(self, key, value):
             self.values[key] = bytes(value)
 
+        def append(self, key, value):
+            self.values[key] = self.values.get(key, b"") + bytes(value)
+            return len(self.values[key])
+
         def delete(self, key):
             self.values.pop(key, None)
 
@@ -208,7 +214,8 @@ def test_redis_state_store_round_trip_and_lock(monkeypatch):
     assert store.read_bytes("missing") is None
     store.write_bytes("jobs/one", b"1")
     store.write_bytes("jobs/two", b"2")
-    assert store.read_bytes("jobs/one") == b"1"
+    assert store.append_bytes("jobs/one", b"+") == 2
+    assert store.read_bytes("jobs/one") == b"1+"
     assert store.list_keys("jobs/") == ["jobs/one", "jobs/two"]
     with store.lock("jobs"):
         assert store.read_bytes("jobs/two") == b"2"
@@ -433,6 +440,35 @@ def test_state_backed_audit_tail_and_retention_include_external_payloads(tmp_pat
 
     tail = tools._read_audit_tail_entries(10)
     assert any(entry.get("event") == "serverless_large_audit" for entry in tail["entries"])
+    assert not get_settings().audit_log_path.exists()
+
+
+def test_state_backed_audit_archive_preserves_pruned_payloads(tmp_path, monkeypatch):
+    _configure_stateless(
+        tmp_path,
+        monkeypatch,
+        max_audit_log_bytes="3500",
+        max_audit_archive_bytes="50000",
+        max_audit_tail_bytes="10000",
+    )
+    archived_payload = "".join(
+        hashlib.sha256(f"archive-{index}".encode()).hexdigest() for index in range(500)
+    )
+
+    audit_module.audit("serverless_archived", payload=archived_payload)
+    audit_module.audit("serverless_live", detail="kept" * 300)
+
+    store = get_state_store()
+    archive_keys = [
+        key for key in store.list_keys("audit-archive/") if key.endswith(".jsonl.zst")
+    ]
+    assert archive_keys
+    assert len(store.read_bytes("audit.jsonl") or b"") <= get_settings().max_audit_log_bytes
+
+    matches = audit_module.query_audit(search="serverless_archived", sort="asc")["entries"]
+    assert len(matches) == 1
+    archived = audit_module.get_audit_entry(matches[0]["id"])
+    assert archived["payload"] == archived_payload
     assert not get_settings().audit_log_path.exists()
 
 

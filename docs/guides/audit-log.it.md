@@ -1,4 +1,4 @@
-<!-- i18n-source-sha256: 4aec137923c38de0ed4a1b760b5dbd6ce99090d508ce3fe838d35ad44b4ba4f1 -->
+<!-- i18n-source-sha256: a5b96c45536a4d18d1e09f2c47a873e568d0594539aa630ed159b4ddbf3cc25d -->
 # Log di audit
 
 `local-shell-mcp` scrive voci di audit strutturate per aiutare a ricostruire ciò che ha fatto un client connesso.
@@ -48,7 +48,9 @@ I log di audit sono particolarmente utili per:
 
 ## Conservazione
 
-Il log è limitato da `LOCAL_SHELL_MCP_MAX_AUDIT_LOG_BYTES`. Effettua la rotazione o esportalo esternamente se serve una conservazione prolungata.
+Il file `audit.jsonl` attivo è limitato per impostazione predefinita a 20 MB da `LOCAL_SHELL_MCP_MAX_AUDIT_LOG_BYTES`. Durante la manutenzione della retention, i record più vecchi vengono spostati in archivi Zstandard autosufficienti `audit-archive/*.jsonl.zst` invece di essere eliminati; anche i grandi audit payload esternalizzati vengono inclusi nell’archivio prima della pulizia dello storage attivo.
+
+Gli archivi compressi hanno un limite separato definito da `LOCAL_SHELL_MCP_MAX_AUDIT_ARCHIVE_BYTES`, pari a 512 MB per impostazione predefinita. Superato il limite, vengono eliminati prima gli archivi più vecchi. Impostare `0` per disabilitare la conservazione compressa a lungo termine. Le query recenti leggono solo l’hot log e consultano gli archivi quando serve la cronologia precedente.
 
 ## Limitazioni
 

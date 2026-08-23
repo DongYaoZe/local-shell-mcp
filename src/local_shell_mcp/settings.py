@@ -85,6 +85,7 @@ _POSITIVE_INTEGER_SETTINGS = (
 
 _NONNEGATIVE_INTEGER_SETTINGS = (
     "max_jobs",
+    "max_audit_archive_bytes",
     "file_download_default_max_downloads",
     "file_download_max_file_bytes",
     "oauth_access_token_ttl_s",
@@ -357,6 +358,7 @@ if _PYDANTIC_AVAILABLE:
         max_jobs: int = 1_000
         max_audit_tail_bytes: int = 1_000_000
         max_audit_log_bytes: int = 20_000_000
+        max_audit_archive_bytes: int = 512_000_000
         max_tmp_files: int = 500
         max_tmp_bytes: int = 50_000_000
         max_transfer_archive_entries: int = 100_000
@@ -586,6 +588,7 @@ else:
         max_jobs: int = 1_000
         max_audit_tail_bytes: int = 1_000_000
         max_audit_log_bytes: int = 20_000_000
+        max_audit_archive_bytes: int = 512_000_000
         max_tmp_files: int = 500
         max_tmp_bytes: int = 50_000_000
         max_transfer_archive_entries: int = 100_000

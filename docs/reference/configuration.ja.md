@@ -1,4 +1,4 @@
-<!-- i18n-source-sha256: 2bcd86ff1a9c7b28a9724edc24196f114958a7a0936d07018462cc50022c1468 -->
+<!-- i18n-source-sha256: b345d7a6aeb17e42ecca284d4b2f80db2dbf2719bed9e300a2e07737c75ddca3 -->
 # 設定
 
 Repository にはコピー可能な starter file [`.env.example`](https://github.com/fwerkor/local-shell-mcp/blob/main/.env.example) が含まれます。Docker Compose は作成した `.env` を自動的に読み取り、他の runtime でも同じ `LOCAL_SHELL_MCP_` environment variables を使用できます。YAML は binary/source deployment 向けの optional advanced input です。File を明示的に作成し、`LOCAL_SHELL_MCP_CONFIG` または `--config` で選択します。Environment variables は YAML values を override するため、意図的な override でない限り同じ setting を両方に定義しないでください。YAML keys は以下の field names を使います。
@@ -66,6 +66,7 @@ Local-only testing では `auth_bypass_localhost` が default で有効です。
 | `max_jobs` | `LOCAL_SHELL_MCP_MAX_JOBS` | `1000` | 保持する long-running job records の上限。Active jobs は prune されません。 |
 | `max_audit_tail_bytes` | `LOCAL_SHELL_MCP_MAX_AUDIT_TAIL_BYTES` | `1000000` |  |
 | `max_audit_log_bytes` | `LOCAL_SHELL_MCP_MAX_AUDIT_LOG_BYTES` | `20000000` |  |
+| `max_audit_archive_bytes` | `LOCAL_SHELL_MCP_MAX_AUDIT_ARCHIVE_BYTES` | `512000000` |  |
 | `max_tmp_files` | `LOCAL_SHELL_MCP_MAX_TMP_FILES` | `500` |  |
 | `max_tmp_bytes` | `LOCAL_SHELL_MCP_MAX_TMP_BYTES` | `50000000` |  |
 | `max_transfer_archive_entries` | `LOCAL_SHELL_MCP_MAX_TRANSFER_ARCHIVE_ENTRIES` | `100000` | Transferred directory archive の unpack 時に受け入れる entries の上限。 |

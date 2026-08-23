@@ -1,4 +1,4 @@
-<!-- i18n-source-sha256: 4aec137923c38de0ed4a1b760b5dbd6ce99090d508ce3fe838d35ad44b4ba4f1 -->
+<!-- i18n-source-sha256: a5b96c45536a4d18d1e09f2c47a873e568d0594539aa630ed159b4ddbf3cc25d -->
 # Audit log
 
 `local-shell-mcp` structured audit entries लिखता है ताकि यह पुनर्निर्मित किया जा सके कि जुड़े हुए client ने क्या किया।
@@ -48,7 +48,9 @@ Audit logs विशेष रूप से इन कार्यों मे�
 
 ## Retention
 
-Log `LOCAL_SHELL_MCP_MAX_AUDIT_LOG_BYTES` से bounded है। लंबे retention की आवश्यकता हो तो इसे rotate करें या बाहर export करें।
+सक्रिय `audit.jsonl` को डिफ़ॉल्ट रूप से `LOCAL_SHELL_MCP_MAX_AUDIT_LOG_BYTES` द्वारा 20 MB तक सीमित रखा जाता है। retention maintenance के दौरान पुराने records हटाए नहीं जाते, बल्कि self-contained Zstandard archives `audit-archive/*.jsonl.zst` में भेजे जाते हैं; external बड़े audit payloads भी hot store से prune होने से पहले archive में शामिल किए जाते हैं।
+
+Compressed archives के लिए अलग `LOCAL_SHELL_MCP_MAX_AUDIT_ARCHIVE_BYTES` सीमा है, जिसका डिफ़ॉल्ट 512 MB है। सीमा पार होने पर सबसे पुराने archives पहले हटते हैं। `0` सेट करने पर long-term compressed retention बंद हो जाता है। हाल की queries केवल hot log पढ़ती हैं और पुराने history की जरूरत पर archives खोलती हैं।
 
 ## सीमाएँ
 

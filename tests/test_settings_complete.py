@@ -106,6 +106,9 @@ def test_pydantic_settings_validation_and_copy_paths(tmp_path):
     )
     assert model.command_denylist == []
     assert model.path_denylist == []
+    assert model.max_audit_log_bytes == 20_000_000
+    assert model.max_audit_archive_bytes == 512_000_000
+    assert settings.Settings(max_audit_archive_bytes=0).max_audit_archive_bytes == 0
     assert model.with_workspace_relative_defaults() is model
 
     copied = settings._replace_settings(model, port=9999)
@@ -126,6 +129,7 @@ def test_pydantic_settings_validation_and_copy_paths(tmp_path):
     "updates, message",
     [
         ({"max_jobs": -1}, "greater than or equal"),
+        ({"max_audit_archive_bytes": -1}, "greater than or equal"),
         ({"oauth_access_token_ttl_s": -1}, "greater than or equal"),
         ({"port": 0}, "greater than zero"),
         ({"file_download_default_max_downloads": -1}, "greater than or equal"),

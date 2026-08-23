@@ -1,4 +1,4 @@
-<!-- i18n-source-sha256: 4aec137923c38de0ed4a1b760b5dbd6ce99090d508ce3fe838d35ad44b4ba4f1 -->
+<!-- i18n-source-sha256: a5b96c45536a4d18d1e09f2c47a873e568d0594539aa630ed159b4ddbf3cc25d -->
 # 감사 로그
 
 `local-shell-mcp`는 연결된 client가 수행한 작업을 재구성할 수 있도록 구조화된 감사 항목을 기록합니다.
@@ -48,7 +48,9 @@ tail -n 100 /workspace/.local-shell-mcp/audit.jsonl
 
 ## 보존
 
-로그 크기는 `LOCAL_SHELL_MCP_MAX_AUDIT_LOG_BYTES`로 제한됩니다. 장기간 보존이 필요하면 rotation하거나 외부로 export하십시오.
+활성 `audit.jsonl`은 기본적으로 `LOCAL_SHELL_MCP_MAX_AUDIT_LOG_BYTES`에 의해 20 MB로 제한됩니다. 보존 정리 시 오래된 레코드는 삭제되지 않고 자체 포함 Zstandard 아카이브인 `audit-archive/*.jsonl.zst`로 이동합니다. 외부화된 큰 audit payload도 hot store에서 정리되기 전에 아카이브에 포함됩니다.
+
+압축 아카이브는 `LOCAL_SHELL_MCP_MAX_AUDIT_ARCHIVE_BYTES`로 별도 제한되며 기본값은 512 MB입니다. 한도를 넘으면 가장 오래된 아카이브부터 삭제됩니다. `0`으로 설정하면 장기 압축 보존을 비활성화할 수 있습니다. 최근 조회는 hot log만 읽고, 과거 기록이 필요할 때만 아카이브를 조회합니다.
 
 ## 제한 사항
 

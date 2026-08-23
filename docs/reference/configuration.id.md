@@ -1,4 +1,4 @@
-<!-- i18n-source-sha256: 2bcd86ff1a9c7b28a9724edc24196f114958a7a0936d07018462cc50022c1468 -->
+<!-- i18n-source-sha256: b345d7a6aeb17e42ecca284d4b2f80db2dbf2719bed9e300a2e07737c75ddca3 -->
 # Konfigurasi
 
 Repository menyediakan satu starter file yang dapat disalin: [`.env.example`](https://github.com/fwerkor/local-shell-mcp/blob/main/.env.example). Docker Compose membaca `.env` hasilnya secara otomatis, dan runtime lain dapat memakai environment variables `LOCAL_SHELL_MCP_` yang sama. YAML tetap menjadi optional advanced input untuk deployment binary atau source; buat file secara eksplisit dan pilih dengan `LOCAL_SHELL_MCP_CONFIG` atau `--config`. Environment variables override YAML values, jadi hindari mendefinisikan setting yang sama di keduanya kecuali override memang disengaja. YAML keys menggunakan field names di bawah.
@@ -66,6 +66,7 @@ Untuk local-only testing, `auth_bypass_localhost` aktif secara default. Jangan e
 | `max_jobs` | `LOCAL_SHELL_MCP_MAX_JOBS` | `1000` | Maksimum retained long-running job records; active jobs tidak pernah pruned. |
 | `max_audit_tail_bytes` | `LOCAL_SHELL_MCP_MAX_AUDIT_TAIL_BYTES` | `1000000` |  |
 | `max_audit_log_bytes` | `LOCAL_SHELL_MCP_MAX_AUDIT_LOG_BYTES` | `20000000` |  |
+| `max_audit_archive_bytes` | `LOCAL_SHELL_MCP_MAX_AUDIT_ARCHIVE_BYTES` | `512000000` |  |
 | `max_tmp_files` | `LOCAL_SHELL_MCP_MAX_TMP_FILES` | `500` |  |
 | `max_tmp_bytes` | `LOCAL_SHELL_MCP_MAX_TMP_BYTES` | `50000000` |  |
 | `max_transfer_archive_entries` | `LOCAL_SHELL_MCP_MAX_TRANSFER_ARCHIVE_ENTRIES` | `100000` | Maksimum entries yang diterima saat unpack transferred directory archive. |

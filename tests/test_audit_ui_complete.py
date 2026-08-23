@@ -744,9 +744,12 @@ def test_audit_retention_keeps_latest_call_pair_together(tmp_path, monkeypatch):
     audit_module._enforce_audit_storage_limit(log_path, pair_bytes + 100)
 
     entries = audit_module.query_audit(sort="asc")["entries"]
-    assert len(entries) == 1
-    assert entries[0]["id"] == "call:latest-call"
-    assert entries[0]["paired"] is True
+    assert [entry["event"] for entry in entries] == ["older_event", "mcp_tool_call"]
+    assert entries[1]["id"] == "call:latest-call"
+    assert entries[1]["paired"] is True
+    archives = audit_module._archive_entries()
+    assert len(archives) == 1
+    assert archives[0]["compressed_bytes"] < archives[0]["raw_bytes"]
     detail = audit_module.get_audit_entry("call:latest-call")
     assert detail["input"]["content"] == latest_input
     assert detail["output"]["stdout"] == latest_output
@@ -781,5 +784,29 @@ def test_audit_retention_bounds_log_and_external_payload_bytes(tmp_path, monkeyp
     assert stored_bytes <= max_bytes
     assert all(not path.exists() for path in first_payloads)
     entries = audit_module.query_audit(sort="asc")["entries"]
-    assert [entry["event"] for entry in entries] == ["second_large_event"]
-    assert audit_module.get_audit_entry(entries[0]["id"])["payload"] == second
+    assert [entry["event"] for entry in entries] == ["first_large_event", "second_large_event"]
+    assert audit_module.get_audit_entry(entries[0]["id"])["payload"] == first
+    assert audit_module.get_audit_entry(entries[1]["id"])["payload"] == second
+
+
+def test_audit_archive_budget_prunes_oldest_compressed_files(tmp_path, monkeypatch):
+    _configure(tmp_path, monkeypatch)
+    monkeypatch.setenv("LOCAL_SHELL_MCP_MAX_AUDIT_LOG_BYTES", "2500")
+    monkeypatch.setenv("LOCAL_SHELL_MCP_MAX_AUDIT_ARCHIVE_BYTES", "1200")
+    get_settings.cache_clear()
+
+    for batch in range(8):
+        for index in range(20):
+            audit_module.audit(
+                "archive_budget_event", batch=batch, index=index, detail="x" * 120
+            )
+
+    archives = audit_module._archive_entries()
+    assert archives
+    assert sum(entry["compressed_bytes"] for entry in archives) <= 1200
+    keys = {entry["key"] for entry in archives}
+    files = {
+        path.relative_to(tmp_path).as_posix()
+        for path in (tmp_path / audit_module._AUDIT_ARCHIVE_DIRECTORY).glob("*.jsonl.zst")
+    }
+    assert files == keys

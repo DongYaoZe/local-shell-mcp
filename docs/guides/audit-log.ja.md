@@ -1,4 +1,4 @@
-<!-- i18n-source-sha256: 4aec137923c38de0ed4a1b760b5dbd6ce99090d508ce3fe838d35ad44b4ba4f1 -->
+<!-- i18n-source-sha256: a5b96c45536a4d18d1e09f2c47a873e568d0594539aa630ed159b4ddbf3cc25d -->
 # 監査ログ
 
 `local-shell-mcp` は、接続した client が行った操作を再構成できるよう、構造化された監査エントリを書き込みます。
@@ -48,7 +48,9 @@ tail -n 100 /workspace/.local-shell-mcp/audit.jsonl
 
 ## 保持期間
 
-ログの上限は `LOCAL_SHELL_MCP_MAX_AUDIT_LOG_BYTES` です。長期間保持する必要がある場合は、rotation または外部への export を行ってください。
+アクティブな `audit.jsonl` は、既定で `LOCAL_SHELL_MCP_MAX_AUDIT_LOG_BYTES` により 20 MB に制限されます。保持処理では古いレコードを破棄せず、自己完結型の Zstandard アーカイブ `audit-archive/*.jsonl.zst` に移動します。外部化された大きな audit payload も、hot store から削除する前にアーカイブへ格納されます。
+
+圧縮アーカイブは `LOCAL_SHELL_MCP_MAX_AUDIT_ARCHIVE_BYTES` で別途制限され、既定値は 512 MB です。上限を超えると最古のアーカイブから削除されます。`0` に設定すると長期圧縮保持を無効化できます。通常の最近の照会は hot log のみを読み、履歴が必要な場合にだけアーカイブを参照します。
 
 ## 制限
 

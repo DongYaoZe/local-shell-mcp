@@ -1,4 +1,4 @@
-<!-- i18n-source-sha256: 2bcd86ff1a9c7b28a9724edc24196f114958a7a0936d07018462cc50022c1468 -->
+<!-- i18n-source-sha256: b345d7a6aeb17e42ecca284d4b2f80db2dbf2719bed9e300a2e07737c75ddca3 -->
 # Конфигурация
 
 Repository поставляет один копируемый стартовый файл: [`.env.example`](https://github.com/fwerkor/local-shell-mcp/blob/main/.env.example). Docker Compose автоматически читает получившийся `.env`, а другие runtime могут использовать те же environment variables `LOCAL_SHELL_MCP_`. YAML остаётся optional advanced input для binary/source deployments; явно создайте файл и выберите его через `LOCAL_SHELL_MCP_CONFIG` или `--config`. Environment variables override YAML values, поэтому не определяйте одну настройку в обоих местах, если override не нужен намеренно. YAML keys используют field names ниже.
@@ -66,6 +66,7 @@ LOCAL_SHELL_MCP_OAUTH_JWT_SECRET=change-me-long-random-secret
 | `max_jobs` | `LOCAL_SHELL_MCP_MAX_JOBS` | `1000` | Максимум retained long-running job records; active jobs никогда не pruned. |
 | `max_audit_tail_bytes` | `LOCAL_SHELL_MCP_MAX_AUDIT_TAIL_BYTES` | `1000000` |  |
 | `max_audit_log_bytes` | `LOCAL_SHELL_MCP_MAX_AUDIT_LOG_BYTES` | `20000000` |  |
+| `max_audit_archive_bytes` | `LOCAL_SHELL_MCP_MAX_AUDIT_ARCHIVE_BYTES` | `512000000` |  |
 | `max_tmp_files` | `LOCAL_SHELL_MCP_MAX_TMP_FILES` | `500` |  |
 | `max_tmp_bytes` | `LOCAL_SHELL_MCP_MAX_TMP_BYTES` | `50000000` |  |
 | `max_transfer_archive_entries` | `LOCAL_SHELL_MCP_MAX_TRANSFER_ARCHIVE_ENTRIES` | `100000` | Максимум entries при распаковке transferred directory archive. |
