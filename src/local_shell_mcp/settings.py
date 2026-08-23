@@ -304,6 +304,16 @@ def _flatten_yaml(path: Path) -> dict[str, Any]:
     return flat
 
 
+def _without_environment_overrides(values: dict[str, Any]) -> dict[str, Any]:
+    """Drop YAML values that have an explicit LOCAL_SHELL_MCP_* override."""
+
+    return {
+        key: value
+        for key, value in values.items()
+        if f"LOCAL_SHELL_MCP_{key.upper()}" not in os.environ
+    }
+
+
 if _PYDANTIC_AVAILABLE:
 
     class Settings(BaseSettings):
@@ -505,8 +515,10 @@ if _PYDANTIC_AVAILABLE:
                 self.path_denylist = []
             return self
 
-        def apply_yaml(self, path: Path) -> Settings:
+        def apply_yaml(self, path: Path, *, preserve_environment: bool = False) -> Settings:
             flat = _flatten_yaml(path)
+            if preserve_environment:
+                flat = _without_environment_overrides(flat)
             merged = self.model_dump()
             merged.update(flat)
             return Settings(**merged)
@@ -730,9 +742,12 @@ else:
         def model_copy(self, update: dict[str, Any] | None = None) -> Settings:
             return replace(self, _load_environment=False, **(update or {}))
 
-        def apply_yaml(self, path: Path) -> Settings:
+        def apply_yaml(self, path: Path, *, preserve_environment: bool = False) -> Settings:
+            flat = _flatten_yaml(path)
+            if preserve_environment:
+                flat = _without_environment_overrides(flat)
             merged = self.model_dump()
-            merged.update(_flatten_yaml(path))
+            merged.update(flat)
             return Settings(**merged, _load_environment=False)
 
         def with_workspace_relative_defaults(self) -> Settings:
@@ -756,7 +771,7 @@ def get_settings() -> Settings:
     settings = Settings()
     config = os.getenv("LOCAL_SHELL_MCP_CONFIG")
     if config:
-        settings = settings.apply_yaml(Path(config).expanduser())
+        settings = settings.apply_yaml(Path(config).expanduser(), preserve_environment=True)
     settings = settings.with_workspace_relative_defaults()
     if not settings.stateless_controller:
         settings.workspace_root.mkdir(parents=True, exist_ok=True)

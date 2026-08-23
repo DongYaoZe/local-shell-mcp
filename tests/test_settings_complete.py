@@ -94,6 +94,34 @@ port: 9001
     assert settings.safe_settings_dump(loaded)["oauth_admin_pin"] is None
 
 
+def test_environment_variables_override_yaml_config(tmp_path, monkeypatch):
+    config = tmp_path / "config.yaml"
+    config.write_text(
+        """
+port: 9001
+disable_local: true
+workspace_root: /yaml/workspace
+ui:
+  wallpaper: none
+""".strip(),
+        encoding="utf-8",
+    )
+    workspace = tmp_path / "env-workspace"
+    monkeypatch.setenv("LOCAL_SHELL_MCP_CONFIG", str(config))
+    monkeypatch.setenv("LOCAL_SHELL_MCP_PORT", "9102")
+    monkeypatch.setenv("LOCAL_SHELL_MCP_WORKSPACE_ROOT", str(workspace))
+    monkeypatch.setenv("LOCAL_SHELL_MCP_UI_WALLPAPER", "aurora")
+    monkeypatch.setenv("LOCAL_SHELL_MCP_AUTH_MODE", "none")
+    settings.get_settings.cache_clear()
+
+    loaded = settings.get_settings()
+
+    assert loaded.port == 9102
+    assert loaded.workspace_root == workspace.resolve()
+    assert loaded.ui_wallpaper == "aurora"
+    assert loaded.disable_local is True
+
+
 def test_pydantic_settings_validation_and_copy_paths(tmp_path):
     model = settings.Settings(
         workspace_root=tmp_path,
@@ -220,6 +248,9 @@ def test_dependency_light_fallback_settings(tmp_path, monkeypatch):
     applied = instance.apply_yaml(yaml_path)
     assert applied.port == 9030
     assert applied.ui_wallpaper == "none"
+    preserved = instance.apply_yaml(yaml_path, preserve_environment=True)
+    assert preserved.port == 9010
+    assert preserved.ui_wallpaper == "none"
 
     for name in (
         "LOCAL_SHELL_MCP_WORKSPACE_ROOT",
