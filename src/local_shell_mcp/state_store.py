@@ -21,6 +21,8 @@ class StateStore(Protocol):
 
     def append_bytes(self, key: str, value: bytes) -> int: ...
 
+    def size_bytes(self, key: str) -> int | None: ...
+
     def delete(self, key: str) -> None: ...
 
     def list_keys(self, prefix: str = "") -> list[str]: ...
@@ -69,6 +71,12 @@ class FileStateStore:
         with contextlib.suppress(OSError):
             path.chmod(0o600)
         return path.stat().st_size
+
+    def size_bytes(self, key: str) -> int | None:
+        try:
+            return self._path(key).stat().st_size
+        except FileNotFoundError:
+            return None
 
     def delete(self, key: str) -> None:
         self._path(key).unlink(missing_ok=True)
@@ -126,6 +134,12 @@ class MemoryStateStore:
             _MEMORY_VALUES[namespaced] = combined
             return len(combined)
 
+    def size_bytes(self, key: str) -> int | None:
+        namespaced = self._key(key)
+        with self._lock_for(key):
+            value = _MEMORY_VALUES.get(namespaced)
+            return None if value is None else len(value)
+
     def delete(self, key: str) -> None:
         namespaced = self._key(key)
         with self._lock_for(key):
@@ -181,6 +195,13 @@ class RedisStateStore:
     def append_bytes(self, key: str, value: bytes) -> int:
         self._refresh_active_locks()
         return int(self._client.append(self._key(key), value))
+
+    def size_bytes(self, key: str) -> int | None:
+        namespaced = self._key(key)
+        size = int(self._client.strlen(namespaced))
+        if size:
+            return size
+        return 0 if self._client.exists(namespaced) else None
 
     def delete(self, key: str) -> None:
         self._refresh_active_locks()

@@ -6,6 +6,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import threading
 import time
 import uuid
@@ -41,6 +42,7 @@ _AUDIT_ARCHIVE_DIRECTORY = "audit-archive"
 _AUDIT_ARCHIVE_INDEX_KEY = f"{_AUDIT_ARCHIVE_DIRECTORY}/index.json"
 _AUDIT_ARCHIVE_VERSION = 1
 _AUDIT_ARCHIVE_ZSTD_LEVEL = 12
+_AUDIT_ARCHIVE_KEY_RE = re.compile(r"^audit-archive/[0-9A-Za-z][0-9A-Za-z._-]*\.jsonl\.zst$")
 _AUDIT_SOURCE_INDEXES = "_audit_source_indexes"
 
 _AUDIT_FAILURE_STATUSES = frozenset(
@@ -116,6 +118,17 @@ def _write_private_bytes(path: Path, data: bytes) -> None:
     with os.fdopen(descriptor, "wb") as handle:
         handle.write(data)
         handle.flush()
+
+
+
+def _state_payload_bytes() -> int:
+    store = get_state_store()
+    prefix = f"{_AUDIT_PAYLOAD_DIRECTORY}/"
+    return sum(
+        store.size_bytes(key) or 0
+        for key in store.list_keys(prefix)
+        if key.endswith(".json.gz")
+    )
 
 
 def _write_payload(value: Any) -> dict[str, Any]:
@@ -490,6 +503,27 @@ def _archive_index_payload(entries: list[dict[str, Any]]) -> bytes:
     ).encode("utf-8")
 
 
+def _validated_archive_key(value: Any) -> str | None:
+    if not isinstance(value, str) or "\\" in value:
+        return None
+    return value if _AUDIT_ARCHIVE_KEY_RE.fullmatch(value) else None
+
+
+def _archive_file_path(log_path: Path, key: str) -> Path:
+    validated = _validated_archive_key(key)
+    if validated is None:
+        raise ValueError(f"invalid audit archive key: {key!r}")
+    directory = _archive_directory_path(log_path)
+    if directory.is_symlink():
+        raise ValueError("audit archive directory must not be a symlink")
+    candidate = log_path.parent / validated
+    resolved_directory = directory.resolve()
+    resolved_candidate = candidate.resolve(strict=False)
+    if resolved_candidate.parent != resolved_directory:
+        raise ValueError(f"audit archive path escapes archive directory: {key!r}")
+    return candidate
+
+
 def _parse_archive_index(raw: bytes | None) -> list[dict[str, Any]]:
     if not raw:
         return []
@@ -502,7 +536,11 @@ def _parse_archive_index(raw: bytes | None) -> list[dict[str, Any]]:
     archives = payload.get("archives")
     if not isinstance(archives, list):
         return []
-    return [entry for entry in archives if isinstance(entry, dict) and isinstance(entry.get("key"), str)]
+    return [
+        entry
+        for entry in archives
+        if isinstance(entry, dict) and _validated_archive_key(entry.get("key")) is not None
+    ]
 
 
 def _load_file_archive_index(log_path: Path) -> list[dict[str, Any]]:
@@ -600,7 +638,7 @@ def _write_file_archive(
         return None
     start_ts, end_ts = _archive_time_bounds(parsed, indexes)
     key = _archive_key(start_ts, end_ts)
-    path = log_path.parent / key
+    path = _archive_file_path(log_path, key)
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
     raw_bytes = 0
@@ -668,8 +706,8 @@ def _prune_file_archives(
     while retained and total > max_archive_bytes:
         oldest = retained.pop(0)
         total -= max(0, int(oldest.get("compressed_bytes") or 0))
-        with contextlib.suppress(OSError):
-            (log_path.parent / str(oldest["key"])).unlink(missing_ok=True)
+        with contextlib.suppress(OSError, ValueError):
+            _archive_file_path(log_path, str(oldest["key"])).unlink(missing_ok=True)
     _write_file_archive_index(log_path, retained)
     return retained
 
@@ -765,56 +803,12 @@ def _enforce_state_audit_storage_limit(
     _prune_state_archives(archive_entries, max_archive_bytes)
     prefix = f"{_AUDIT_PAYLOAD_DIRECTORY}/"
     for key in store.list_keys(prefix):
+        if not key.endswith(".json.gz"):
+            continue
         digest = key.removeprefix(prefix).removesuffix(".json.gz")
         if digest not in all_referenced:
             store.delete(key)
 
-
-def _archive_entries() -> list[dict[str, Any]]:
-    settings = get_settings()
-    entries = (
-        _load_file_archive_index(settings.audit_log_path)
-        if settings.state_backend == "file"
-        else _load_state_archive_index()
-    )
-    return sorted(entries, key=lambda entry: (float(entry.get("end_ts") or 0), str(entry["key"])))
-
-
-def _read_archive_records(entry: dict[str, Any], *, full: bool) -> list[dict[str, Any]]:
-    settings = get_settings()
-    source: Any
-    if settings.state_backend == "file":
-        try:
-            source = (settings.audit_log_path.parent / str(entry["key"])).open("rb")
-        except FileNotFoundError:
-            return []
-    else:
-        compressed = get_state_store().read_bytes(str(entry["key"]))
-        if compressed is None:
-            return []
-        source = io.BytesIO(compressed)
-
-    records: list[dict[str, Any]] = []
-    with (
-        source,
-        zstd.ZstdDecompressor().stream_reader(source, closefd=False) as reader,
-        io.TextIOWrapper(reader, encoding="utf-8", errors="replace") as text,
-    ):
-        for line in text:
-            try:
-                envelope = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if not isinstance(envelope, dict) or envelope.get("version") != _AUDIT_ARCHIVE_VERSION:
-                continue
-            record = envelope.get("record")
-            if not isinstance(record, dict):
-                continue
-            resolved = _resolve_record_payloads(record, full=False)
-            if full and isinstance(envelope.get("payloads"), dict):
-                resolved.update(envelope["payloads"])
-            records.append(resolved)
-    return records
 
 
 def _trim_audit_log(path: Path, max_bytes: int) -> bool:
@@ -894,9 +888,8 @@ def audit(event: str, **fields: Any) -> None:
             store = get_state_store()
             with state_lock("audit.jsonl"):
                 log_bytes = store.append_bytes("audit.jsonl", encoded.encode("utf-8"))
-                has_external_payload = any(_is_payload_reference(value) for value in record.values())
                 retention_needed = (
-                    log_bytes > settings.max_audit_log_bytes or has_external_payload
+                    log_bytes + _state_payload_bytes() > settings.max_audit_log_bytes
                 )
                 maintenance_due = _audit_maintenance_due(settings.audit_log_path)
                 if retention_needed or maintenance_due:
@@ -1239,7 +1232,7 @@ def _public_audit_entry(row: dict[str, Any]) -> dict[str, Any]:
 
 def _read_audit_records() -> list[dict[str, Any]]:
     settings = get_settings()
-    max_bytes = max(1, min(settings.max_audit_tail_bytes * 4, settings.max_audit_log_bytes))
+    max_bytes = max(1, settings.max_audit_log_bytes)
     if settings.state_backend == "file":
         path = settings.audit_log_path
         if not path.exists():
@@ -1309,13 +1302,6 @@ def _matching_audit_rows(
     return matched
 
 
-def _archive_overlaps(entry: dict[str, Any], start_ts: float | None, end_ts: float | None) -> bool:
-    archive_start = float(entry.get("start_ts") or 0)
-    archive_end = float(entry.get("end_ts") or 0)
-    if start_ts is not None and archive_end and archive_end < start_ts:
-        return False
-    return not (end_ts is not None and archive_start and archive_start > end_ts)
-
 
 def query_audit(
     *,
@@ -1329,7 +1315,7 @@ def query_audit(
     end_ts: float | None = None,
     sort: str = "desc",
 ) -> dict[str, Any]:
-    """Read, pair, filter, and sort recent audit data plus archives when needed."""
+    """Read, pair, filter, and sort the bounded live audit log."""
 
     bounded_limit = max(1, min(int(limit), 2_000))
     records = _read_audit_records()
@@ -1345,33 +1331,6 @@ def query_audit(
         end_ts=end_ts,
     )
     reverse = sort.lower() != "asc"
-
-    if not reverse or len(matched) < bounded_limit:
-        seen_ids = {str(row.get("id") or "") for row in matched}
-        entries = _archive_entries()
-        if reverse:
-            entries.reverse()
-        for entry in entries:
-            if not _archive_overlaps(entry, start_ts, end_ts):
-                continue
-            archived = _matching_audit_rows(
-                _read_archive_records(entry, full=False),
-                node=node,
-                event=event,
-                operation=operation,
-                session=session,
-                search=search,
-                start_ts=start_ts,
-                end_ts=end_ts,
-            )
-            for row in archived:
-                row_id = str(row.get("id") or "")
-                if row_id and row_id in seen_ids:
-                    continue
-                if row_id:
-                    seen_ids.add(row_id)
-                matched.append(row)
-
     matched.sort(key=lambda item: float(item.get("ts") or 0), reverse=reverse)
     total = len(matched)
     return {
@@ -1388,22 +1347,8 @@ def _find_audit_row(records: list[dict[str, Any]], entry_id: str) -> dict[str, A
     )
 
 
-def _find_archived_audit_entry(entry_id: str, *, full: bool) -> dict[str, Any] | None:
-    preview_fallback: dict[str, Any] | None = None
-    for archive in reversed(_archive_entries()):
-        archived = _read_archive_records(archive, full=full)
-        selected = _find_audit_row(archived, entry_id)
-        if selected is None:
-            continue
-        if full and "audit_payloads_omitted" in selected:
-            preview_fallback = selected
-            continue
-        return _public_audit_entry(selected)
-    return _public_audit_entry(preview_fallback) if preview_fallback is not None else None
-
-
 def get_audit_entry(entry_id: str, *, full: bool = True) -> dict[str, Any]:
-    """Return one recent or archived audit entry, optionally materializing payloads."""
+    """Return one live audit entry, optionally materializing hot-store payloads."""
 
     normalized = str(entry_id).strip()
     if not normalized:
@@ -1411,22 +1356,13 @@ def get_audit_entry(entry_id: str, *, full: bool = True) -> dict[str, Any]:
     records = _read_audit_records()
     preview_records = [_resolve_record_payloads(record, full=False) for record in records]
     selected = _find_audit_row(preview_records, normalized)
-    if selected is not None:
-        if not full:
-            return _public_audit_entry(selected)
-        materialized_records = list(preview_records)
-        for index in selected[_AUDIT_SOURCE_INDEXES]:
-            materialized_records[index] = _resolve_record_payloads(records[index], full=True)
-        materialized = _find_audit_row(materialized_records, normalized)
-        if materialized is not None and "audit_payloads_omitted" not in materialized:
-            return _public_audit_entry(materialized)
-        archived = _find_archived_audit_entry(normalized, full=True)
-        if archived is not None:
-            return archived
-        if materialized is not None:
-            return _public_audit_entry(materialized)
+    if selected is None:
+        raise ValueError(f"Unknown audit entry: {normalized}")
+    if not full:
+        return _public_audit_entry(selected)
 
-    archived = _find_archived_audit_entry(normalized, full=full)
-    if archived is not None:
-        return archived
-    raise ValueError(f"Unknown audit entry: {normalized}")
+    materialized_records = list(preview_records)
+    for index in selected[_AUDIT_SOURCE_INDEXES]:
+        materialized_records[index] = _resolve_record_payloads(records[index], full=True)
+    materialized = _find_audit_row(materialized_records, normalized)
+    return _public_audit_entry(materialized or selected)

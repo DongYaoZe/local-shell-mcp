@@ -4,6 +4,7 @@ import asyncio
 import base64
 import hashlib
 import http.client
+import io
 import json
 import sys
 import time
@@ -13,6 +14,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
+import zstandard as zstd
 from starlette.applications import Starlette
 from starlette.routing import Route
 from starlette.testclient import TestClient
@@ -124,6 +126,8 @@ def test_file_and_memory_state_store_round_trip(tmp_path):
     file_store.write_bytes("nested/value.bin", b"value")
     file_store.write_bytes("other.bin", b"other")
     assert file_store.append_bytes("nested/value.bin", b"+") == 6
+    assert file_store.size_bytes("nested/value.bin") == 6
+    assert file_store.size_bytes("missing") is None
     assert file_store.read_bytes("nested/value.bin") == b"value+"
     assert file_store.list_keys("nested/") == ["nested/value.bin"]
     with file_store.lock("nested/value.bin"):
@@ -141,6 +145,8 @@ def test_file_and_memory_state_store_round_trip(tmp_path):
     first.write_bytes("nested/key", b"two")
     second.write_bytes("key", b"other")
     assert first.append_bytes("key", b"+") == 4
+    assert first.size_bytes("key") == 4
+    assert first.size_bytes("missing") is None
     assert first.read_bytes("key") == b"one+"
     assert second.read_bytes("key") == b"other"
     assert first.list_keys("nested/") == ["nested/key"]
@@ -188,6 +194,12 @@ def test_redis_state_store_round_trip_and_lock(monkeypatch):
             self.values[key] = self.values.get(key, b"") + bytes(value)
             return len(self.values[key])
 
+        def strlen(self, key):
+            return len(self.values.get(key, b""))
+
+        def exists(self, key):
+            return int(key in self.values)
+
         def delete(self, key):
             self.values.pop(key, None)
 
@@ -215,6 +227,8 @@ def test_redis_state_store_round_trip_and_lock(monkeypatch):
     store.write_bytes("jobs/one", b"1")
     store.write_bytes("jobs/two", b"2")
     assert store.append_bytes("jobs/one", b"+") == 2
+    assert store.size_bytes("jobs/one") == 2
+    assert store.size_bytes("missing") is None
     assert store.read_bytes("jobs/one") == b"1+"
     assert store.list_keys("jobs/") == ["jobs/one", "jobs/two"]
     with store.lock("jobs"):
@@ -443,6 +457,29 @@ def test_state_backed_audit_tail_and_retention_include_external_payloads(tmp_pat
     assert not get_settings().audit_log_path.exists()
 
 
+def test_state_backed_audit_enforces_combined_log_and_payload_budget(tmp_path, monkeypatch):
+    max_bytes = 8_000
+    _configure_stateless(
+        tmp_path,
+        monkeypatch,
+        max_audit_log_bytes=str(max_bytes),
+        max_audit_archive_bytes="50000",
+    )
+    payload = "".join(hashlib.sha256(f"payload-{index}".encode()).hexdigest() for index in range(120))
+
+    audit_module.audit("state_budget_payload", payload=payload)
+    store = get_state_store()
+    for index in range(80):
+        audit_module.audit("state_budget_inline", index=index, detail="x" * 80)
+        audit_bytes = store.size_bytes("audit.jsonl") or 0
+        payload_bytes = sum(
+            store.size_bytes(key) or 0
+            for key in store.list_keys("audit-payloads/")
+            if key.endswith(".json.gz")
+        )
+        assert audit_bytes + payload_bytes <= max_bytes
+
+
 def test_state_backed_audit_archive_preserves_pruned_payloads(tmp_path, monkeypatch):
     _configure_stateless(
         tmp_path,
@@ -465,10 +502,24 @@ def test_state_backed_audit_archive_preserves_pruned_payloads(tmp_path, monkeypa
     assert archive_keys
     assert len(store.read_bytes("audit.jsonl") or b"") <= get_settings().max_audit_log_bytes
 
-    matches = audit_module.query_audit(search="serverless_archived", sort="asc")["entries"]
-    assert len(matches) == 1
-    archived = audit_module.get_audit_entry(matches[0]["id"])
-    assert archived["payload"] == archived_payload
+    with zstd.ZstdDecompressor().stream_reader(io.BytesIO(store.read_bytes(archive_keys[0]))) as reader:
+        archived_lines = reader.read().splitlines()
+    envelopes = [json.loads(line) for line in archived_lines]
+    archived = next(
+        envelope
+        for envelope in envelopes
+        if envelope.get("record", {}).get("event") == "serverless_archived"
+    )
+    assert archived["payloads"]["payload"] == archived_payload
+
+    # Cold archives never extend normal UI/query results.
+    store.write_bytes(
+        "audit.jsonl",
+        (json.dumps({"id": "hot-only", "ts": 999, "event": "serverless_live"}) + "\n").encode(),
+    )
+    assert audit_module.query_audit(search="serverless_archived")["entries"] == []
+    with pytest.raises(ValueError, match="Unknown audit entry"):
+        audit_module.get_audit_entry(str(archived["record"]["id"]))
     assert not get_settings().audit_log_path.exists()
 
 

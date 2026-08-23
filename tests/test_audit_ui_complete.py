@@ -744,10 +744,9 @@ def test_audit_retention_keeps_latest_call_pair_together(tmp_path, monkeypatch):
     audit_module._enforce_audit_storage_limit(log_path, pair_bytes + 100)
 
     entries = audit_module.query_audit(sort="asc")["entries"]
-    assert [entry["event"] for entry in entries] == ["older_event", "mcp_tool_call"]
-    assert entries[1]["id"] == "call:latest-call"
-    assert entries[1]["paired"] is True
-    archives = audit_module._archive_entries()
+    latest = next(entry for entry in entries if entry["id"] == "call:latest-call")
+    assert latest["paired"] is True
+    archives = audit_module._load_file_archive_index(log_path)
     assert len(archives) == 1
     assert archives[0]["compressed_bytes"] < archives[0]["raw_bytes"]
     detail = audit_module.get_audit_entry("call:latest-call")
@@ -784,9 +783,10 @@ def test_audit_retention_bounds_log_and_external_payload_bytes(tmp_path, monkeyp
     assert stored_bytes <= max_bytes
     assert all(not path.exists() for path in first_payloads)
     entries = audit_module.query_audit(sort="asc")["entries"]
-    assert [entry["event"] for entry in entries] == ["first_large_event", "second_large_event"]
-    assert audit_module.get_audit_entry(entries[0]["id"])["payload"] == first
-    assert audit_module.get_audit_entry(entries[1]["id"])["payload"] == second
+    hot_events = [json.loads(line)["event"] for line in get_settings().audit_log_path.read_text().splitlines()]
+    assert [entry["event"] for entry in entries] == hot_events
+    second_entry = next(entry for entry in entries if entry["event"] == "second_large_event")
+    assert audit_module.get_audit_entry(second_entry["id"])["payload"] == second
 
 
 def test_audit_archive_budget_prunes_oldest_compressed_files(tmp_path, monkeypatch):
@@ -801,7 +801,7 @@ def test_audit_archive_budget_prunes_oldest_compressed_files(tmp_path, monkeypat
                 "archive_budget_event", batch=batch, index=index, detail="x" * 120
             )
 
-    archives = audit_module._archive_entries()
+    archives = audit_module._load_file_archive_index(get_settings().audit_log_path)
     assert archives
     assert sum(entry["compressed_bytes"] for entry in archives) <= 1200
     keys = {entry["key"] for entry in archives}
@@ -810,3 +810,84 @@ def test_audit_archive_budget_prunes_oldest_compressed_files(tmp_path, monkeypat
         for path in (tmp_path / audit_module._AUDIT_ARCHIVE_DIRECTORY).glob("*.jsonl.zst")
     }
     assert files == keys
+
+
+def test_archive_index_rejects_paths_outside_archive_directory(tmp_path, monkeypatch):
+    _configure(tmp_path, monkeypatch)
+    log_path = get_settings().audit_log_path
+    victim = tmp_path / "victim.jsonl.zst"
+    victim.write_bytes(b"keep")
+    index_path = log_path.parent / audit_module._AUDIT_ARCHIVE_DIRECTORY / "index.json"
+    index_path.parent.mkdir(parents=True, exist_ok=True)
+    index_path.write_text(
+        json.dumps(
+            {
+                "version": audit_module._AUDIT_ARCHIVE_VERSION,
+                "archives": [
+                    {
+                        "key": "audit-archive/../../victim.jsonl.zst",
+                        "compressed_bytes": 999999,
+                        "start_ts": 1,
+                        "end_ts": 2,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert audit_module._load_file_archive_index(log_path) == []
+    with pytest.raises(ValueError, match="invalid audit archive key"):
+        audit_module._archive_file_path(log_path, "audit-archive/../../victim.jsonl.zst")
+    assert victim.read_bytes() == b"keep"
+
+
+def test_query_audit_reads_complete_hot_log_not_tail_window(tmp_path, monkeypatch):
+    _configure(tmp_path, monkeypatch)
+    monkeypatch.setenv("LOCAL_SHELL_MCP_MAX_AUDIT_LOG_BYTES", "6000")
+    monkeypatch.setenv("LOCAL_SHELL_MCP_MAX_AUDIT_TAIL_BYTES", "200")
+    get_settings.cache_clear()
+    path = get_settings().audit_log_path
+    records = [
+        {
+            "id": f"row-{index}",
+            "ts": index,
+            "event": "hot_history",
+            "index": index,
+            "detail": "x" * 80,
+        }
+        for index in range(30)
+    ]
+    path.write_text(
+        "".join(json.dumps(record) + "\n" for record in records), encoding="utf-8"
+    )
+    assert path.stat().st_size > get_settings().max_audit_tail_bytes * 4
+
+    result = audit_module.query_audit(limit=100, search="hot_history", sort="asc")
+
+    assert [entry["index"] for entry in result["entries"]] == list(range(30))
+
+
+def test_corrupt_cold_archive_does_not_affect_hot_query(tmp_path, monkeypatch):
+    _configure(tmp_path, monkeypatch)
+    audit_module.audit("hot_event", detail="still-readable")
+    log_path = get_settings().audit_log_path
+    archive_key = audit_module._archive_key(1, 2)
+    archive_path = audit_module._archive_file_path(log_path, archive_key)
+    archive_path.parent.mkdir(parents=True, exist_ok=True)
+    archive_path.write_bytes(b"not-zstd")
+    audit_module._write_file_archive_index(
+        log_path,
+        [
+            {
+                "key": archive_key,
+                "compressed_bytes": archive_path.stat().st_size,
+                "start_ts": 1,
+                "end_ts": 2,
+            }
+        ],
+    )
+
+    result = audit_module.query_audit(search="hot_event")
+
+    assert [entry["event"] for entry in result["entries"]] == ["hot_event"]
