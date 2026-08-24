@@ -39,8 +39,11 @@ class FakeRemoteManager:
         tool: str,
         args: dict[str, Any],
         timeout_s: int | None = None,
+        *,
+        lane: str | None = None,
     ) -> dict[str, Any]:
         del machine, timeout_s
+        assert lane == "transfer"
         try:
             if tool == "transfer_stat":
                 data = transfer_stat(args["path"], args.get("sha256", True))
@@ -183,6 +186,34 @@ async def test_remote_copy_file_streams_between_workers(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_remote_cleanup_file_stays_on_transfer_lane(monkeypatch):
+    captured = {}
+
+    class Manager:
+        async def call(self, machine, tool, args, timeout_s=None, *, lane=None):
+            captured.update(
+                machine=machine,
+                tool=tool,
+                args=args,
+                timeout_s=timeout_s,
+                lane=lane,
+            )
+            return {"ok": True, "message": "", "data": {"deleted": True}}
+
+    monkeypatch.setattr(tools, "remote_manager", Manager)
+
+    await tools._remote_cleanup_file("worker-a", "/tmp/archive.tar.gz")  # noqa: SLF001
+
+    assert captured == {
+        "machine": "worker-a",
+        "tool": "delete_file_or_dir",
+        "args": {"path": "/tmp/archive.tar.gz", "recursive": False},
+        "timeout_s": None,
+        "lane": "transfer",
+    }
+
+
+@pytest.mark.asyncio
 async def test_remote_upload_recovers_lost_chunk_acknowledgement(tmp_path, monkeypatch):
     root = _workspace(tmp_path, monkeypatch)
     (root / "src-machine").mkdir()
@@ -195,8 +226,8 @@ async def test_remote_upload_recovers_lost_chunk_acknowledgement(tmp_path, monke
             self.drop_next_ack = True
             self.upload_calls = 0
 
-        async def call(self, machine, tool, args, timeout_s=None):
-            result = await super().call(machine, tool, args, timeout_s)
+        async def call(self, machine, tool, args, timeout_s=None, *, lane=None):
+            result = await super().call(machine, tool, args, timeout_s, lane=lane)
             if tool == "transfer_upload_url":
                 self.upload_calls += 1
                 if self.drop_next_ack:

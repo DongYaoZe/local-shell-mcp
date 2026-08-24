@@ -209,6 +209,77 @@ async def test_lane_aware_worker_routes_transfer_jobs_separately(tmp_path, monke
     await interactive_call
     await transfer_call
 
+
+@pytest.mark.asyncio
+async def test_invalid_worker_poll_protocol_uses_legacy_queue(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOCAL_SHELL_MCP_WORKSPACE_ROOT", str(tmp_path))
+    monkeypatch.setenv("LOCAL_SHELL_MCP_STATE_DIR", str(tmp_path / ".state"))
+    get_settings.cache_clear()
+    manager = remote.RemoteManager()
+    worker = remote.RemoteWorker(
+        name="worker-a",
+        token="token-a",
+        info={"poll_protocol_version": "future"},
+    )
+    manager.workers[worker.name] = worker
+    manager.tokens[worker.token] = worker.name
+
+    call = asyncio.create_task(
+        manager.call("worker-a", "transfer_stat", {"path": "."}, timeout_s=2)
+    )
+    await asyncio.sleep(0)
+
+    assert worker.queue.qsize() == 1
+    assert worker.transfer_queue.qsize() == 0
+    polled = await manager.poll(
+        worker.token,
+        {"protocol_version": 1, "worker_version": remote.__version__},
+    )
+    await manager.submit_result(
+        worker.token,
+        {"job_id": polled["job"]["id"], "ok": True, "data": {"type": "directory"}},
+    )
+    await call
+
+
+@pytest.mark.asyncio
+async def test_lane_upgrade_migrates_queued_transfer_jobs(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOCAL_SHELL_MCP_WORKSPACE_ROOT", str(tmp_path))
+    monkeypatch.setenv("LOCAL_SHELL_MCP_STATE_DIR", str(tmp_path / ".state"))
+    get_settings.cache_clear()
+    manager = remote.RemoteManager()
+    worker = remote.RemoteWorker(
+        name="worker-a",
+        token="token-a",
+        info={"poll_protocol_version": 1},
+    )
+    manager.workers[worker.name] = worker
+    manager.tokens[worker.token] = worker.name
+
+    call = asyncio.create_task(
+        manager.call("worker-a", "transfer_stat", {"path": "."}, timeout_s=2)
+    )
+    await asyncio.sleep(0)
+    assert worker.queue.qsize() == 1
+    assert worker.transfer_queue.qsize() == 0
+
+    polled = await manager.poll(
+        worker.token,
+        {
+            "protocol_version": remote.REMOTE_WORKER_POLL_PROTOCOL_VERSION,
+            "worker_version": remote.__version__,
+            "lane": remote.REMOTE_WORKER_TRANSFER_LANE,
+        },
+    )
+
+    assert polled["job"]["tool"] == "transfer_stat"
+    assert worker.queue.qsize() == 0
+    await manager.submit_result(
+        worker.token,
+        {"job_id": polled["job"]["id"], "ok": True, "data": {"type": "directory"}},
+    )
+    await call
+
 @pytest.mark.asyncio
 async def test_join_script_loads_vendored_worker_dependencies(tmp_path, monkeypatch):
     monkeypatch.setenv("LOCAL_SHELL_MCP_WORKSPACE_ROOT", str(tmp_path))
@@ -632,15 +703,16 @@ async def test_worker_result_submission_sends_heartbeats_while_retrying(monkeypa
     def fake_post(url, payload, request_headers=None, timeout=None):
         nonlocal result_attempts
         assert request_headers == headers
-        assert timeout == 30
         if url.endswith("/result"):
+            assert timeout == remote._worker_result_request_timeout_s(result)  # noqa: SLF001
             assert payload == result
             result_attempts += 1
             if result_attempts < 3:
                 raise RuntimeError(f"temporary result failure {result_attempts}")
             return {"ok": True, "data": {"accepted": True}}
         assert url.endswith("/heartbeat")
-        assert payload == {}
+        assert timeout == 30
+        assert payload == {"job_id": "job-1"}
         heartbeat_calls.append(url)
         return {"ok": True, "data": {"accepted": True}}
 
@@ -661,6 +733,52 @@ async def test_worker_result_submission_sends_heartbeats_while_retrying(monkeypa
     heartbeat_count = len(heartbeat_calls)
     await asyncio.sleep(0.02)
     assert len(heartbeat_calls) == heartbeat_count
+
+
+def test_worker_result_request_timeout_scales_with_payload_size():
+    small = {"job_id": "job-1", "ok": True, "data": {"stdout": "ok"}}
+    large = {"job_id": "job-1", "ok": True, "data": {"stdout": "x" * (1400 * 1024)}}
+
+    assert remote._worker_result_request_timeout_s(small) == 30  # noqa: SLF001
+    assert 30 < remote._worker_result_request_timeout_s(large) <= 120  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_worker_result_submission_stops_when_controller_cancels(monkeypatch):
+    result_attempts = 0
+    heartbeat_calls = []
+    result = {"job_id": "job-1", "ok": True, "data": {"stdout": "x"}}
+    headers = {"Authorization": "Bearer token"}
+
+    def fake_post(url, payload, request_headers=None, timeout=None):
+        nonlocal result_attempts
+        assert request_headers == headers
+        if url.endswith("/result"):
+            result_attempts += 1
+            raise RuntimeError("slow result upload")
+        assert url.endswith("/heartbeat")
+        assert timeout == 30
+        assert payload == {"job_id": "job-1"}
+        heartbeat_calls.append(payload)
+        return {"ok": True, "data": {"accepted": True, "cancelled": True}}
+
+    monkeypatch.setattr(remote, "_worker_post_json", fake_post)
+    monkeypatch.setattr(remote, "_WORKER_RETRY_INITIAL_DELAY_S", 0.05)
+    monkeypatch.setattr(remote, "_WORKER_RETRY_MAX_DELAY_S", 0.05)
+
+    response = await remote._submit_worker_result_with_heartbeat(  # noqa: SLF001
+        result,
+        "https://example.test",
+        headers,
+        0.005,
+    )
+
+    assert response == {"ok": True, "data": {"accepted": False, "cancelled": True}}
+    assert result_attempts >= 1
+    assert heartbeat_calls == [{"job_id": "job-1"}]
+    attempts_after_cancel = result_attempts
+    await asyncio.sleep(0.06)
+    assert result_attempts == attempts_after_cancel
 
 
 @pytest.mark.asyncio
