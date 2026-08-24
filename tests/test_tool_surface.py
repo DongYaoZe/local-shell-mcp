@@ -129,6 +129,40 @@ async def test_mcp_tool_surface_is_stable(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_live_workspace_can_be_disabled_independently(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOCAL_SHELL_MCP_WORKSPACE_ROOT", str(tmp_path))
+    monkeypatch.setenv("LOCAL_SHELL_MCP_LIVE_WORKSPACE_ENABLED", "false")
+    monkeypatch.setenv("LOCAL_SHELL_MCP_UI_ENABLED", "true")
+    get_settings.cache_clear()
+
+    mcp = build_mcp()
+    tools = {tool.name for tool in await mcp.list_tools()}
+    resources = {str(resource.uri) for resource in await mcp.list_resources()}
+
+    assert "workspace_open" not in tools
+    assert "live_workspace_reconnect" not in tools
+    assert not any("live-workspace" in uri for uri in resources)
+    assert get_settings().ui_enabled is True
+
+
+@pytest.mark.asyncio
+async def test_logical_sessions_can_be_disabled_from_surface(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOCAL_SHELL_MCP_WORKSPACE_ROOT", str(tmp_path))
+    monkeypatch.setenv("LOCAL_SHELL_MCP_LOGICAL_SESSIONS_ENABLED", "false")
+    get_settings.cache_clear()
+
+    mcp = build_mcp()
+    tools = {tool.name: tool for tool in await mcp.list_tools()}
+
+    assert "session_manage" not in tools
+    assert "plan_manage" not in tools
+    assert "logical_session_id" not in tools["run_shell"].inputSchema["properties"]
+    assert "logical_session_id" not in tools["file_read"].inputSchema["properties"]
+    assert "workspace_open" in tools
+    assert "Logical Session" not in (mcp._mcp_server.instructions or "")  # noqa: SLF001
+
+
+@pytest.mark.asyncio
 async def test_remote_admin_tools_can_be_disabled_from_surface(tmp_path, monkeypatch):
     monkeypatch.setenv("LOCAL_SHELL_MCP_WORKSPACE_ROOT", str(tmp_path))
     monkeypatch.setenv("LOCAL_SHELL_MCP_REMOTE_ENABLED", "false")

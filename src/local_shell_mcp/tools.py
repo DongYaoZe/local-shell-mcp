@@ -293,15 +293,18 @@ def _oauth_security_scheme(scopes: list[str] | tuple[str, ...]) -> dict[str, Any
 
 NOAUTH_SECURITY_SCHEMES = [{"type": "noauth"}]
 PUBLIC_TOOL_TIMEOUT_S = PUBLIC_TOOL_WATCHDOG_TIMEOUT_S
-MCP_INSTRUCTIONS = (
+MCP_BASE_INSTRUCTIONS = (
     "When a task may benefit from an installed Agent Skill, call skill_list first "
     "to discover the exact Skill name and description. Before following a Skill's "
     "workflow, call skill_load with that exact name. Call skill_read only when "
     "a related file returned by skill_load is needed. Skills use this fixed tool "
     "surface; do not expect per-Skill MCP tools. When a registered external MCP may "
     "provide a capability, use mcp_tool_search, then mcp_tool_inspect, then mcp_tool_call; "
-    "dynamic MCP tools never appear directly in tools/list. For substantive tool-driven work, "
-    "use exactly one durable Logical Session. Start a new task with session_manage(action='start', ...). "
+    "dynamic MCP tools never appear directly in tools/list."
+)
+LOGICAL_SESSION_MCP_INSTRUCTIONS = (
+    " For substantive tool-driven work, use exactly one durable Logical Session. "
+    "Start a new task with session_manage(action='start', ...). "
     "Only continue an existing Session when its session_id is already present in this conversation or the "
     "user explicitly provides that session_id; then call session_manage(action='resume', session_id=...). "
     "Never discover, infer, or auto-select a Session from other conversations. After start or resume, clearly "
@@ -313,6 +316,7 @@ MCP_INSTRUCTIONS = (
     "and working directories. plan_manage and workspace_open take the same session_id explicitly and never infer it "
     "from the transport. plan_manage is optional Goal mode owned by the Logical Session."
 )
+MCP_INSTRUCTIONS = MCP_BASE_INSTRUCTIONS + LOGICAL_SESSION_MCP_INSTRUCTIONS
 
 LOGICAL_SESSION_ARGUMENT_DESCRIPTION = (
     "Logical Session for this tool call. Pass the session_id returned by session_manage while working in that "
@@ -1154,6 +1158,17 @@ def _install_mcp_tool_watchdogs(mcp: FastMCP) -> None:
                     )
 
         tool.fn = wrapped
+
+
+LOGICAL_SESSION_TOOL_NAMES = {"session_manage", "plan_manage"}
+
+
+def _remove_logical_session_tools_when_disabled(mcp: FastMCP) -> None:
+    if get_settings().logical_sessions_enabled:
+        return
+    tools = mcp._tool_manager._tools  # noqa: SLF001
+    for name in LOGICAL_SESSION_TOOL_NAMES:
+        tools.pop(name, None)
 
 
 def _remove_remote_tools_when_disabled(mcp: FastMCP) -> None:
@@ -3496,7 +3511,9 @@ def build_mcp() -> FastMCP:
     settings = get_settings()
     mcp = FastMCP(
         "local-shell-mcp",
-        instructions=MCP_INSTRUCTIONS,
+        instructions=(
+            MCP_INSTRUCTIONS if settings.logical_sessions_enabled else MCP_BASE_INSTRUCTIONS
+        ),
         website_url="https://fwerkor.github.io/local-shell-mcp/",
         icons=[
             Icon(
@@ -3518,7 +3535,7 @@ def build_mcp() -> FastMCP:
         openWorldHint=False,
     )
 
-    if settings.ui_enabled and settings.mode != "stdio":
+    if settings.ui_enabled and settings.live_workspace_enabled and settings.mode != "stdio":
         _register_live_workspace_tools(mcp, settings)
     _register_environment_tools(mcp, settings, read_only_tool)
     _register_command_tools(mcp, settings)
@@ -3534,7 +3551,9 @@ def build_mcp() -> FastMCP:
 
     _remove_remote_tools_when_disabled(mcp)
     _remove_local_only_tools_when_disabled(mcp)
+    _remove_logical_session_tools_when_disabled(mcp)
     _install_tool_annotations(mcp)
-    _install_logical_session_arguments(mcp)
+    if settings.logical_sessions_enabled:
+        _install_logical_session_arguments(mcp)
     _install_mcp_tool_watchdogs(mcp)
     return mcp
