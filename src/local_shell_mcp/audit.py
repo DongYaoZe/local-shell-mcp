@@ -5,6 +5,7 @@ import gzip
 import hashlib
 import io
 import json
+import math
 import os
 import re
 import threading
@@ -509,13 +510,57 @@ def _validated_archive_key(value: Any) -> str | None:
     return value if _AUDIT_ARCHIVE_KEY_RE.fullmatch(value) else None
 
 
+def _validated_archive_entry(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    key = _validated_archive_key(value.get("key"))
+    start_ts = value.get("start_ts")
+    end_ts = value.get("end_ts")
+    if (
+        key is None
+        or isinstance(start_ts, bool)
+        or not isinstance(start_ts, (int, float))
+        or not math.isfinite(float(start_ts))
+        or float(start_ts) < 0
+        or isinstance(end_ts, bool)
+        or not isinstance(end_ts, (int, float))
+        or not math.isfinite(float(end_ts))
+        or float(end_ts) < float(start_ts)
+    ):
+        return None
+    normalized: dict[str, Any] = {
+        "key": key,
+        "start_ts": float(start_ts),
+        "end_ts": float(end_ts),
+    }
+    for name in ("records", "raw_bytes", "compressed_bytes"):
+        item = value.get(name)
+        if isinstance(item, bool) or not isinstance(item, int) or item < 0:
+            return None
+        normalized[name] = item
+    return normalized
+
+
+def _validated_archive_directory(log_path: Path, *, create: bool = False) -> Path:
+    directory = _archive_directory_path(log_path)
+    if directory.is_symlink():
+        raise ValueError("audit archive directory must not be a symlink")
+    if create:
+        directory.mkdir(parents=True, exist_ok=True)
+    if directory.is_symlink():
+        raise ValueError("audit archive directory must not be a symlink")
+    resolved_parent = log_path.parent.resolve()
+    resolved_directory = directory.resolve(strict=False)
+    if resolved_directory.parent != resolved_parent:
+        raise ValueError("audit archive directory escapes audit log directory")
+    return directory
+
+
 def _archive_file_path(log_path: Path, key: str) -> Path:
     validated = _validated_archive_key(key)
     if validated is None:
         raise ValueError(f"invalid audit archive key: {key!r}")
-    directory = _archive_directory_path(log_path)
-    if directory.is_symlink():
-        raise ValueError("audit archive directory must not be a symlink")
+    directory = _validated_archive_directory(log_path)
     candidate = log_path.parent / validated
     resolved_directory = directory.resolve()
     resolved_candidate = candidate.resolve(strict=False)
@@ -536,11 +581,8 @@ def _parse_archive_index(raw: bytes | None) -> list[dict[str, Any]]:
     archives = payload.get("archives")
     if not isinstance(archives, list):
         return []
-    return [
-        entry
-        for entry in archives
-        if isinstance(entry, dict) and _validated_archive_key(entry.get("key")) is not None
-    ]
+    validated = [_validated_archive_entry(entry) for entry in archives]
+    return [entry for entry in validated if entry is not None]
 
 
 def _load_file_archive_index(log_path: Path) -> list[dict[str, Any]]:
@@ -551,8 +593,7 @@ def _load_file_archive_index(log_path: Path) -> list[dict[str, Any]]:
 
 
 def _write_file_archive_index(log_path: Path, entries: list[dict[str, Any]]) -> None:
-    directory = _archive_directory_path(log_path)
-    directory.mkdir(parents=True, exist_ok=True)
+    directory = _validated_archive_directory(log_path, create=True)
     path = _archive_index_path(log_path)
     temporary = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
     try:
@@ -698,14 +739,18 @@ def _write_state_archive(
     )
 
 
+def _archive_bytes(entries: list[dict[str, Any]]) -> int:
+    return sum(entry["compressed_bytes"] for entry in entries)
+
+
 def _prune_file_archives(
     log_path: Path, entries: list[dict[str, Any]], max_archive_bytes: int
 ) -> list[dict[str, Any]]:
-    retained = sorted(entries, key=lambda entry: (float(entry.get("end_ts") or 0), str(entry["key"])))
-    total = sum(max(0, int(entry.get("compressed_bytes") or 0)) for entry in retained)
+    retained = sorted(entries, key=lambda entry: (entry["end_ts"], entry["key"]))
+    total = _archive_bytes(retained)
     while retained and total > max_archive_bytes:
         oldest = retained.pop(0)
-        total -= max(0, int(oldest.get("compressed_bytes") or 0))
+        total -= oldest["compressed_bytes"]
         with contextlib.suppress(OSError, ValueError):
             _archive_file_path(log_path, str(oldest["key"])).unlink(missing_ok=True)
     _write_file_archive_index(log_path, retained)
@@ -713,12 +758,12 @@ def _prune_file_archives(
 
 
 def _prune_state_archives(entries: list[dict[str, Any]], max_archive_bytes: int) -> list[dict[str, Any]]:
-    retained = sorted(entries, key=lambda entry: (float(entry.get("end_ts") or 0), str(entry["key"])))
-    total = sum(max(0, int(entry.get("compressed_bytes") or 0)) for entry in retained)
+    retained = sorted(entries, key=lambda entry: (entry["end_ts"], entry["key"]))
+    total = _archive_bytes(retained)
     store = get_state_store()
     while retained and total > max_archive_bytes:
         oldest = retained.pop(0)
-        total -= max(0, int(oldest.get("compressed_bytes") or 0))
+        total -= oldest["compressed_bytes"]
         store.delete(str(oldest["key"]))
     _write_state_archive_index(retained)
     return retained
@@ -753,7 +798,8 @@ def _enforce_audit_storage_limit(
     selected = _select_retention_lines(parsed, payload_sizes, max_bytes)
     archive_entries = _load_file_archive_index(log_path)
     if selected is None:
-        _prune_file_archives(log_path, archive_entries, max_archive_bytes)
+        if archive_entries and _archive_bytes(archive_entries) > max_archive_bytes:
+            _prune_file_archives(log_path, archive_entries, max_archive_bytes)
         return _prune_payload_store(log_path)
 
     archived_indexes = _archived_source_indexes(parsed, selected)
@@ -764,7 +810,8 @@ def _enforce_audit_storage_limit(
             return False
         if archive is not None:
             archive_entries.append(archive)
-    _prune_file_archives(log_path, archive_entries, max_archive_bytes)
+    if archive_entries:
+        _prune_file_archives(log_path, archive_entries, max_archive_bytes)
 
     temporary = log_path.with_name(f".{log_path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
     try:

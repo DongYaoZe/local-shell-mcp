@@ -842,6 +842,48 @@ def test_archive_index_rejects_paths_outside_archive_directory(tmp_path, monkeyp
     assert victim.read_bytes() == b"keep"
 
 
+def test_archive_index_rejects_malformed_metadata(tmp_path, monkeypatch):
+    _configure(tmp_path, monkeypatch)
+    valid = {
+        "key": "audit-archive/0000000000001-0000000000002-test.jsonl.zst",
+        "start_ts": 1,
+        "end_ts": 2,
+        "records": 1,
+        "raw_bytes": 10,
+        "compressed_bytes": 5,
+    }
+    malformed = dict(valid, compressed_bytes="bad")
+    raw = json.dumps(
+        {"version": audit_module._AUDIT_ARCHIVE_VERSION, "archives": [malformed, valid]}
+    ).encode()
+
+    assert audit_module._parse_archive_index(raw) == [
+        {**valid, "start_ts": 1.0, "end_ts": 2.0}
+    ]
+
+
+def test_archive_index_write_rejects_symlinked_directory(tmp_path, monkeypatch):
+    _configure(tmp_path, monkeypatch)
+    log_path = get_settings().audit_log_path
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    archive_dir = tmp_path / audit_module._AUDIT_ARCHIVE_DIRECTORY
+    archive_dir.symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="must not be a symlink"):
+        audit_module._write_file_archive_index(log_path, [])
+    assert not (outside / "index.json").exists()
+
+
+def test_under_budget_maintenance_does_not_create_archive_index(tmp_path, monkeypatch):
+    _configure(tmp_path, monkeypatch)
+    log_path = get_settings().audit_log_path
+    log_path.write_text('{"event":"small"}\n', encoding="utf-8")
+
+    assert audit_module._enforce_audit_storage_limit(log_path, 10_000, 0) is True
+    assert not (tmp_path / audit_module._AUDIT_ARCHIVE_DIRECTORY).exists()
+
+
 def test_query_audit_reads_complete_hot_log_not_tail_window(tmp_path, monkeypatch):
     _configure(tmp_path, monkeypatch)
     monkeypatch.setenv("LOCAL_SHELL_MCP_MAX_AUDIT_LOG_BYTES", "6000")
