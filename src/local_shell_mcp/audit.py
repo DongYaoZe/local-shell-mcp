@@ -420,7 +420,7 @@ def _bounded_preview_record(record: dict[str, Any], max_bytes: int) -> bytes:
     payload_ids: set[str] = set()
     _collect_payload_ids(record, payload_ids)
     if payload_ids:
-        preview["audit_payloads_omitted"] = "full payload retained in compressed audit archive"
+        preview["audit_payloads_omitted"] = "full payload omitted from live audit log"
     encoded = _encode_audit_record(preview)
     if len(encoded) <= max_bytes:
         return encoded

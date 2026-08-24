@@ -453,6 +453,13 @@ def test_audit_payload_helpers_cover_edge_paths(tmp_path, monkeypatch):
     unavailable = audit_module._resolve_payload_reference(missing_reference, full=True)
     assert unavailable["error"] == "Audit payload is unavailable"
     assert unavailable["preview"] == "missing-preview"
+    retained_preview = json.loads(
+        audit_module._bounded_preview_record(
+            {"id": "payload-preview", "ts": 1, "event": "preview", "payload": missing_reference},
+            1000,
+        )
+    )
+    assert retained_preview["audit_payloads_omitted"] == "full payload omitted from live audit log"
 
     collected: set[str] = set()
     audit_module._collect_payload_ids("not-a-record", collected)
