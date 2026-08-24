@@ -1,4 +1,4 @@
-<!-- i18n-source-sha256: 2bcd86ff1a9c7b28a9724edc24196f114958a7a0936d07018462cc50022c1468 -->
+<!-- i18n-source-sha256: 59ecc926e83dcca7bd5e12ce60319c16f3eb27972c4c0fa649ee750fc3819a64 -->
 # 구성
 
 Repository에는 복사 가능한 시작 파일 [`.env.example`](https://github.com/fwerkor/local-shell-mcp/blob/main/.env.example)이 포함됩니다. Docker Compose는 생성된 `.env`를 자동으로 읽고, 다른 runtime도 동일한 `LOCAL_SHELL_MCP_` environment variables를 사용할 수 있습니다. YAML은 binary 또는 source deployment를 위한 optional advanced input입니다. 파일을 명시적으로 만들고 `LOCAL_SHELL_MCP_CONFIG` 또는 `--config`로 선택합니다. Environment variables가 YAML values를 override하므로 의도적인 override가 아니라면 같은 setting을 두 곳에 정의하지 마십시오. YAML keys는 아래 field names를 사용합니다.
@@ -87,6 +87,8 @@ Local-only testing에서는 `auth_bypass_localhost`가 기본 활성화됩니다
 
 | YAML key | Environment variable | Default | Notes |
 |---|---|---|---|
+| `logical_sessions_enabled` | `LOCAL_SHELL_MCP_LOGICAL_SESSIONS_ENABLED` | `True` | `session_manage`와 `plan_manage`를 노출하고 일반 MCP tools에 필수이지만 null을 허용하는 `logical_session_id` 인수를 추가합니다. 끄면 Session 없는 더 작은 tool surface가 됩니다. |
+| `live_workspace_enabled` | `LOCAL_SHELL_MCP_LIVE_WORKSPACE_ENABLED` | `True` | MCP App Live Workspace의 tools, resources 및 `/api/live/*` routes를 노출합니다. `ui_enabled`가 필요하며 `stdio` mode에서는 사용할 수 없습니다. |
 | `ui_enabled` | `LOCAL_SHELL_MCP_UI_ENABLED` | `True` | Native OpenTUI launcher, WebUI shell, PTY WebSocket, `/api/ui/*` routes를 mount합니다. |
 | `ui_path` | `LOCAL_SHELL_MCP_UI_PATH` | `'/ui'` | 같은 service의 WebUI mount path. |
 | `ui_tui_command` | `LOCAL_SHELL_MCP_UI_TUI_COMMAND` | `None` | OpenTUI executable resolution optional command override. |
@@ -162,6 +164,8 @@ workspace_root: /workspace
 auth_mode: oauth
 remote_enabled: true
 disable_local: false
+logical_sessions_enabled: true
+live_workspace_enabled: true
 ui_enabled: true
 ui_path: /ui
 file_download_enabled: true

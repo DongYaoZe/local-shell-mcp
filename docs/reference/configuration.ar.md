@@ -1,4 +1,4 @@
-<!-- i18n-source-sha256: 2bcd86ff1a9c7b28a9724edc24196f114958a7a0936d07018462cc50022c1468 -->
+<!-- i18n-source-sha256: 59ecc926e83dcca7bd5e12ce60319c16f3eb27972c4c0fa649ee750fc3819a64 -->
 # الإعدادات
 
 يوفر repository ملف بدء واحدًا قابلًا للنسخ: [`.env.example`](https://github.com/fwerkor/local-shell-mcp/blob/main/.env.example). يقرأ Docker Compose ملف `.env` الناتج تلقائيًا، ويمكن لبقية runtimes استخدام environment variables نفسها ذات prefix `LOCAL_SHELL_MCP_`. يبقى YAML input متقدمًا اختياريًا لـ binary/source deployments؛ أنشئ ملفًا صراحة واختره عبر `LOCAL_SHELL_MCP_CONFIG` أو `--config`. تتغلب environment variables على قيم YAML، لذا تجنب تعريف setting نفسه في الاثنين إلا إذا كان override مقصودًا. تستخدم YAML keys أسماء fields المبينة أدناه.
@@ -87,6 +87,8 @@ LOCAL_SHELL_MCP_OAUTH_JWT_SECRET=change-me-long-random-secret
 
 | YAML key | Environment variable | Default | ملاحظات |
 |---|---|---|---|
+| `logical_sessions_enabled` | `LOCAL_SHELL_MCP_LOGICAL_SESSIONS_ENABLED` | `True` | يعرض `session_manage` و`plan_manage` ويضيف الوسيط `logical_session_id` المطلوب مع السماح بقيمة null إلى أدوات MCP العادية. عطّله للحصول على سطح أدوات أصغر من دون Sessions. |
+| `live_workspace_enabled` | `LOCAL_SHELL_MCP_LIVE_WORKSPACE_ENABLED` | `True` | يعرض أدوات وموارد ومسارات `/api/live/*` الخاصة بـ MCP App Live Workspace. يتطلب `ui_enabled` ولا يتوفر في وضع `stdio`. |
 | `ui_enabled` | `LOCAL_SHELL_MCP_UI_ENABLED` | `True` | يركب native OpenTUI launcher وWebUI shell وPTY WebSocket وroutes `/api/ui/*`. |
 | `ui_path` | `LOCAL_SHELL_MCP_UI_PATH` | `'/ui'` | WebUI mount path على service نفسه. |
 | `ui_tui_command` | `LOCAL_SHELL_MCP_UI_TUI_COMMAND` | `None` | Optional command override لحل OpenTUI executable. |
@@ -162,6 +164,8 @@ workspace_root: /workspace
 auth_mode: oauth
 remote_enabled: true
 disable_local: false
+logical_sessions_enabled: true
+live_workspace_enabled: true
 ui_enabled: true
 ui_path: /ui
 file_download_enabled: true

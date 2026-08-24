@@ -1,4 +1,4 @@
-<!-- i18n-source-sha256: 2bcd86ff1a9c7b28a9724edc24196f114958a7a0936d07018462cc50022c1468 -->
+<!-- i18n-source-sha256: 59ecc926e83dcca7bd5e12ce60319c16f3eb27972c4c0fa649ee750fc3819a64 -->
 # Yapılandırma
 
 Repository tek bir kopyalanabilir başlangıç dosyası sağlar: [`.env.example`](https://github.com/fwerkor/local-shell-mcp/blob/main/.env.example). Docker Compose oluşan `.env` dosyasını otomatik okur; diğer runtimes da aynı `LOCAL_SHELL_MCP_` environment variables değerlerini kullanabilir. YAML binary/source deployments için optional advanced input olarak kalır; dosyayı explicit oluşturup `LOCAL_SHELL_MCP_CONFIG` veya `--config` ile seçin. Environment variables YAML values değerlerini override eder; override bilinçli değilse aynı setting’i iki yerde tanımlamayın. YAML keys aşağıdaki field names değerlerini kullanır.
@@ -87,6 +87,8 @@ Local-only testing için `auth_bypass_localhost` default etkin. Public network �
 
 | YAML key | Environment variable | Default | Notlar |
 |---|---|---|---|
+| `logical_sessions_enabled` | `LOCAL_SHELL_MCP_LOGICAL_SESSIONS_ENABLED` | `True` | `session_manage` ve `plan_manage` araçlarını sunar ve normal MCP tools için zorunlu ancak nullable `logical_session_id` argümanını ekler. Session içermeyen daha küçük bir tool surface için kapatın. |
+| `live_workspace_enabled` | `LOCAL_SHELL_MCP_LIVE_WORKSPACE_ENABLED` | `True` | MCP App Live Workspace tools, resources ve `/api/live/*` route'larını sunar. `ui_enabled` gerektirir ve `stdio` modunda kullanılamaz. |
 | `ui_enabled` | `LOCAL_SHELL_MCP_UI_ENABLED` | `True` | Native OpenTUI launcher, WebUI shell, PTY WebSocket ve `/api/ui/*` routes mount eder. |
 | `ui_path` | `LOCAL_SHELL_MCP_UI_PATH` | `'/ui'` | Aynı service üzerindeki WebUI mount path. |
 | `ui_tui_command` | `LOCAL_SHELL_MCP_UI_TUI_COMMAND` | `None` | OpenTUI executable resolution için optional command override. |
@@ -162,6 +164,8 @@ workspace_root: /workspace
 auth_mode: oauth
 remote_enabled: true
 disable_local: false
+logical_sessions_enabled: true
+live_workspace_enabled: true
 ui_enabled: true
 ui_path: /ui
 file_download_enabled: true

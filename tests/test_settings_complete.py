@@ -197,11 +197,15 @@ def test_dependency_light_fallback_settings(tmp_path, monkeypatch):
     monkeypatch.setenv("LOCAL_SHELL_MCP_PORT", "9010")
     monkeypatch.setenv("LOCAL_SHELL_MCP_REMOTE_ENABLED", "false")
     monkeypatch.setenv("LOCAL_SHELL_MCP_DISABLE_LOCAL", "true")
+    monkeypatch.setenv("LOCAL_SHELL_MCP_LOGICAL_SESSIONS_ENABLED", "false")
+    monkeypatch.setenv("LOCAL_SHELL_MCP_LIVE_WORKSPACE_ENABLED", "false")
     monkeypatch.setenv("LOCAL_SHELL_MCP_COMMAND_DENYLIST", "one,two")
     instance = fallback.Settings()
     assert instance.port == 9010
     assert instance.remote_enabled is False
     assert instance.disable_local is True
+    assert instance.logical_sessions_enabled is False
+    assert instance.live_workspace_enabled is False
     assert instance.command_denylist == ["one", "two"]
     assert instance.workspace_root == workspace.resolve()
     assert instance.mcp_session_idle_timeout_s == 180
@@ -222,6 +226,8 @@ def test_dependency_light_fallback_settings(tmp_path, monkeypatch):
         "LOCAL_SHELL_MCP_STATE_DIR",
         "LOCAL_SHELL_MCP_PORT",
         "LOCAL_SHELL_MCP_REMOTE_ENABLED",
+        "LOCAL_SHELL_MCP_LOGICAL_SESSIONS_ENABLED",
+        "LOCAL_SHELL_MCP_LIVE_WORKSPACE_ENABLED",
         "LOCAL_SHELL_MCP_COMMAND_DENYLIST",
     ):
         monkeypatch.delenv(name, raising=False)
