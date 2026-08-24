@@ -621,6 +621,64 @@ async def test_remote_registry_malformed_invite_uses_valid_backup(tmp_path, monk
 
 
 @pytest.mark.asyncio
+async def test_remote_registry_non_object_invite_uses_valid_backup(tmp_path, monkeypatch):
+    _configure_stateless(tmp_path, monkeypatch)
+    store = get_state_store()
+    manager = remote_module.RemoteManager()
+    invite = await manager.create_invite(name="worker-a", workdir="/srv/work")
+    raw = store.read_bytes(remote_module.REMOTE_WORKER_REGISTRY_FILE_NAME)
+    assert raw is not None
+    registry = json.loads(raw)
+    registry["invites"].append("corrupt")
+    store.write_bytes(
+        remote_module.REMOTE_WORKER_REGISTRY_FILE_NAME,
+        json.dumps(registry).encode("utf-8"),
+    )
+
+    reloaded = remote_module.RemoteManager()
+    registered = await reloaded.register_worker(
+        {
+            "invite": invite["code"],
+            "name": "worker-a",
+            "workdir": "/srv/work",
+        }
+    )
+    assert registered["token"].startswith("lsmcp_wk_")
+
+
+@pytest.mark.asyncio
+async def test_remote_registry_repairs_interrupted_generation_marker(tmp_path, monkeypatch):
+    _configure_stateless(tmp_path, monkeypatch)
+    store = get_state_store()
+    manager = remote_module.RemoteManager()
+    invite = await manager.create_invite(name="worker-a", workdir="/srv/work")
+    raw = store.read_bytes(remote_module.REMOTE_WORKER_REGISTRY_FILE_NAME)
+    assert raw is not None
+    committed_generation = json.loads(raw)["generation"]
+    store.write_bytes(
+        remote_module.REMOTE_WORKER_REGISTRY_GENERATION_FILE_NAME,
+        b"uncommitted-generation",
+    )
+
+    reloaded = remote_module.RemoteManager()
+    reloaded.list_machines()
+    assert store.read_bytes(remote_module.REMOTE_WORKER_REGISTRY_GENERATION_FILE_NAME) == (
+        committed_generation.encode("ascii")
+    )
+
+    store.write_bytes(remote_module.REMOTE_WORKER_REGISTRY_FILE_NAME, b"{corrupt")
+    recovered = remote_module.RemoteManager()
+    registered = await recovered.register_worker(
+        {
+            "invite": invite["code"],
+            "name": "worker-a",
+            "workdir": "/srv/work",
+        }
+    )
+    assert registered["token"].startswith("lsmcp_wk_")
+
+
+@pytest.mark.asyncio
 async def test_stateless_managed_job_and_audit_stay_off_disk(tmp_path, monkeypatch):
     _configure_stateless(tmp_path, monkeypatch)
     kind = f"serverless-test-{tmp_path.name}"

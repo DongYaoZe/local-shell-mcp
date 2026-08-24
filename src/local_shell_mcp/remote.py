@@ -268,7 +268,9 @@ class RemoteManager:
         invites = data.get("invites", [])
         if not isinstance(invites, list):
             raise ValueError(f"remote worker registry invites field is invalid: {source}")
-        invite_rows = [item for item in invites if isinstance(item, dict)]
+        if any(not isinstance(item, dict) for item in invites):
+            raise ValueError(f"remote worker registry invite entry is invalid: {source}")
+        invite_rows = invites
         for item in invite_rows:
             try:
                 float(item.get("expires_at") or 0)
@@ -313,6 +315,23 @@ class RemoteManager:
                 path=REMOTE_WORKER_REGISTRY_FILE_NAME,
                 error=repr(exc),
             )
+        if registry is not None:
+            primary_generation = registry.get("generation")
+            if primary_generation is not None and primary_generation != recovery_generation:
+                try:
+                    store.write_bytes(
+                        REMOTE_WORKER_REGISTRY_GENERATION_FILE_NAME,
+                        primary_generation.encode("ascii"),
+                    )
+                except Exception as exc:
+                    with contextlib.suppress(Exception):
+                        audit(
+                            "remote_worker_registry_generation_repair_failed",
+                            path=REMOTE_WORKER_REGISTRY_GENERATION_FILE_NAME,
+                            error=repr(exc),
+                        )
+                else:
+                    recovery_generation = primary_generation
         if registry is None and backup_raw is not None:
             try:
                 backup_registry = self._read_registry(
