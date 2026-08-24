@@ -283,7 +283,14 @@ def _resolve_payload_reference(value: Any, *, full: bool) -> Any:
                 raise FileNotFoundError(digest)
         raw = gzip.decompress(encoded)
         return json.loads(raw)
-    except (OSError, EOFError, gzip.BadGzipFile, json.JSONDecodeError, zlib.error) as exc:
+    except (
+        OSError,
+        EOFError,
+        UnicodeDecodeError,
+        gzip.BadGzipFile,
+        json.JSONDecodeError,
+        zlib.error,
+    ) as exc:
         return {
             "error": "Audit payload is unavailable",
             "payload_id": digest,

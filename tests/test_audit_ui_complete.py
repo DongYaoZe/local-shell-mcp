@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gzip
 import json
 import os
 import stat
@@ -890,6 +891,18 @@ def test_archive_time_bounds_ignore_invalid_timestamps():
     ]
 
     assert audit_module._archive_time_bounds(parsed, [0, 1, 2, 3]) == (7.5, 7.5)
+
+
+def test_corrupt_utf8_payload_is_unavailable_instead_of_raising(tmp_path, monkeypatch):
+    _configure(tmp_path, monkeypatch)
+    reference = audit_module._write_payload("payload")
+    digest = audit_module._payload_digest(reference)
+    audit_module._payload_path(digest).write_bytes(gzip.compress(b"\xff"))
+
+    resolved = audit_module._resolve_payload_reference(reference, full=True)
+
+    assert resolved["error"] == "Audit payload is unavailable"
+    assert resolved["payload_id"] == digest
 
 
 def test_archive_index_rejects_malformed_metadata(tmp_path, monkeypatch):
