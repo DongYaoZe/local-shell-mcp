@@ -37,6 +37,7 @@ _AUDIT_MAINTENANCE_INTERVAL_S = _AUDIT_PAYLOAD_PRUNE_GRACE_S
 _AUDIT_LAST_MAINTENANCE: dict[str, float] = {}
 _AUDIT_PRESSURE_BACKOFF_UNTIL: dict[str, float] = {}
 _AUDIT_PAYLOAD_DIRECTORY = "audit-payloads"
+_AUDIT_PAYLOAD_BYTES_KEY = f"{_AUDIT_PAYLOAD_DIRECTORY}/total-bytes"
 _AUDIT_PAYLOAD_MARKER = "$local_shell_mcp_audit_payload"
 _AUDIT_PAYLOAD_VERSION = 1
 _AUDIT_ARCHIVE_DIRECTORY = "audit-archive"
@@ -122,13 +123,42 @@ def _write_private_bytes(path: Path, data: bytes) -> None:
 
 
 
-def _state_payload_bytes() -> int:
+def _parse_payload_byte_count(raw: bytes | None) -> int | None:
+    if raw is None:
+        return None
+    try:
+        value = int(raw.decode("ascii"))
+    except (UnicodeDecodeError, ValueError):
+        return None
+    return value if value >= 0 else None
+
+
+def _scan_state_payload_bytes() -> int:
     store = get_state_store()
     prefix = f"{_AUDIT_PAYLOAD_DIRECTORY}/"
     return sum(
         store.size_bytes(key) or 0
         for key in store.list_keys(prefix)
         if key.endswith(".json.gz")
+    )
+
+
+def _state_payload_bytes() -> int:
+    store = get_state_store()
+    current = _parse_payload_byte_count(store.read_bytes(_AUDIT_PAYLOAD_BYTES_KEY))
+    if current is not None:
+        return current
+    with state_lock(_AUDIT_PAYLOAD_BYTES_KEY):
+        current = _parse_payload_byte_count(store.read_bytes(_AUDIT_PAYLOAD_BYTES_KEY))
+        if current is None:
+            current = _scan_state_payload_bytes()
+            store.write_bytes(_AUDIT_PAYLOAD_BYTES_KEY, str(current).encode("ascii"))
+        return current
+
+
+def _set_state_payload_bytes(value: int) -> None:
+    get_state_store().write_bytes(
+        _AUDIT_PAYLOAD_BYTES_KEY, str(max(0, int(value))).encode("ascii")
     )
 
 
@@ -141,10 +171,26 @@ def _write_payload(value: Any) -> dict[str, Any]:
     ).encode("utf-8")
     digest = hashlib.sha256(raw).hexdigest()
     if get_settings().state_backend != "file":
-        get_state_store().write_bytes(
-            f"{_AUDIT_PAYLOAD_DIRECTORY}/{digest}.json.gz",
-            gzip.compress(raw, compresslevel=6, mtime=0),
-        )
+        store = get_state_store()
+        key = f"{_AUDIT_PAYLOAD_DIRECTORY}/{digest}.json.gz"
+        compressed = gzip.compress(raw, compresslevel=6, mtime=0)
+        with state_lock(_AUDIT_PAYLOAD_BYTES_KEY):
+            current = _parse_payload_byte_count(store.read_bytes(_AUDIT_PAYLOAD_BYTES_KEY))
+            counter_needs_write = current is None
+            if current is None:
+                current = _scan_state_payload_bytes()
+            existing_size = store.size_bytes(key)
+            if existing_size is None:
+                next_total = current + len(compressed)
+                store.write_bytes(_AUDIT_PAYLOAD_BYTES_KEY, str(next_total).encode("ascii"))
+                try:
+                    store.write_bytes(key, compressed)
+                except Exception:
+                    with contextlib.suppress(Exception):
+                        store.write_bytes(_AUDIT_PAYLOAD_BYTES_KEY, str(current).encode("ascii"))
+                    raise
+            elif counter_needs_write:
+                store.write_bytes(_AUDIT_PAYLOAD_BYTES_KEY, str(current).encode("ascii"))
         return {
             _AUDIT_PAYLOAD_MARKER: {
                 "version": _AUDIT_PAYLOAD_VERSION,
@@ -834,7 +880,7 @@ def _enforce_state_audit_storage_limit(
     raw_lines = (store.read_bytes("audit.jsonl") or b"").splitlines(keepends=True)
     parsed, all_referenced = _parse_retention_lines(raw_lines)
     payload_sizes = {
-        digest: len(store.read_bytes(f"{_AUDIT_PAYLOAD_DIRECTORY}/{digest}.json.gz") or b"")
+        digest: store.size_bytes(f"{_AUDIT_PAYLOAD_DIRECTORY}/{digest}.json.gz") or 0
         for digest in all_referenced
     }
     selected = _select_retention_lines(parsed, payload_sizes, max_bytes)
@@ -849,12 +895,17 @@ def _enforce_state_audit_storage_limit(
         _, all_referenced = _parse_retention_lines([raw_line for _index, raw_line in selected])
     _prune_state_archives(archive_entries, max_archive_bytes)
     prefix = f"{_AUDIT_PAYLOAD_DIRECTORY}/"
-    for key in store.list_keys(prefix):
-        if not key.endswith(".json.gz"):
-            continue
-        digest = key.removeprefix(prefix).removesuffix(".json.gz")
-        if digest not in all_referenced:
-            store.delete(key)
+    retained_payload_bytes = 0
+    with state_lock(_AUDIT_PAYLOAD_BYTES_KEY):
+        for key in store.list_keys(prefix):
+            if not key.endswith(".json.gz"):
+                continue
+            digest = key.removeprefix(prefix).removesuffix(".json.gz")
+            if digest not in all_referenced:
+                store.delete(key)
+                continue
+            retained_payload_bytes += store.size_bytes(key) or 0
+        _set_state_payload_bytes(retained_payload_bytes)
 
 
 
@@ -924,16 +975,16 @@ def audit(event: str, **fields: Any) -> None:
         if fields.get("error_type"):
             call_state["error_type"] = fields["error_type"]
     with _AUDIT_LOCK:
-        record = {
-            "id": uuid.uuid4().hex,
-            "ts": time.time(),
-            "event": event,
-            **{name: _serialize_audit_value(value) for name, value in fields.items()},
-        }
-        encoded = json.dumps(record, ensure_ascii=False, default=str) + "\n"
         if settings.state_backend != "file":
             store = get_state_store()
             with state_lock("audit.jsonl"):
+                record = {
+                    "id": uuid.uuid4().hex,
+                    "ts": time.time(),
+                    "event": event,
+                    **{name: _serialize_audit_value(value) for name, value in fields.items()},
+                }
+                encoded = json.dumps(record, ensure_ascii=False, default=str) + "\n"
                 log_bytes = store.append_bytes("audit.jsonl", encoded.encode("utf-8"))
                 retention_needed = (
                     log_bytes + _state_payload_bytes() > settings.max_audit_log_bytes
@@ -943,6 +994,13 @@ def audit(event: str, **fields: Any) -> None:
                     _enforce_state_audit_storage_limit(settings.max_audit_log_bytes)
                     _mark_audit_maintenance(settings.audit_log_path)
             return
+        record = {
+            "id": uuid.uuid4().hex,
+            "ts": time.time(),
+            "event": event,
+            **{name: _serialize_audit_value(value) for name, value in fields.items()},
+        }
+        encoded = json.dumps(record, ensure_ascii=False, default=str) + "\n"
         path: Path = settings.audit_log_path
         path.parent.mkdir(parents=True, exist_ok=True)
         descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)

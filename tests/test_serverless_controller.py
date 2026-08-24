@@ -480,6 +480,30 @@ def test_state_backed_audit_enforces_combined_log_and_payload_budget(tmp_path, m
         assert audit_bytes + payload_bytes <= max_bytes
 
 
+def test_state_backed_audit_uses_persisted_payload_byte_counter(tmp_path, monkeypatch):
+    _configure_stateless(
+        tmp_path,
+        monkeypatch,
+        max_audit_log_bytes="100000",
+        max_audit_archive_bytes="50000",
+    )
+    audit_module.audit("payload_counter_seed", payload="x" * 30000)
+    store = get_state_store()
+    counter = store.read_bytes(audit_module._AUDIT_PAYLOAD_BYTES_KEY)
+    assert counter is not None
+    assert int(counter) > 0
+
+    original_list_keys = store.list_keys
+
+    def reject_payload_scan(prefix: str = "") -> list[str]:
+        if prefix == f"{audit_module._AUDIT_PAYLOAD_DIRECTORY}/":
+            raise AssertionError("ordinary audit writes must not scan retained payloads")
+        return original_list_keys(prefix)
+
+    monkeypatch.setattr(store, "list_keys", reject_payload_scan)
+    audit_module.audit("payload_counter_inline", detail="small")
+
+
 def test_state_backed_audit_archive_preserves_pruned_payloads(tmp_path, monkeypatch):
     _configure_stateless(
         tmp_path,
