@@ -78,7 +78,12 @@ def test_run_mcp_streamable_and_sse(monkeypatch):
     main_module.run_mcp()
     assert runs.pop() == (
         ("wrapped", streamable),
-        {"host": "127.0.0.1", "port": 9876, "forwarded_allow_ips": "10.0.0.2"},
+        {
+            "host": "127.0.0.1",
+            "port": 9876,
+            "forwarded_allow_ips": "10.0.0.2",
+            "timeout_graceful_shutdown": 10,
+        },
     )
 
     class FakeApp:
@@ -99,6 +104,7 @@ def test_run_mcp_streamable_and_sse(monkeypatch):
             "host": "127.0.0.1",
             "port": 9876,
             "forwarded_allow_ips": "10.0.0.2",
+            "timeout_graceful_shutdown": 10,
         }
         assert len(app.middleware) == expected_middleware_count
 
@@ -154,7 +160,12 @@ def test_run_http(monkeypatch):
         ("validate", settings),
         (
             "http-app",
-            {"host": "127.0.0.1", "port": 9876, "forwarded_allow_ips": "10.0.0.2"},
+            {
+                "host": "127.0.0.1",
+                "port": 9876,
+                "forwarded_allow_ips": "10.0.0.2",
+                "timeout_graceful_shutdown": 10,
+            },
         ),
     ]
 
