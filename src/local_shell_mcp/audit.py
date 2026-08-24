@@ -797,13 +797,19 @@ def _archive_bytes(entries: list[dict[str, Any]]) -> int:
 def _prune_file_archives(
     log_path: Path, entries: list[dict[str, Any]], max_archive_bytes: int
 ) -> list[dict[str, Any]]:
-    retained = sorted(entries, key=lambda entry: (entry["end_ts"], entry["key"]))
-    total = _archive_bytes(retained)
-    while retained and total > max_archive_bytes:
-        oldest = retained.pop(0)
-        total -= oldest["compressed_bytes"]
-        with contextlib.suppress(OSError, ValueError):
-            _archive_file_path(log_path, str(oldest["key"])).unlink(missing_ok=True)
+    ordered = sorted(entries, key=lambda entry: (entry["end_ts"], entry["key"]))
+    total = _archive_bytes(ordered)
+    retained: list[dict[str, Any]] = []
+    for entry in ordered:
+        if total <= max_archive_bytes:
+            retained.append(entry)
+            continue
+        try:
+            _archive_file_path(log_path, entry["key"]).unlink(missing_ok=True)
+        except (OSError, ValueError):
+            retained.append(entry)
+        else:
+            total -= entry["compressed_bytes"]
     _write_file_archive_index(log_path, retained)
     return retained
 

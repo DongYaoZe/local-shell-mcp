@@ -819,6 +819,38 @@ def test_audit_archive_budget_prunes_oldest_compressed_files(tmp_path, monkeypat
     assert files == keys
 
 
+def test_archive_pruning_retains_entry_when_file_delete_fails(tmp_path, monkeypatch):
+    _configure(tmp_path, monkeypatch)
+    log_path = get_settings().audit_log_path
+    key = audit_module._archive_key(1, 2)
+    archive_path = audit_module._archive_file_path(log_path, key)
+    archive_path.parent.mkdir(parents=True, exist_ok=True)
+    archive_path.write_bytes(b"archive")
+    entry = {
+        "key": key,
+        "start_ts": 1.0,
+        "end_ts": 2.0,
+        "records": 1,
+        "raw_bytes": 20,
+        "compressed_bytes": archive_path.stat().st_size,
+    }
+    original_unlink = Path.unlink
+
+    def fail_archive_unlink(path: Path, *args, **kwargs):
+        if path == archive_path:
+            raise PermissionError("archive is busy")
+        return original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", fail_archive_unlink)
+    assert audit_module._prune_file_archives(log_path, [entry], 0) == [entry]
+    assert audit_module._load_file_archive_index(log_path) == [entry]
+    assert archive_path.exists()
+
+    monkeypatch.setattr(Path, "unlink", original_unlink)
+    assert audit_module._prune_file_archives(log_path, [entry], 0) == []
+    assert not archive_path.exists()
+
+
 def test_archive_index_rejects_paths_outside_archive_directory(tmp_path, monkeypatch):
     _configure(tmp_path, monkeypatch)
     log_path = get_settings().audit_log_path
