@@ -99,7 +99,7 @@ class FileStateStore:
         yield
 
 
-_MEMORY_VALUES: dict[str, bytes] = {}
+_MEMORY_VALUES: dict[str, bytearray] = {}
 _MEMORY_LOCKS: dict[str, threading.RLock] = {}
 _MEMORY_GUARD = threading.RLock()
 
@@ -125,14 +125,17 @@ class MemoryStateStore:
     def write_bytes(self, key: str, value: bytes) -> None:
         namespaced = self._key(key)
         with self._lock_for(key):
-            _MEMORY_VALUES[namespaced] = bytes(value)
+            _MEMORY_VALUES[namespaced] = bytearray(value)
 
     def append_bytes(self, key: str, value: bytes) -> int:
         namespaced = self._key(key)
         with self._lock_for(key):
-            combined = _MEMORY_VALUES.get(namespaced, b"") + bytes(value)
-            _MEMORY_VALUES[namespaced] = combined
-            return len(combined)
+            current = _MEMORY_VALUES.get(namespaced)
+            if current is None:
+                current = bytearray()
+                _MEMORY_VALUES[namespaced] = current
+            current.extend(value)
+            return len(current)
 
     def size_bytes(self, key: str) -> int | None:
         namespaced = self._key(key)

@@ -144,7 +144,10 @@ def test_file_and_memory_state_store_round_trip(tmp_path):
     first.write_bytes("key", b"one")
     first.write_bytes("nested/key", b"two")
     second.write_bytes("key", b"other")
+    memory_value = state_store_module._MEMORY_VALUES["first:key"]
+    assert isinstance(memory_value, bytearray)
     assert first.append_bytes("key", b"+") == 4
+    assert state_store_module._MEMORY_VALUES["first:key"] is memory_value
     assert first.size_bytes("key") == 4
     assert first.size_bytes("missing") is None
     assert first.read_bytes("key") == b"one+"
