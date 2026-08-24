@@ -1,4 +1,4 @@
-<!-- i18n-source-sha256: b345d7a6aeb17e42ecca284d4b2f80db2dbf2719bed9e300a2e07737c75ddca3 -->
+<!-- i18n-source-sha256: b174a1b427ca9b618c63375702f4a652941f83c6b1e1abaee1a99d1ab278deab -->
 # 設定
 
 儲存庫提供一個可直接複製的起始檔案：[`.env.example`](https://github.com/fwerkor/local-shell-mcp/blob/main/.env.example)。Docker Compose 會自動讀取由此產生的 `.env`，其他 runtime 也可使用相同的 `LOCAL_SHELL_MCP_` 環境變數。YAML 仍是 binary 或原始碼部署的可選進階輸入；請明確建立設定檔，並以 `LOCAL_SHELL_MCP_CONFIG` 或 `--config` 選取。環境變數會覆寫 YAML，因此除非確實需要 override，否則不要在兩處重複定義同一設定。YAML key 使用下表列出的欄位名稱。
@@ -88,6 +88,8 @@ LOCAL_SHELL_MCP_OAUTH_JWT_SECRET=change-me-long-random-secret
 
 | YAML key | 環境變數 | 預設值 | 說明 |
 |---|---|---|---|
+| `logical_sessions_enabled` | `LOCAL_SHELL_MCP_LOGICAL_SESSIONS_ENABLED` | `True` | 公開 `session_manage` 與 `plan_manage`，並為一般 MCP tools 加入必填但可為 null 的 `logical_session_id` 參數。關閉後可得到更精簡、無 Session 的工具面。 |
+| `live_workspace_enabled` | `LOCAL_SHELL_MCP_LIVE_WORKSPACE_ENABLED` | `True` | 公開 MCP App Live Workspace 的 tools、resources 與 `/api/live/*` routes。需要同時啟用 `ui_enabled`，且在 `stdio` 模式下不可用。 |
 | `ui_enabled` | `LOCAL_SHELL_MCP_UI_ENABLED` | `True` | 掛載 native OpenTUI launcher、WebUI shell、PTY WebSocket 與 `/api/ui/*` routes。 |
 | `ui_path` | `LOCAL_SHELL_MCP_UI_PATH` | `'/ui'` | WebUI 在相同 service 上的 mount path。 |
 | `ui_tui_command` | `LOCAL_SHELL_MCP_UI_TUI_COMMAND` | `None` | 可選 OpenTUI executable command override。 |
@@ -163,6 +165,8 @@ workspace_root: /workspace
 auth_mode: oauth
 remote_enabled: true
 disable_local: false
+logical_sessions_enabled: true
+live_workspace_enabled: true
 ui_enabled: true
 ui_path: /ui
 file_download_enabled: true

@@ -1,4 +1,4 @@
-<!-- i18n-source-sha256: b345d7a6aeb17e42ecca284d4b2f80db2dbf2719bed9e300a2e07737c75ddca3 -->
+<!-- i18n-source-sha256: b174a1b427ca9b618c63375702f4a652941f83c6b1e1abaee1a99d1ab278deab -->
 # Konfiguracja
 
 Repository dostarcza jeden kopiowalny starter file: [`.env.example`](https://github.com/fwerkor/local-shell-mcp/blob/main/.env.example). Docker Compose automatycznie odczytuje wynikowy `.env`, a inne runtimes mogą używać tych samych `LOCAL_SHELL_MCP_` environment variables. YAML pozostaje optional advanced input dla binary/source deployments; utwórz file explicit i wybierz go przez `LOCAL_SHELL_MCP_CONFIG` lub `--config`. Environment variables override YAML values, więc nie definiuj tego samego setting w obu miejscach, chyba że override jest zamierzony. YAML keys używają field names poniżej.
@@ -88,6 +88,8 @@ Dla local-only testing `auth_bypass_localhost` jest default enabled. Nie expose 
 
 | YAML key | Environment variable | Default | Uwagi |
 |---|---|---|---|
+| `logical_sessions_enabled` | `LOCAL_SHELL_MCP_LOGICAL_SESSIONS_ENABLED` | `True` | Udostępnia `session_manage` i `plan_manage` oraz dodaje do zwykłych narzędzi MCP wymagany, ale nullable argument `logical_session_id`. Wyłącz, aby uzyskać mniejszy tool surface bez Sessions. |
+| `live_workspace_enabled` | `LOCAL_SHELL_MCP_LIVE_WORKSPACE_ENABLED` | `True` | Udostępnia tools, resources i trasy `/api/live/*` MCP App Live Workspace. Wymaga `ui_enabled` i nie jest dostępny w trybie `stdio`. |
 | `ui_enabled` | `LOCAL_SHELL_MCP_UI_ENABLED` | `True` | Mountuje native OpenTUI launcher, WebUI shell, PTY WebSocket i routes `/api/ui/*`. |
 | `ui_path` | `LOCAL_SHELL_MCP_UI_PATH` | `'/ui'` | WebUI mount path na tym samym service. |
 | `ui_tui_command` | `LOCAL_SHELL_MCP_UI_TUI_COMMAND` | `None` | Optional command override dla OpenTUI executable resolution. |
@@ -163,6 +165,8 @@ workspace_root: /workspace
 auth_mode: oauth
 remote_enabled: true
 disable_local: false
+logical_sessions_enabled: true
+live_workspace_enabled: true
 ui_enabled: true
 ui_path: /ui
 file_download_enabled: true

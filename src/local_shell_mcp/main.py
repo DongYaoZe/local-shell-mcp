@@ -45,8 +45,9 @@ def _with_oauth_routes(inner_app):  # noqa: ANN001
     ]
     settings = get_settings()
     routes[2:2] = download_routes()
-    if settings.ui_enabled:
+    if settings.ui_enabled and settings.live_workspace_enabled:
         routes[2:2] = live_channel_routes()
+    if settings.ui_enabled:
         routes[2:2] = ui_routes()
     if settings.remote_enabled:
         routes[2:2] = remote_routes()

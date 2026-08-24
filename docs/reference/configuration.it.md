@@ -1,4 +1,4 @@
-<!-- i18n-source-sha256: b345d7a6aeb17e42ecca284d4b2f80db2dbf2719bed9e300a2e07737c75ddca3 -->
+<!-- i18n-source-sha256: b174a1b427ca9b618c63375702f4a652941f83c6b1e1abaee1a99d1ab278deab -->
 # Configurazione
 
 Il repository include un solo file iniziale copiabile: [`.env.example`](https://github.com/fwerkor/local-shell-mcp/blob/main/.env.example). Docker Compose legge automaticamente il `.env` risultante e gli altri runtime possono usare le stesse environment variables `LOCAL_SHELL_MCP_`. YAML resta un input avanzato opzionale per deployment binary o source; crea esplicitamente un file e selezionalo con `LOCAL_SHELL_MCP_CONFIG` o `--config`. Le environment variables sovrascrivono i valori YAML, quindi evita di definire lo stesso setting in entrambi salvo quando l’override è intenzionale. Le YAML keys usano i field names riportati sotto.
@@ -88,6 +88,8 @@ Per test solo localhost, `auth_bypass_localhost` è abilitato di default. Non es
 
 | YAML key | Environment variable | Default | Note |
 |---|---|---|---|
+| `logical_sessions_enabled` | `LOCAL_SHELL_MCP_LOGICAL_SESSIONS_ENABLED` | `True` | Espone `session_manage` e `plan_manage` e aggiunge l’argomento obbligatorio ma nullable `logical_session_id` ai normali tool MCP. Disabilitalo per una tool surface più piccola e senza Session. |
+| `live_workspace_enabled` | `LOCAL_SHELL_MCP_LIVE_WORKSPACE_ENABLED` | `True` | Espone tool, resource e route `/api/live/*` di MCP App Live Workspace. Richiede `ui_enabled` e non è disponibile in modalità `stdio`. |
 | `ui_enabled` | `LOCAL_SHELL_MCP_UI_ENABLED` | `True` | Monta native OpenTUI launcher, WebUI shell, PTY WebSocket e routes `/api/ui/*`. |
 | `ui_path` | `LOCAL_SHELL_MCP_UI_PATH` | `'/ui'` | Path di mount WebUI sullo stesso service. |
 | `ui_tui_command` | `LOCAL_SHELL_MCP_UI_TUI_COMMAND` | `None` | Override opzionale del command per risolvere l’executable OpenTUI. |
@@ -163,6 +165,8 @@ workspace_root: /workspace
 auth_mode: oauth
 remote_enabled: true
 disable_local: false
+logical_sessions_enabled: true
+live_workspace_enabled: true
 ui_enabled: true
 ui_path: /ui
 file_download_enabled: true

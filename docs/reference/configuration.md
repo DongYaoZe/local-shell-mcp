@@ -87,6 +87,8 @@ For local-only testing, `auth_bypass_localhost` is enabled by default. Do not ex
 
 | YAML key | Environment variable | Default | Notes |
 |---|---|---|---|
+| `logical_sessions_enabled` | `LOCAL_SHELL_MCP_LOGICAL_SESSIONS_ENABLED` | `True` | Exposes `session_manage` and `plan_manage` and adds the required nullable `logical_session_id` argument to ordinary MCP tools. Disable for a smaller session-free tool surface. |
+| `live_workspace_enabled` | `LOCAL_SHELL_MCP_LIVE_WORKSPACE_ENABLED` | `True` | Exposes the MCP App Live Workspace tools, resources, and `/api/live/*` routes. Requires `ui_enabled` and is unavailable in `stdio` mode. |
 | `ui_enabled` | `LOCAL_SHELL_MCP_UI_ENABLED` | `True` | Mounts the native OpenTUI launcher, WebUI shell, PTY WebSocket, and `/api/ui/*` routes. |
 | `ui_path` | `LOCAL_SHELL_MCP_UI_PATH` | `'/ui'` | WebUI mount path on the same service. |
 | `ui_tui_command` | `LOCAL_SHELL_MCP_UI_TUI_COMMAND` | `None` | Optional command override for the OpenTUI executable. |
@@ -162,6 +164,8 @@ workspace_root: /workspace
 auth_mode: oauth
 remote_enabled: true
 disable_local: false
+logical_sessions_enabled: true
+live_workspace_enabled: true
 ui_enabled: true
 ui_path: /ui
 file_download_enabled: true
