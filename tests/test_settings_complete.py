@@ -136,6 +136,9 @@ def test_lowercase_environment_variable_overrides_yaml_config(tmp_path, monkeypa
     config = tmp_path / "config.yaml"
     config.write_text("port: 9001\n", encoding="utf-8")
     monkeypatch.setenv("LOCAL_SHELL_MCP_CONFIG", str(config))
+    monkeypatch.setenv("LOCAL_SHELL_MCP_WORKSPACE_ROOT", str(tmp_path / "workspace"))
+    monkeypatch.setenv("LOCAL_SHELL_MCP_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("LOCAL_SHELL_MCP_AUTH_MODE", "none")
     monkeypatch.delenv("LOCAL_SHELL_MCP_PORT", raising=False)
     monkeypatch.setenv("local_shell_mcp_port", "9102")
     settings.get_settings.cache_clear()
