@@ -842,6 +842,17 @@ def test_archive_index_rejects_paths_outside_archive_directory(tmp_path, monkeyp
     assert victim.read_bytes() == b"keep"
 
 
+def test_archive_time_bounds_ignore_invalid_timestamps():
+    parsed = [
+        (b"bad\n", {"ts": "bad"}, set()),
+        (b"infinite\n", {"ts": float("inf")}, set()),
+        (b"boolean\n", {"ts": True}, set()),
+        (b"valid\n", {"ts": 7.5}, set()),
+    ]
+
+    assert audit_module._archive_time_bounds(parsed, [0, 1, 2, 3]) == (7.5, 7.5)
+
+
 def test_archive_index_rejects_malformed_metadata(tmp_path, monkeypatch):
     _configure(tmp_path, monkeypatch)
     valid = {

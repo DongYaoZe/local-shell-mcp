@@ -661,12 +661,17 @@ def _write_state_archive_index(entries: list[dict[str, Any]]) -> None:
 def _archive_time_bounds(
     parsed: list[tuple[bytes, dict[str, Any] | None, set[str]]], indexes: list[int]
 ) -> tuple[float, float]:
-    timestamps = [
-        float(parsed[index][1].get("ts") or 0)
-        for index in indexes
-        if isinstance(parsed[index][1], dict)
-    ]
-    timestamps = [value for value in timestamps if value > 0]
+    timestamps: list[float] = []
+    for index in indexes:
+        record = parsed[index][1]
+        if not isinstance(record, dict):
+            continue
+        raw_timestamp = record.get("ts")
+        if isinstance(raw_timestamp, bool) or not isinstance(raw_timestamp, (int, float)):
+            continue
+        timestamp = float(raw_timestamp)
+        if math.isfinite(timestamp) and timestamp > 0:
+            timestamps.append(timestamp)
     now = time.time()
     return (min(timestamps), max(timestamps)) if timestamps else (now, now)
 
