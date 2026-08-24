@@ -105,6 +105,7 @@ _WORKER_POLL_TIMEOUT_GRACE_S = 10.0
 REMOTE_WORKER_DISTRIBUTIONS: tuple[str, ...] = ()
 REMOTE_WORKER_REGISTRY_FILE_NAME = "remote-workers.json"
 REMOTE_WORKER_REGISTRY_BACKUP_FILE_NAME = "remote-workers.json.bak"
+REMOTE_WORKER_REGISTRY_GENERATION_FILE_NAME = "remote-workers.generation"
 REMOTE_WORKER_IDENTITY_FILE_NAME = "identity.json"
 MAX_REMOTE_INVITES = 1_024
 MAX_REMOTE_MACHINE_NAME_LENGTH = 128
@@ -253,7 +254,7 @@ class RemoteManager:
         return get_settings().state_dir / REMOTE_WORKER_REGISTRY_BACKUP_FILE_NAME
 
     @staticmethod
-    def _read_registry(raw: bytes | Path, source: str | None = None) -> list[dict[str, Any]]:
+    def _read_registry(raw: bytes | Path, source: str | None = None) -> dict[str, Any]:
         if isinstance(raw, Path):
             source = source or str(raw)
             raw = raw.read_bytes()
@@ -261,26 +262,52 @@ class RemoteManager:
         data = json.loads(raw.decode("utf-8"))
         if not isinstance(data, dict) or data.get("version") != 1:
             raise ValueError(f"unsupported or invalid remote worker registry: {source}")
-        rows = data.get("workers")
-        if not isinstance(rows, list):
+        workers = data.get("workers")
+        if not isinstance(workers, list):
             raise ValueError(f"remote worker registry workers field is invalid: {source}")
-        return [item for item in rows if isinstance(item, dict)]
+        invites = data.get("invites", [])
+        if not isinstance(invites, list):
+            raise ValueError(f"remote worker registry invites field is invalid: {source}")
+        if any(not isinstance(item, dict) for item in invites):
+            raise ValueError(f"remote worker registry invite entry is invalid: {source}")
+        invite_rows = invites
+        for item in invite_rows:
+            try:
+                float(item.get("expires_at") or 0)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"remote worker registry invite expires_at is invalid: {source}"
+                ) from exc
+        generation = data.get("generation")
+        if generation is not None and (not isinstance(generation, str) or not generation.strip()):
+            raise ValueError(f"remote worker registry generation is invalid: {source}")
+        return {
+            "generation": generation,
+            "workers": [item for item in workers if isinstance(item, dict)],
+            "invites": invite_rows,
+        }
 
-    def _load_registry_unlocked(self) -> None:
-        if self._registry_loaded:
+    def _load_registry_unlocked(self, *, force: bool = False) -> None:
+        if self._registry_loaded and not force:
             return
         store = get_state_store()
         raw = store.read_bytes(REMOTE_WORKER_REGISTRY_FILE_NAME)
         backup_raw = store.read_bytes(REMOTE_WORKER_REGISTRY_BACKUP_FILE_NAME)
+        generation_raw = store.read_bytes(REMOTE_WORKER_REGISTRY_GENERATION_FILE_NAME)
+        recovery_generation = None
+        if generation_raw is not None:
+            recovery_generation = (
+                generation_raw.decode("ascii", errors="replace").strip() or "<invalid>"
+            )
         if raw is None and backup_raw is None:
             self._registry_loaded = True
             return
-        rows: list[dict[str, Any]] | None = None
+        registry: dict[str, list[dict[str, Any]]] | None = None
         main_error: Exception | None = None
         recovered_from_backup = False
         try:
             if raw is not None:
-                rows = self._read_registry(raw, REMOTE_WORKER_REGISTRY_FILE_NAME)
+                registry = self._read_registry(raw, REMOTE_WORKER_REGISTRY_FILE_NAME)
         except (OSError, ValueError, json.JSONDecodeError) as exc:
             main_error = exc
             audit(
@@ -288,9 +315,34 @@ class RemoteManager:
                 path=REMOTE_WORKER_REGISTRY_FILE_NAME,
                 error=repr(exc),
             )
-        if rows is None and backup_raw is not None:
+        if registry is not None:
+            primary_generation = registry.get("generation")
+            if primary_generation is not None and primary_generation != recovery_generation:
+                try:
+                    store.write_bytes(
+                        REMOTE_WORKER_REGISTRY_GENERATION_FILE_NAME,
+                        primary_generation.encode("ascii"),
+                    )
+                except Exception as exc:
+                    with contextlib.suppress(Exception):
+                        audit(
+                            "remote_worker_registry_generation_repair_failed",
+                            path=REMOTE_WORKER_REGISTRY_GENERATION_FILE_NAME,
+                            error=repr(exc),
+                        )
+                else:
+                    recovery_generation = primary_generation
+        if registry is None and backup_raw is not None:
             try:
-                rows = self._read_registry(backup_raw, REMOTE_WORKER_REGISTRY_BACKUP_FILE_NAME)
+                backup_registry = self._read_registry(
+                    backup_raw, REMOTE_WORKER_REGISTRY_BACKUP_FILE_NAME
+                )
+                if (
+                    recovery_generation is not None
+                    and backup_registry.get("generation") != recovery_generation
+                ):
+                    raise ValueError("remote worker registry backup is stale")
+                registry = backup_registry
             except (OSError, ValueError, json.JSONDecodeError) as exc:
                 audit(
                     "remote_worker_registry_backup_unreadable",
@@ -304,36 +356,69 @@ class RemoteManager:
                     path=REMOTE_WORKER_REGISTRY_FILE_NAME,
                     backup_path=REMOTE_WORKER_REGISTRY_BACKUP_FILE_NAME,
                 )
-        if rows is None:
+        if registry is None:
             raise RuntimeError(
                 "Remote worker registry is unreadable and no valid backup is available; "
                 "refusing to reset it"
             ) from main_error
-        for item in rows:
+        existing_workers = {worker.token: worker for worker in self.workers.values()}
+        workers: dict[str, RemoteWorker] = {}
+        tokens: dict[str, str] = {}
+        for item in registry["workers"]:
             if not isinstance(item, dict):
                 continue
             name = str(item.get("name") or "").strip()
             access = str(item.get("access") or item.get("to" + "ken") or "").strip()
-            if not name or not access or name in self.workers or access in self.tokens:
+            if not name or not access or name in workers or access in tokens:
                 continue
-            self.workers[name] = RemoteWorker(
-                name=name,
-                token=access,
-                workdir=str(item.get("workdir") or ""),
-                created_at=float(item.get("created_at") or _utc()),
-                last_seen=0.0,
-                status="offline",
-                capabilities=list(item.get("capabilities") or []),
-                info=dict(item.get("info") or {}),
+            worker = existing_workers.get(access)
+            if worker is None:
+                worker = RemoteWorker(
+                    name=name,
+                    token=access,
+                    last_seen=0.0,
+                    status="offline",
+                )
+            worker.name = name
+            worker.workdir = str(item.get("workdir") or "")
+            worker.created_at = float(item.get("created_at") or _utc())
+            worker.capabilities = list(item.get("capabilities") or [])
+            worker.info = dict(item.get("info") or {})
+            workers[name] = worker
+            tokens[access] = name
+        now = _utc()
+        invites: dict[str, RemoteInvite] = {}
+        for item in registry["invites"]:
+            code = str(item.get("code") or "").strip()
+            expires_at = float(item.get("expires_at") or 0)
+            if not code or expires_at < now or bool(item.get("used")):
+                continue
+            invites[code] = RemoteInvite(
+                code=code,
+                name=str(item["name"]) if item.get("name") is not None else None,
+                workdir=str(item["workdir"]) if item.get("workdir") is not None else None,
+                expires_at=expires_at,
             )
-            self.tokens[access] = name
+        self.workers = workers
+        self.tokens = tokens
+        self.invites = invites
         self._registry_loaded = True
         if recovered_from_backup:
             self._save_registry_unlocked()
 
+    @contextlib.contextmanager
+    def _registry_transaction_unlocked(self):
+        store = get_state_store()
+        with store.lock(REMOTE_WORKER_REGISTRY_FILE_NAME):
+            self._load_registry_unlocked(force=True)
+            yield
+
     def _save_registry_unlocked(self) -> None:
+        now = _utc()
+        generation = secrets.token_hex(16)
         data = {
             "version": 1,
+            "generation": generation,
             "workers": [
                 {
                     "name": worker.name,
@@ -345,11 +430,48 @@ class RemoteManager:
                 }
                 for worker in sorted(self.workers.values(), key=lambda item: item.name)
             ],
+            "invites": [
+                {
+                    "code": invite.code,
+                    "name": invite.name,
+                    "workdir": invite.workdir,
+                    "expires_at": invite.expires_at,
+                }
+                for invite in sorted(self.invites.values(), key=lambda item: item.code)
+                if not invite.used and invite.expires_at >= now
+            ],
         }
         payload = json.dumps(data, indent=2, sort_keys=True).encode("utf-8")
         store = get_state_store()
-        store.write_bytes(REMOTE_WORKER_REGISTRY_FILE_NAME, payload)
-        store.write_bytes(REMOTE_WORKER_REGISTRY_BACKUP_FILE_NAME, payload)
+        previous_generation = store.read_bytes(REMOTE_WORKER_REGISTRY_GENERATION_FILE_NAME)
+        store.write_bytes(REMOTE_WORKER_REGISTRY_GENERATION_FILE_NAME, generation.encode("ascii"))
+        try:
+            store.write_bytes(REMOTE_WORKER_REGISTRY_FILE_NAME, payload)
+        except Exception:
+            try:
+                if previous_generation is None:
+                    store.delete(REMOTE_WORKER_REGISTRY_GENERATION_FILE_NAME)
+                else:
+                    store.write_bytes(
+                        REMOTE_WORKER_REGISTRY_GENERATION_FILE_NAME, previous_generation
+                    )
+            except Exception as rollback_exc:
+                with contextlib.suppress(Exception):
+                    audit(
+                        "remote_worker_registry_generation_rollback_failed",
+                        path=REMOTE_WORKER_REGISTRY_GENERATION_FILE_NAME,
+                        error=repr(rollback_exc),
+                    )
+            raise
+        try:
+            store.write_bytes(REMOTE_WORKER_REGISTRY_BACKUP_FILE_NAME, payload)
+        except Exception as exc:
+            with contextlib.suppress(Exception):
+                audit(
+                    "remote_worker_registry_backup_write_failed",
+                    path=REMOTE_WORKER_REGISTRY_BACKUP_FILE_NAME,
+                    error=repr(exc),
+                )
 
     def _join_url(self, base_url: str | None = None) -> str:
         settings = get_settings()
@@ -375,8 +497,7 @@ class RemoteManager:
             expires_at=expires_at,
         )
         async with self._lock:
-            with self._state_lock:
-                self._load_registry_unlocked()
+            with self._state_lock, self._registry_transaction_unlocked():
                 now = _utc()
                 self.invites = {
                     invite_code: item
@@ -386,7 +507,11 @@ class RemoteManager:
                 if len(self.invites) >= MAX_REMOTE_INVITES:
                     raise RuntimeError("Too many pending remote invites")
                 self.invites[code] = invite
-                self._save_registry_unlocked()
+                try:
+                    self._save_registry_unlocked()
+                except Exception:
+                    self.invites.pop(code, None)
+                    raise
         join_url = self._join_url(base_url)
         command = f"curl -fsSL {shlex.quote(join_url)} | bash -s -- --invite {shlex.quote(code)}"
         if normalized_name:
@@ -421,8 +546,7 @@ class RemoteManager:
         code = str(payload.get("invite") or "")
         requested_name = str(payload.get("name") or "").strip() or None
         async with self._lock:
-            with self._state_lock:
-                self._load_registry_unlocked()
+            with self._state_lock, self._registry_transaction_unlocked():
                 invite = self.invites.get(code)
                 if not invite:
                     raise ValueError("invalid invite code")
@@ -449,8 +573,16 @@ class RemoteManager:
                 self.tokens[token] = name
                 invite.used = True
                 self.invites.pop(code, None)
-                self._save_registry_unlocked()
-        audit("remote_worker_registered", machine=name)
+                try:
+                    self._save_registry_unlocked()
+                except Exception:
+                    self.workers.pop(name, None)
+                    self.tokens.pop(token, None)
+                    invite.used = False
+                    self.invites[code] = invite
+                    raise
+        with contextlib.suppress(Exception):
+            audit("remote_worker_registered", machine=name)
         return {
             "token": token,
             "name": name,
@@ -461,8 +593,7 @@ class RemoteManager:
 
     async def resume_worker(self, access: str, payload: dict[str, Any]) -> dict[str, Any]:
         async with self._lock:
-            with self._state_lock:
-                self._load_registry_unlocked()
+            with self._state_lock, self._registry_transaction_unlocked():
                 name = self.tokens.get(access)
                 if not name:
                     raise PermissionError("invalid worker identity")
@@ -478,7 +609,8 @@ class RemoteManager:
                 worker.capabilities = list(payload.get("capabilities") or worker.capabilities)
                 worker.info = dict(payload.get("info") or worker.info)
                 self._save_registry_unlocked()
-        audit("remote_worker_resumed", machine=name)
+        with contextlib.suppress(Exception):
+            audit("remote_worker_resumed", machine=name)
         return {
             "token": access,
             "name": name,
@@ -765,8 +897,7 @@ class RemoteManager:
         }
 
     def revoke(self, machine: str) -> dict[str, Any]:
-        with self._state_lock:
-            self._load_registry_unlocked()
+        with self._state_lock, self._registry_transaction_unlocked():
             worker = self.workers.pop(machine, None)
             if not worker:
                 raise ValueError(f"unknown remote machine: {machine}")
@@ -782,8 +913,7 @@ class RemoteManager:
         return {"machine": machine, "revoked": True}
 
     def rename(self, machine: str, new_name: str) -> dict[str, Any]:
-        with self._state_lock:
-            self._load_registry_unlocked()
+        with self._state_lock, self._registry_transaction_unlocked():
             new_name = _validate_machine_name(new_name)
             if new_name in self.workers:
                 raise ValueError(f"machine name already exists: {new_name}")
