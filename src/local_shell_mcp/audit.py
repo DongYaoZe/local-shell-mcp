@@ -639,7 +639,7 @@ def _load_file_archive_index(log_path: Path) -> list[dict[str, Any]]:
 
 
 def _write_file_archive_index(log_path: Path, entries: list[dict[str, Any]]) -> None:
-    directory = _validated_archive_directory(log_path, create=True)
+    _validated_archive_directory(log_path, create=True)
     path = _archive_index_path(log_path)
     temporary = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
     try:
