@@ -47,7 +47,9 @@ Audit logs are most useful for:
 
 ## Retention
 
-The log is bounded by `LOCAL_SHELL_MCP_MAX_AUDIT_LOG_BYTES`. Rotate or export it externally if you need long retention.
+The live `audit.jsonl` is bounded by `LOCAL_SHELL_MCP_MAX_AUDIT_LOG_BYTES` (20 MB by default). When retention runs, older records are moved into self-contained Zstandard archives under `audit-archive/*.jsonl.zst` instead of being discarded. Large external audit payloads are embedded into the archive before their hot-store payload files are pruned.
+
+Compressed archives are bounded separately by `LOCAL_SHELL_MCP_MAX_AUDIT_ARCHIVE_BYTES` (512 MB by default). Once that compressed budget is exceeded, the oldest archives are removed first. Set the archive budget to `0` to disable long-term compressed retention. The Web UI, Activity/Audit queries, and `audit_tail` read only the live hot log. Compressed archives are cold storage for retention or export and are not automatically decompressed by normal UI queries.
 
 ## Limitations
 

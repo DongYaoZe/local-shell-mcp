@@ -1,4 +1,4 @@
-<!-- i18n-source-sha256: 4aec137923c38de0ed4a1b760b5dbd6ce99090d508ce3fe838d35ad44b4ba4f1 -->
+<!-- i18n-source-sha256: 25bb55459e83ee02b923876bad8d288c7a2055c4474f2098d58ce1e4a5e72605 -->
 # Denetim günlüğü
 
 `local-shell-mcp`, bağlı bir client’ın ne yaptığını yeniden oluşturmayı kolaylaştırmak için yapılandırılmış denetim kayıtları yazar.
@@ -48,7 +48,9 @@ Denetim günlükleri özellikle şunlar için yararlıdır:
 
 ## Saklama
 
-Günlük `LOCAL_SHELL_MCP_MAX_AUDIT_LOG_BYTES` ile sınırlandırılır. Uzun süre saklama gerekiyorsa rotate edin veya dışarı export edin.
+Etkin `audit.jsonl`, varsayılan olarak `LOCAL_SHELL_MCP_MAX_AUDIT_LOG_BYTES` ile 20 MB ile sınırlandırılır. Retention bakımı sırasında eski kayıtlar silinmek yerine kendi kendine yeterli Zstandard arşivleri olan `audit-archive/*.jsonl.zst` dosyalarına taşınır; dışarı alınmış büyük audit payloads da hot store’dan temizlenmeden önce arşive eklenir.
+
+Sıkıştırılmış arşivler için ayrı `LOCAL_SHELL_MCP_MAX_AUDIT_ARCHIVE_BYTES` sınırı vardır ve varsayılanı 512 MB’dir. Sınır aşılırsa en eski arşivler önce silinir. `0` değeri uzun süreli sıkıştırılmış saklamayı kapatır. Web UI, Activity/Audit sorguları ve `audit_tail` yalnızca etkin hot log’u okur. Sıkıştırılmış arşivler saklama veya dışa aktarma için cold storage olarak kullanılır ve normal UI sorgularında otomatik olarak açılmaz.
 
 ## Sınırlamalar
 

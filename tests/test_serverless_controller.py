@@ -4,6 +4,7 @@ import asyncio
 import base64
 import hashlib
 import http.client
+import io
 import json
 import sys
 import time
@@ -13,6 +14,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
+import zstandard as zstd
 from starlette.applications import Starlette
 from starlette.routing import Route
 from starlette.testclient import TestClient
@@ -123,10 +125,13 @@ def test_file_and_memory_state_store_round_trip(tmp_path):
     assert file_store.list_keys() == []
     file_store.write_bytes("nested/value.bin", b"value")
     file_store.write_bytes("other.bin", b"other")
-    assert file_store.read_bytes("nested/value.bin") == b"value"
+    assert file_store.append_bytes("nested/value.bin", b"+") == 6
+    assert file_store.size_bytes("nested/value.bin") == 6
+    assert file_store.size_bytes("missing") is None
+    assert file_store.read_bytes("nested/value.bin") == b"value+"
     assert file_store.list_keys("nested/") == ["nested/value.bin"]
     with file_store.lock("nested/value.bin"):
-        assert file_store.read_bytes("nested/value.bin") == b"value"
+        assert file_store.read_bytes("nested/value.bin") == b"value+"
     file_store.delete("nested/value.bin")
     assert file_store.read_bytes("nested/value.bin") is None
     with pytest.raises(ValueError, match="escapes state directory"):
@@ -139,11 +144,17 @@ def test_file_and_memory_state_store_round_trip(tmp_path):
     first.write_bytes("key", b"one")
     first.write_bytes("nested/key", b"two")
     second.write_bytes("key", b"other")
-    assert first.read_bytes("key") == b"one"
+    memory_value = state_store_module._MEMORY_VALUES["first:key"]
+    assert isinstance(memory_value, bytearray)
+    assert first.append_bytes("key", b"+") == 4
+    assert state_store_module._MEMORY_VALUES["first:key"] is memory_value
+    assert first.size_bytes("key") == 4
+    assert first.size_bytes("missing") is None
+    assert first.read_bytes("key") == b"one+"
     assert second.read_bytes("key") == b"other"
     assert first.list_keys("nested/") == ["nested/key"]
     with first.lock("key"):
-        assert first.read_bytes("key") == b"one"
+        assert first.read_bytes("key") == b"one+"
     first.delete("key")
     assert first.read_bytes("key") is None
     assert state_store_module._MEMORY_LOCKS == {}
@@ -194,6 +205,16 @@ def test_redis_state_store_round_trip_and_lock(monkeypatch):
         def set(self, key, value):
             self.values[key] = bytes(value)
 
+        def append(self, key, value):
+            self.values[key] = self.values.get(key, b"") + bytes(value)
+            return len(self.values[key])
+
+        def strlen(self, key):
+            return len(self.values.get(key, b""))
+
+        def exists(self, key):
+            return int(key in self.values)
+
         def delete(self, key):
             self.values.pop(key, None)
 
@@ -220,7 +241,10 @@ def test_redis_state_store_round_trip_and_lock(monkeypatch):
     assert store.read_bytes("missing") is None
     store.write_bytes("jobs/one", b"1")
     store.write_bytes("jobs/two", b"2")
-    assert store.read_bytes("jobs/one") == b"1"
+    assert store.append_bytes("jobs/one", b"+") == 2
+    assert store.size_bytes("jobs/one") == 2
+    assert store.size_bytes("missing") is None
+    assert store.read_bytes("jobs/one") == b"1+"
     assert store.list_keys("jobs/") == ["jobs/one", "jobs/two"]
     with store.lock("jobs"):
         assert store.read_bytes("jobs/two") == b"2"
@@ -721,11 +745,187 @@ def test_state_backed_audit_tail_and_retention_include_external_payloads(tmp_pat
 
     store = get_state_store()
     audit_bytes = len(store.read_bytes("audit.jsonl") or b"")
-    payload_bytes = sum(len(store.read_bytes(key) or b"") for key in store.list_keys("audit-payloads/"))
+    payload_bytes = sum(
+        len(store.read_bytes(key) or b"") for key in store.list_keys("audit-payloads/")
+    )
     assert audit_bytes + payload_bytes <= get_settings().max_audit_log_bytes
 
     tail = tools._read_audit_tail_entries(10)
     assert any(entry.get("event") == "serverless_large_audit" for entry in tail["entries"])
+    assert not get_settings().audit_log_path.exists()
+
+
+def test_state_backed_audit_enforces_combined_log_and_payload_budget(tmp_path, monkeypatch):
+    max_bytes = 8_000
+    _configure_stateless(
+        tmp_path,
+        monkeypatch,
+        max_audit_log_bytes=str(max_bytes),
+        max_audit_archive_bytes="50000",
+    )
+    payload = "".join(
+        hashlib.sha256(f"payload-{index}".encode()).hexdigest() for index in range(120)
+    )
+
+    audit_module.audit("state_budget_payload", payload=payload)
+    store = get_state_store()
+    for index in range(80):
+        audit_module.audit("state_budget_inline", index=index, detail="x" * 80)
+        audit_bytes = store.size_bytes("audit.jsonl") or 0
+        payload_bytes = sum(
+            store.size_bytes(key) or 0
+            for key in store.list_keys("audit-payloads/")
+            if key.endswith(".json.gz")
+        )
+        assert audit_bytes + payload_bytes <= max_bytes
+
+
+def test_state_backed_audit_uses_persisted_payload_byte_counter(tmp_path, monkeypatch):
+    _configure_stateless(
+        tmp_path,
+        monkeypatch,
+        max_audit_log_bytes="100000",
+        max_audit_archive_bytes="50000",
+    )
+    audit_module.audit("payload_counter_seed", payload="x" * 30000)
+    store = get_state_store()
+    counter = store.read_bytes(audit_module._AUDIT_PAYLOAD_BYTES_KEY)
+    assert counter is not None
+    assert int(counter) > 0
+
+    original_list_keys = store.list_keys
+
+    def reject_payload_scan(prefix: str = "") -> list[str]:
+        if prefix == f"{audit_module._AUDIT_PAYLOAD_DIRECTORY}/":
+            raise AssertionError("ordinary audit writes must not scan retained payloads")
+        return original_list_keys(prefix)
+
+    monkeypatch.setattr(store, "list_keys", reject_payload_scan)
+    audit_module.audit("payload_counter_inline", detail="small")
+
+
+def test_state_archive_is_registered_before_hot_log_trim(tmp_path, monkeypatch):
+    _configure_stateless(
+        tmp_path,
+        monkeypatch,
+        max_audit_log_bytes="1000",
+        max_audit_archive_bytes="50000",
+    )
+    store = get_state_store()
+    original = b"".join(
+        (
+            json.dumps({"id": f"row-{index}", "ts": index + 1, "event": "old", "detail": "x" * 120})
+            + "\n"
+        ).encode()
+        for index in range(20)
+    )
+    store.write_bytes("audit.jsonl", original)
+    original_write = store.write_bytes
+
+    def fail_hot_trim(key: str, value: bytes) -> None:
+        if key == "audit.jsonl":
+            raise OSError("simulated hot-log write failure")
+        original_write(key, value)
+
+    monkeypatch.setattr(store, "write_bytes", fail_hot_trim)
+    with pytest.raises(OSError, match="hot-log write failure"):
+        audit_module._enforce_state_audit_storage_limit(1000, 50000)
+
+    monkeypatch.setattr(store, "write_bytes", original_write)
+    archives = audit_module._load_state_archive_index()
+    assert len(archives) == 1
+    assert store.read_bytes(archives[0]["key"]) is not None
+    assert store.read_bytes("audit.jsonl") == original
+
+
+def test_state_archive_index_recovers_orphaned_blob(tmp_path, monkeypatch):
+    _configure_stateless(
+        tmp_path,
+        monkeypatch,
+        max_audit_log_bytes="1000",
+        max_audit_archive_bytes="50000",
+    )
+    store = get_state_store()
+    key = audit_module._archive_key(1, 2)
+    store.write_bytes(key, b"orphaned-archive")
+    store.write_bytes(audit_module._AUDIT_ARCHIVE_INDEX_KEY, b"{")
+
+    recovered = audit_module._load_state_archive_index()
+
+    assert [entry["key"] for entry in recovered] == [key]
+    assert recovered[0]["compressed_bytes"] == len(b"orphaned-archive")
+    assert audit_module._prune_state_archives(recovered, 0) == []
+    assert store.read_bytes(key) is None
+
+
+def test_state_archive_index_deduplicates_scan_results(tmp_path, monkeypatch):
+    _configure_stateless(
+        tmp_path,
+        monkeypatch,
+        max_audit_log_bytes="1000",
+        max_audit_archive_bytes="50000",
+    )
+    store = get_state_store()
+    key = audit_module._archive_key(1, 2)
+    payload = b"archive-bytes"
+    store.write_bytes(key, payload)
+    original_list_keys = store.list_keys
+
+    def duplicate_archive_keys(prefix: str = "") -> list[str]:
+        keys = original_list_keys(prefix)
+        if prefix == f"{audit_module._AUDIT_ARCHIVE_DIRECTORY}/" and key in keys:
+            return [*keys, key]
+        return keys
+
+    monkeypatch.setattr(store, "list_keys", duplicate_archive_keys)
+    recovered = audit_module._load_state_archive_index()
+
+    assert [entry["key"] for entry in recovered] == [key]
+    assert audit_module._archive_bytes(recovered) == len(payload)
+    assert audit_module._prune_state_archives(recovered, len(payload)) == recovered
+    assert store.read_bytes(key) == payload
+
+
+def test_state_backed_audit_archive_preserves_pruned_payloads(tmp_path, monkeypatch):
+    _configure_stateless(
+        tmp_path,
+        monkeypatch,
+        max_audit_log_bytes="3500",
+        max_audit_archive_bytes="50000",
+        max_audit_tail_bytes="10000",
+    )
+    archived_payload = "".join(
+        hashlib.sha256(f"archive-{index}".encode()).hexdigest() for index in range(500)
+    )
+
+    audit_module.audit("serverless_archived", payload=archived_payload)
+    audit_module.audit("serverless_live", detail="kept" * 300)
+
+    store = get_state_store()
+    archive_keys = [key for key in store.list_keys("audit-archive/") if key.endswith(".jsonl.zst")]
+    assert archive_keys
+    assert len(store.read_bytes("audit.jsonl") or b"") <= get_settings().max_audit_log_bytes
+
+    with zstd.ZstdDecompressor().stream_reader(
+        io.BytesIO(store.read_bytes(archive_keys[0]))
+    ) as reader:
+        archived_lines = reader.read().splitlines()
+    envelopes = [json.loads(line) for line in archived_lines]
+    archived = next(
+        envelope
+        for envelope in envelopes
+        if envelope.get("record", {}).get("event") == "serverless_archived"
+    )
+    assert archived["payloads"]["payload"] == archived_payload
+
+    # Cold archives never extend normal UI/query results.
+    store.write_bytes(
+        "audit.jsonl",
+        (json.dumps({"id": "hot-only", "ts": 999, "event": "serverless_live"}) + "\n").encode(),
+    )
+    assert audit_module.query_audit(search="serverless_archived")["entries"] == []
+    with pytest.raises(ValueError, match="Unknown audit entry"):
+        audit_module.get_audit_entry(str(archived["record"]["id"]))
     assert not get_settings().audit_log_path.exists()
 
 
@@ -748,7 +948,6 @@ async def test_remote_only_job_controls_reject_local_shell_jobs(tmp_path, monkey
     ):
         with pytest.raises(ValueError, match="local shell jobs are unavailable"):
             await operation()
-
 
 
 @pytest.mark.asyncio
@@ -986,7 +1185,9 @@ async def test_memory_relay_aborts_destination_on_invalid_chunk(tmp_path, monkey
 
 
 @pytest.mark.asyncio
-async def test_direct_transfer_failure_closes_receiver_and_checks_destination(tmp_path, monkeypatch):
+async def test_direct_transfer_failure_closes_receiver_and_checks_destination(
+    tmp_path, monkeypatch
+):
     _configure_workspace(
         tmp_path,
         monkeypatch,
@@ -1155,7 +1356,11 @@ async def test_object_store_transfer_uses_presigned_urls_and_deletes_object(tmp_
     assert fake_s3.presigned == [("put_object", "PUT"), ("get_object", "GET")]
     assert len(fake_s3.deleted) == 1
     assert fake_s3.deleted[0][0] == "transfer-bucket"
-    assert [tool for _, tool, _ in calls] == ["transfer_stat", "transfer_put_url", "transfer_get_url"]
+    assert [tool for _, tool, _ in calls] == [
+        "transfer_stat",
+        "transfer_put_url",
+        "transfer_get_url",
+    ]
     assert events == [
         "presign:put_object",
         "upload",

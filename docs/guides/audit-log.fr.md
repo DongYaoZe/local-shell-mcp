@@ -1,4 +1,4 @@
-<!-- i18n-source-sha256: 4aec137923c38de0ed4a1b760b5dbd6ce99090d508ce3fe838d35ad44b4ba4f1 -->
+<!-- i18n-source-sha256: 25bb55459e83ee02b923876bad8d288c7a2055c4474f2098d58ce1e4a5e72605 -->
 # Journal d’audit
 
 `local-shell-mcp` écrit des entrées d’audit structurées afin d’aider à reconstruire les actions effectuées par un client connecté.
@@ -48,7 +48,9 @@ Les journaux d’audit sont particulièrement utiles pour :
 
 ## Rétention
 
-La taille du journal est bornée par `LOCAL_SHELL_MCP_MAX_AUDIT_LOG_BYTES`. Effectuez une rotation ou exportez-le vers un stockage externe si vous avez besoin d’une rétention longue.
+Le fichier `audit.jsonl` actif est limité par défaut à 20 MB via `LOCAL_SHELL_MCP_MAX_AUDIT_LOG_BYTES`. Lors de la maintenance de rétention, les anciens enregistrements sont déplacés vers des archives Zstandard autonomes `audit-archive/*.jsonl.zst` au lieu d’être supprimés ; les gros audit payloads externalisés sont aussi intégrés à l’archive avant leur suppression du stockage actif.
+
+Les archives compressées ont une limite distincte définie par `LOCAL_SHELL_MCP_MAX_AUDIT_ARCHIVE_BYTES`, 512 MB par défaut. Au-delà, les archives les plus anciennes sont supprimées en premier. La valeur `0` désactive la rétention compressée à long terme. La Web UI, les requêtes Activity/Audit et `audit_tail` lisent uniquement le hot log actif. Les archives compressées servent de stockage froid pour la rétention ou l’export et ne sont pas décompressées automatiquement par les requêtes UI normales.
 
 ## Limites
 

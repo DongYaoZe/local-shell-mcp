@@ -1,4 +1,4 @@
-<!-- i18n-source-sha256: 4aec137923c38de0ed4a1b760b5dbd6ce99090d508ce3fe838d35ad44b4ba4f1 -->
+<!-- i18n-source-sha256: 25bb55459e83ee02b923876bad8d288c7a2055c4474f2098d58ce1e4a5e72605 -->
 # Audit-Log
 
 `local-shell-mcp` schreibt strukturierte Audit-Einträge, um nachvollziehen zu können, was ein verbundener client getan hat.
@@ -48,7 +48,9 @@ Audit-Logs sind besonders nützlich zum:
 
 ## Aufbewahrung
 
-Das Log ist durch `LOCAL_SHELL_MCP_MAX_AUDIT_LOG_BYTES` begrenzt. Rotieren oder exportieren Sie es extern, wenn Sie eine längere Aufbewahrung benötigen.
+Die aktive `audit.jsonl` ist standardmäßig durch `LOCAL_SHELL_MCP_MAX_AUDIT_LOG_BYTES` auf 20 MB begrenzt. Bei der Retention-Wartung werden ältere Einträge nicht verworfen, sondern in eigenständige Zstandard-Archive unter `audit-archive/*.jsonl.zst` verschoben. Ausgelagerte große audit payloads werden vor dem Bereinigen des Hot-Speichers ebenfalls in das Archiv aufgenommen.
+
+Für komprimierte Archive gilt mit `LOCAL_SHELL_MCP_MAX_AUDIT_ARCHIVE_BYTES` ein separates Limit von standardmäßig 512 MB. Bei Überschreitung werden die ältesten Archive zuerst gelöscht. Mit `0` lässt sich die langfristige komprimierte Aufbewahrung deaktivieren. Web UI, Activity/Audit-Abfragen und `audit_tail` lesen ausschließlich das aktive Hot-Log. Komprimierte Archive dienen als Cold Storage für Aufbewahrung oder Export und werden bei normalen UI-Abfragen nicht automatisch dekomprimiert.
 
 ## Einschränkungen
 

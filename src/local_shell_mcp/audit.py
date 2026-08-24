@@ -3,8 +3,11 @@ from __future__ import annotations
 import contextlib
 import gzip
 import hashlib
+import io
 import json
+import math
 import os
+import re
 import threading
 import time
 import uuid
@@ -14,6 +17,8 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
+
+import zstandard as zstd
 
 from .settings import get_settings
 from .state_store import get_state_store, state_lock
@@ -32,8 +37,18 @@ _AUDIT_MAINTENANCE_INTERVAL_S = _AUDIT_PAYLOAD_PRUNE_GRACE_S
 _AUDIT_LAST_MAINTENANCE: dict[str, float] = {}
 _AUDIT_PRESSURE_BACKOFF_UNTIL: dict[str, float] = {}
 _AUDIT_PAYLOAD_DIRECTORY = "audit-payloads"
+_AUDIT_PAYLOAD_BYTES_KEY = f"{_AUDIT_PAYLOAD_DIRECTORY}/total-bytes"
 _AUDIT_PAYLOAD_MARKER = "$local_shell_mcp_audit_payload"
 _AUDIT_PAYLOAD_VERSION = 1
+_AUDIT_ARCHIVE_DIRECTORY = "audit-archive"
+_AUDIT_ARCHIVE_INDEX_KEY = f"{_AUDIT_ARCHIVE_DIRECTORY}/index.json"
+_AUDIT_ARCHIVE_VERSION = 1
+_AUDIT_ARCHIVE_ZSTD_LEVEL = 12
+_AUDIT_ARCHIVE_MAX_PAYLOAD_MATERIALIZATION_BYTES = 16 * 1024 * 1024
+_AUDIT_ARCHIVE_KEY_RE = re.compile(r"^audit-archive/[0-9A-Za-z][0-9A-Za-z._-]*\.jsonl\.zst$")
+_AUDIT_GENERATED_ARCHIVE_KEY_RE = re.compile(
+    r"^audit-archive/(?P<start_ms>\d+)-(?P<end_ms>\d+)-\d+-[0-9a-f]{8}\.jsonl\.zst$"
+)
 _AUDIT_SOURCE_INDEXES = "_audit_source_indexes"
 
 _AUDIT_FAILURE_STATUSES = frozenset(
@@ -55,6 +70,7 @@ _NESTED_LIFECYCLE_EVENTS = frozenset(
         "job_retry",
     }
 )
+
 
 def _format_audit_text(value: str) -> str:
     if len(value) > _AUDIT_PREVIEW_STRING_CHARS:
@@ -111,6 +127,41 @@ def _write_private_bytes(path: Path, data: bytes) -> None:
         handle.flush()
 
 
+def _parse_payload_byte_count(raw: bytes | None) -> int | None:
+    if raw is None:
+        return None
+    try:
+        value = int(raw.decode("ascii"))
+    except (UnicodeDecodeError, ValueError):
+        return None
+    return value if value >= 0 else None
+
+
+def _scan_state_payload_bytes() -> int:
+    store = get_state_store()
+    prefix = f"{_AUDIT_PAYLOAD_DIRECTORY}/"
+    return sum(
+        store.size_bytes(key) or 0 for key in store.list_keys(prefix) if key.endswith(".json.gz")
+    )
+
+
+def _state_payload_bytes() -> int:
+    store = get_state_store()
+    current = _parse_payload_byte_count(store.read_bytes(_AUDIT_PAYLOAD_BYTES_KEY))
+    if current is not None:
+        return current
+    with state_lock(_AUDIT_PAYLOAD_BYTES_KEY):
+        current = _parse_payload_byte_count(store.read_bytes(_AUDIT_PAYLOAD_BYTES_KEY))
+        if current is None:
+            current = _scan_state_payload_bytes()
+            store.write_bytes(_AUDIT_PAYLOAD_BYTES_KEY, str(current).encode("ascii"))
+        return current
+
+
+def _set_state_payload_bytes(value: int) -> None:
+    get_state_store().write_bytes(_AUDIT_PAYLOAD_BYTES_KEY, str(max(0, int(value))).encode("ascii"))
+
+
 def _write_payload(value: Any) -> dict[str, Any]:
     raw = json.dumps(
         value,
@@ -120,10 +171,26 @@ def _write_payload(value: Any) -> dict[str, Any]:
     ).encode("utf-8")
     digest = hashlib.sha256(raw).hexdigest()
     if get_settings().state_backend != "file":
-        get_state_store().write_bytes(
-            f"{_AUDIT_PAYLOAD_DIRECTORY}/{digest}.json.gz",
-            gzip.compress(raw, compresslevel=6, mtime=0),
-        )
+        store = get_state_store()
+        key = f"{_AUDIT_PAYLOAD_DIRECTORY}/{digest}.json.gz"
+        compressed = gzip.compress(raw, compresslevel=6, mtime=0)
+        with state_lock(_AUDIT_PAYLOAD_BYTES_KEY):
+            current = _parse_payload_byte_count(store.read_bytes(_AUDIT_PAYLOAD_BYTES_KEY))
+            counter_needs_write = current is None
+            if current is None:
+                current = _scan_state_payload_bytes()
+            existing_size = store.size_bytes(key)
+            if existing_size is None:
+                next_total = current + len(compressed)
+                store.write_bytes(_AUDIT_PAYLOAD_BYTES_KEY, str(next_total).encode("ascii"))
+                try:
+                    store.write_bytes(key, compressed)
+                except Exception:
+                    with contextlib.suppress(Exception):
+                        store.write_bytes(_AUDIT_PAYLOAD_BYTES_KEY, str(current).encode("ascii"))
+                    raise
+            elif counter_needs_write:
+                store.write_bytes(_AUDIT_PAYLOAD_BYTES_KEY, str(current).encode("ascii"))
         return {
             _AUDIT_PAYLOAD_MARKER: {
                 "version": _AUDIT_PAYLOAD_VERSION,
@@ -199,30 +266,64 @@ def _payload_digest(value: dict[str, Any]) -> str:
     return str(metadata["sha256"])
 
 
-def _resolve_payload_reference(value: Any, *, full: bool) -> Any:
+def _payload_declared_bytes(value: dict[str, Any]) -> int:
+    metadata = value[_AUDIT_PAYLOAD_MARKER]
+    assert isinstance(metadata, dict)
+    return int(metadata["bytes"])
+
+
+def _unavailable_payload(value: dict[str, Any], digest: str, detail: str) -> dict[str, Any]:
+    return {
+        "error": "Audit payload is unavailable",
+        "payload_id": digest,
+        "detail": detail,
+        "preview": value.get("preview"),
+    }
+
+
+def _resolve_payload_reference(value: Any, *, full: bool, max_bytes: int | None = None) -> Any:
     if not _is_payload_reference(value):
         return value
     if not full:
         return value.get("preview")
     digest = _payload_digest(value)
+    if max_bytes is not None:
+        max_bytes = max(0, int(max_bytes))
+        declared_bytes = _payload_declared_bytes(value)
+        if declared_bytes > max_bytes:
+            return _unavailable_payload(
+                value,
+                digest,
+                f"payload exceeds safe materialization limit ({declared_bytes} > {max_bytes} bytes)",
+            )
     try:
         if get_settings().state_backend == "file":
             encoded = _payload_path(digest).read_bytes()
         else:
-            encoded = get_state_store().read_bytes(
-                f"{_AUDIT_PAYLOAD_DIRECTORY}/{digest}.json.gz"
-            )
+            encoded = get_state_store().read_bytes(f"{_AUDIT_PAYLOAD_DIRECTORY}/{digest}.json.gz")
             if encoded is None:
                 raise FileNotFoundError(digest)
-        raw = gzip.decompress(encoded)
+        if max_bytes is None:
+            raw = gzip.decompress(encoded)
+        else:
+            with gzip.GzipFile(fileobj=io.BytesIO(encoded), mode="rb") as payload_stream:
+                raw = payload_stream.read(max_bytes + 1)
+            if len(raw) > max_bytes:
+                return _unavailable_payload(
+                    value,
+                    digest,
+                    f"payload exceeds safe materialization limit ({max_bytes} bytes)",
+                )
         return json.loads(raw)
-    except (OSError, EOFError, gzip.BadGzipFile, json.JSONDecodeError, zlib.error) as exc:
-        return {
-            "error": "Audit payload is unavailable",
-            "payload_id": digest,
-            "detail": str(exc),
-            "preview": value.get("preview"),
-        }
+    except (
+        OSError,
+        EOFError,
+        UnicodeDecodeError,
+        gzip.BadGzipFile,
+        json.JSONDecodeError,
+        zlib.error,
+    ) as exc:
+        return _unavailable_payload(value, digest, str(exc))
 
 
 def _resolve_record_payloads(record: dict[str, Any], *, full: bool) -> dict[str, Any]:
@@ -350,6 +451,10 @@ def _encode_audit_record(record: dict[str, Any]) -> bytes:
 
 def _bounded_preview_record(record: dict[str, Any], max_bytes: int) -> bytes:
     preview = _resolve_record_payloads(record, full=False)
+    payload_ids: set[str] = set()
+    _collect_payload_ids(record, payload_ids)
+    if payload_ids:
+        preview["audit_payloads_omitted"] = "full payload omitted from live audit log"
     encoded = _encode_audit_record(preview)
     if len(encoded) <= max_bytes:
         return encoded
@@ -463,7 +568,448 @@ def _select_retention_lines(
     return selected
 
 
-def _enforce_audit_storage_limit(log_path: Path, max_bytes: int) -> bool:
+def _archive_directory_path(log_path: Path) -> Path:
+    return log_path.parent / _AUDIT_ARCHIVE_DIRECTORY
+
+
+def _archive_index_path(log_path: Path) -> Path:
+    return _archive_directory_path(log_path) / "index.json"
+
+
+def _archive_index_payload(entries: list[dict[str, Any]]) -> bytes:
+    return json.dumps(
+        {"version": _AUDIT_ARCHIVE_VERSION, "archives": entries},
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+
+def _validated_archive_key(value: Any) -> str | None:
+    if not isinstance(value, str) or "\\" in value:
+        return None
+    return value if _AUDIT_ARCHIVE_KEY_RE.fullmatch(value) else None
+
+
+def _validated_archive_entry(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    key = _validated_archive_key(value.get("key"))
+    start_ts = value.get("start_ts")
+    end_ts = value.get("end_ts")
+    if (
+        key is None
+        or isinstance(start_ts, bool)
+        or not isinstance(start_ts, (int, float))
+        or not math.isfinite(float(start_ts))
+        or float(start_ts) < 0
+        or isinstance(end_ts, bool)
+        or not isinstance(end_ts, (int, float))
+        or not math.isfinite(float(end_ts))
+        or float(end_ts) < float(start_ts)
+    ):
+        return None
+    normalized: dict[str, Any] = {
+        "key": key,
+        "start_ts": float(start_ts),
+        "end_ts": float(end_ts),
+    }
+    for name in ("records", "raw_bytes", "compressed_bytes"):
+        item = value.get(name)
+        if isinstance(item, bool) or not isinstance(item, int) or item < 0:
+            return None
+        normalized[name] = item
+    return normalized
+
+
+def _validated_archive_directory(log_path: Path, *, create: bool = False) -> Path:
+    directory = _archive_directory_path(log_path)
+    if directory.is_symlink():
+        raise ValueError("audit archive directory must not be a symlink")
+    if create:
+        directory.mkdir(parents=True, exist_ok=True)
+    if directory.is_symlink():
+        raise ValueError("audit archive directory must not be a symlink")
+    resolved_parent = log_path.parent.resolve()
+    resolved_directory = directory.resolve(strict=False)
+    if resolved_directory.parent != resolved_parent:
+        raise ValueError("audit archive directory escapes audit log directory")
+    return directory
+
+
+def _archive_file_path(log_path: Path, key: str) -> Path:
+    validated = _validated_archive_key(key)
+    if validated is None:
+        raise ValueError(f"invalid audit archive key: {key!r}")
+    directory = _validated_archive_directory(log_path)
+    candidate = log_path.parent / validated
+    resolved_directory = directory.resolve()
+    resolved_candidate = candidate.resolve(strict=False)
+    if resolved_candidate.parent != resolved_directory:
+        raise ValueError(f"audit archive path escapes archive directory: {key!r}")
+    return candidate
+
+
+def _parse_archive_index(raw: bytes | None) -> list[dict[str, Any]]:
+    if not raw:
+        return []
+    try:
+        payload = json.loads(raw)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return []
+    if not isinstance(payload, dict) or payload.get("version") != _AUDIT_ARCHIVE_VERSION:
+        return []
+    archives = payload.get("archives")
+    if not isinstance(archives, list):
+        return []
+    validated = [_validated_archive_entry(entry) for entry in archives]
+    return [entry for entry in validated if entry is not None]
+
+
+def _recovered_archive_entry(key: str, compressed_bytes: int) -> dict[str, Any] | None:
+    match = _AUDIT_GENERATED_ARCHIVE_KEY_RE.fullmatch(key)
+    if match is None or compressed_bytes < 0:
+        return None
+    start_ms = int(match.group("start_ms"))
+    end_ms = int(match.group("end_ms"))
+    if end_ms < start_ms:
+        return None
+    return _archive_metadata(
+        key=key,
+        start_ts=start_ms / 1000,
+        end_ts=end_ms / 1000,
+        records=0,
+        raw_bytes=0,
+        compressed_bytes=compressed_bytes,
+    )
+
+
+def _reconcile_archive_entries(
+    indexed: list[dict[str, Any]], discovered: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    indexed_by_key = {entry["key"]: entry for entry in indexed}
+    reconciled: list[dict[str, Any]] = []
+    for recovered in discovered:
+        current = indexed_by_key.get(recovered["key"])
+        if current is None:
+            reconciled.append(recovered)
+            continue
+        reconciled.append(
+            {
+                **current,
+                "start_ts": recovered["start_ts"],
+                "end_ts": recovered["end_ts"],
+                "compressed_bytes": recovered["compressed_bytes"],
+            }
+        )
+    return reconciled
+
+
+def _discover_file_archives(log_path: Path) -> list[dict[str, Any]]:
+    try:
+        directory = _validated_archive_directory(log_path)
+        prune_before = time.time() - _AUDIT_PAYLOAD_PRUNE_GRACE_S
+        with os.scandir(directory) as entries:
+            discovered: list[dict[str, Any]] = []
+            for entry in entries:
+                if not entry.is_file(follow_symlinks=False):
+                    continue
+                if entry.name.startswith(".") and entry.name.endswith(".tmp"):
+                    try:
+                        if entry.stat(follow_symlinks=False).st_mtime <= prune_before:
+                            os.unlink(entry.path)
+                    except OSError:
+                        pass
+                    continue
+                key = f"{_AUDIT_ARCHIVE_DIRECTORY}/{entry.name}"
+                try:
+                    size = entry.stat(follow_symlinks=False).st_size
+                except OSError:
+                    continue
+                recovered = _recovered_archive_entry(key, size)
+                if recovered is not None:
+                    discovered.append(recovered)
+            return discovered
+    except (FileNotFoundError, NotADirectoryError, OSError, ValueError):
+        return []
+
+
+def _load_file_archive_index(log_path: Path) -> list[dict[str, Any]]:
+    try:
+        indexed = _parse_archive_index(_archive_index_path(log_path).read_bytes())
+    except OSError:
+        indexed = []
+    return _reconcile_archive_entries(indexed, _discover_file_archives(log_path))
+
+
+def _write_file_archive_index(log_path: Path, entries: list[dict[str, Any]]) -> None:
+    _validated_archive_directory(log_path, create=True)
+    path = _archive_index_path(log_path)
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    try:
+        _write_private_bytes(temporary, _archive_index_payload(entries))
+        os.replace(temporary, path)
+    finally:
+        with contextlib.suppress(OSError):
+            temporary.unlink(missing_ok=True)
+
+
+def _load_state_archive_index() -> list[dict[str, Any]]:
+    store = get_state_store()
+    indexed = _parse_archive_index(store.read_bytes(_AUDIT_ARCHIVE_INDEX_KEY))
+    discovered: list[dict[str, Any]] = []
+    seen_keys: set[str] = set()
+    for key in store.list_keys(f"{_AUDIT_ARCHIVE_DIRECTORY}/"):
+        if key == _AUDIT_ARCHIVE_INDEX_KEY or key in seen_keys:
+            continue
+        seen_keys.add(key)
+        size = store.size_bytes(key)
+        if size is None:
+            continue
+        recovered = _recovered_archive_entry(key, size)
+        if recovered is not None:
+            discovered.append(recovered)
+    return _reconcile_archive_entries(indexed, discovered)
+
+
+def _write_state_archive_index(entries: list[dict[str, Any]]) -> None:
+    get_state_store().write_bytes(_AUDIT_ARCHIVE_INDEX_KEY, _archive_index_payload(entries))
+
+
+def _archive_time_bounds(
+    parsed: list[tuple[bytes, dict[str, Any] | None, set[str]]], indexes: list[int]
+) -> tuple[float, float]:
+    timestamps: list[float] = []
+    for index in indexes:
+        record = parsed[index][1]
+        if not isinstance(record, dict):
+            continue
+        raw_timestamp = record.get("ts")
+        if isinstance(raw_timestamp, bool) or not isinstance(raw_timestamp, (int, float)):
+            continue
+        timestamp = float(raw_timestamp)
+        if math.isfinite(timestamp) and timestamp > 0:
+            timestamps.append(timestamp)
+    now = time.time()
+    return (min(timestamps), max(timestamps)) if timestamps else (now, now)
+
+
+def _archive_key(start_ts: float, end_ts: float) -> str:
+    start_ms = max(0, int(start_ts * 1000))
+    end_ms = max(start_ms, int(end_ts * 1000))
+    return (
+        f"{_AUDIT_ARCHIVE_DIRECTORY}/{start_ms:013d}-{end_ms:013d}-"
+        f"{time.time_ns()}-{uuid.uuid4().hex[:8]}.jsonl.zst"
+    )
+
+
+def _encode_archive_line_with_budget(
+    raw_line: bytes,
+    record: dict[str, Any] | None,
+    remaining_payload_bytes: int,
+) -> tuple[bytes, int]:
+    if record is None:
+        envelope: dict[str, Any] = {
+            "version": _AUDIT_ARCHIVE_VERSION,
+            "raw": raw_line.decode("utf-8", errors="replace").rstrip("\r\n"),
+        }
+    else:
+        payloads: dict[str, Any] = {}
+        for name, value in record.items():
+            if not _is_payload_reference(value):
+                continue
+            declared_bytes = _payload_declared_bytes(value)
+            payloads[name] = _resolve_payload_reference(
+                value,
+                full=True,
+                max_bytes=remaining_payload_bytes,
+            )
+            resolved = payloads[name]
+            if declared_bytes > remaining_payload_bytes:
+                continue
+            if (
+                isinstance(resolved, dict)
+                and resolved.get("error") == "Audit payload is unavailable"
+                and resolved.get("payload_id") == _payload_digest(value)
+            ):
+                remaining_payload_bytes = 0
+                continue
+            materialized_bytes = len(
+                json.dumps(
+                    resolved,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                    default=str,
+                ).encode("utf-8")
+            )
+            remaining_payload_bytes = max(0, remaining_payload_bytes - materialized_bytes)
+        envelope = {
+            "version": _AUDIT_ARCHIVE_VERSION,
+            "record": record,
+        }
+        if payloads:
+            envelope["payloads"] = payloads
+    encoded = (
+        json.dumps(envelope, ensure_ascii=False, separators=(",", ":"), default=str) + "\n"
+    ).encode("utf-8")
+    return encoded, remaining_payload_bytes
+
+
+def _encode_archive_line(raw_line: bytes, record: dict[str, Any] | None) -> bytes:
+    encoded, _remaining_payload_bytes = _encode_archive_line_with_budget(
+        raw_line,
+        record,
+        _AUDIT_ARCHIVE_MAX_PAYLOAD_MATERIALIZATION_BYTES,
+    )
+    return encoded
+
+
+def _archive_metadata(
+    *, key: str, start_ts: float, end_ts: float, records: int, raw_bytes: int, compressed_bytes: int
+) -> dict[str, Any]:
+    return {
+        "key": key,
+        "start_ts": start_ts,
+        "end_ts": end_ts,
+        "records": records,
+        "raw_bytes": raw_bytes,
+        "compressed_bytes": compressed_bytes,
+    }
+
+
+def _write_file_archive(
+    log_path: Path,
+    parsed: list[tuple[bytes, dict[str, Any] | None, set[str]]],
+    indexes: list[int],
+) -> dict[str, Any] | None:
+    if not indexes:
+        return None
+    start_ts, end_ts = _archive_time_bounds(parsed, indexes)
+    key = _archive_key(start_ts, end_ts)
+    path = _archive_file_path(log_path, key)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    raw_bytes = 0
+    remaining_payload_bytes = _AUDIT_ARCHIVE_MAX_PAYLOAD_MATERIALIZATION_BYTES
+    try:
+        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with (
+            os.fdopen(descriptor, "wb") as destination,
+            zstd.ZstdCompressor(level=_AUDIT_ARCHIVE_ZSTD_LEVEL).stream_writer(
+                destination, closefd=False
+            ) as compressor,
+        ):
+            for index in indexes:
+                raw_line, record, _payload_ids = parsed[index]
+                encoded, remaining_payload_bytes = _encode_archive_line_with_budget(
+                    raw_line,
+                    record,
+                    remaining_payload_bytes,
+                )
+                compressor.write(encoded)
+                raw_bytes += len(encoded)
+        os.replace(temporary, path)
+    finally:
+        with contextlib.suppress(OSError):
+            temporary.unlink(missing_ok=True)
+    return _archive_metadata(
+        key=key,
+        start_ts=start_ts,
+        end_ts=end_ts,
+        records=len(indexes),
+        raw_bytes=raw_bytes,
+        compressed_bytes=path.stat().st_size,
+    )
+
+
+def _write_state_archive(
+    parsed: list[tuple[bytes, dict[str, Any] | None, set[str]]], indexes: list[int]
+) -> dict[str, Any] | None:
+    if not indexes:
+        return None
+    start_ts, end_ts = _archive_time_bounds(parsed, indexes)
+    key = _archive_key(start_ts, end_ts)
+    destination = io.BytesIO()
+    raw_bytes = 0
+    remaining_payload_bytes = _AUDIT_ARCHIVE_MAX_PAYLOAD_MATERIALIZATION_BYTES
+    with zstd.ZstdCompressor(level=_AUDIT_ARCHIVE_ZSTD_LEVEL).stream_writer(
+        destination, closefd=False
+    ) as compressor:
+        for index in indexes:
+            raw_line, record, _payload_ids = parsed[index]
+            encoded, remaining_payload_bytes = _encode_archive_line_with_budget(
+                raw_line,
+                record,
+                remaining_payload_bytes,
+            )
+            compressor.write(encoded)
+            raw_bytes += len(encoded)
+    compressed = destination.getvalue()
+    get_state_store().write_bytes(key, compressed)
+    return _archive_metadata(
+        key=key,
+        start_ts=start_ts,
+        end_ts=end_ts,
+        records=len(indexes),
+        raw_bytes=raw_bytes,
+        compressed_bytes=len(compressed),
+    )
+
+
+def _archive_bytes(entries: list[dict[str, Any]]) -> int:
+    return sum(entry["compressed_bytes"] for entry in entries)
+
+
+def _prune_file_archives(
+    log_path: Path, entries: list[dict[str, Any]], max_archive_bytes: int
+) -> list[dict[str, Any]]:
+    ordered = sorted(entries, key=lambda entry: (entry["end_ts"], entry["key"]))
+    total = _archive_bytes(ordered)
+    retained: list[dict[str, Any]] = []
+    for entry in ordered:
+        if total <= max_archive_bytes:
+            retained.append(entry)
+            continue
+        try:
+            _archive_file_path(log_path, entry["key"]).unlink(missing_ok=True)
+        except (OSError, ValueError):
+            retained.append(entry)
+        else:
+            total -= entry["compressed_bytes"]
+    _write_file_archive_index(log_path, retained)
+    return retained
+
+
+def _prune_state_archives(
+    entries: list[dict[str, Any]], max_archive_bytes: int
+) -> list[dict[str, Any]]:
+    retained = sorted(entries, key=lambda entry: (entry["end_ts"], entry["key"]))
+    total = _archive_bytes(retained)
+    store = get_state_store()
+    while retained and total > max_archive_bytes:
+        oldest = retained.pop(0)
+        total -= oldest["compressed_bytes"]
+        store.delete(str(oldest["key"]))
+    _write_state_archive_index(retained)
+    return retained
+
+
+def _archived_source_indexes(
+    parsed: list[tuple[bytes, dict[str, Any] | None, set[str]]], selected: list[tuple[int, bytes]]
+) -> list[int]:
+    selected_by_index = dict(selected)
+    return [
+        index
+        for index, (raw_line, record, _payload_ids) in enumerate(parsed)
+        if (index not in selected_by_index or selected_by_index[index] != raw_line)
+        and not (isinstance(record, dict) and record.get("audit_payloads_omitted"))
+    ]
+
+
+def _enforce_audit_storage_limit(
+    log_path: Path, max_bytes: int, max_archive_bytes: int | None = None
+) -> bool:
+    if max_archive_bytes is None:
+        max_archive_bytes = get_settings().max_audit_archive_bytes
     if max_bytes <= 0 or not log_path.exists():
         return True
     try:
@@ -474,8 +1020,26 @@ def _enforce_audit_storage_limit(log_path: Path, max_bytes: int) -> bool:
     parsed, all_referenced = _parse_retention_lines(raw_lines)
     payload_sizes = {digest: _payload_file_size(digest, log_path) for digest in all_referenced}
     selected = _select_retention_lines(parsed, payload_sizes, max_bytes)
+    archive_entries = _load_file_archive_index(log_path)
     if selected is None:
+        if archive_entries and _archive_bytes(archive_entries) > max_archive_bytes:
+            _prune_file_archives(log_path, archive_entries, max_archive_bytes)
         return _prune_payload_store(log_path)
+
+    archived_indexes = _archived_source_indexes(parsed, selected)
+    if max_archive_bytes > 0 and archived_indexes:
+        try:
+            archive = _write_file_archive(log_path, parsed, archived_indexes)
+        except (OSError, zstd.ZstdError):
+            return False
+        if archive is not None:
+            archive_entries.append(archive)
+            try:
+                _write_file_archive_index(log_path, archive_entries)
+            except (OSError, ValueError):
+                with contextlib.suppress(OSError, ValueError):
+                    _archive_file_path(log_path, archive["key"]).unlink(missing_ok=True)
+                return False
 
     temporary = log_path.with_name(f".{log_path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
     try:
@@ -484,30 +1048,55 @@ def _enforce_audit_storage_limit(log_path: Path, max_bytes: int) -> bool:
     finally:
         with contextlib.suppress(OSError):
             temporary.unlink(missing_ok=True)
+    if archive_entries:
+        _prune_file_archives(log_path, archive_entries, max_archive_bytes)
     return _prune_payload_store(log_path)
 
 
-def _enforce_state_audit_storage_limit(max_bytes: int) -> None:
+def _enforce_state_audit_storage_limit(
+    max_bytes: int, max_archive_bytes: int | None = None
+) -> None:
+    if max_archive_bytes is None:
+        max_archive_bytes = get_settings().max_audit_archive_bytes
     if max_bytes <= 0:
         return
     store = get_state_store()
     raw_lines = (store.read_bytes("audit.jsonl") or b"").splitlines(keepends=True)
     parsed, all_referenced = _parse_retention_lines(raw_lines)
     payload_sizes = {
-        digest: len(store.read_bytes(f"{_AUDIT_PAYLOAD_DIRECTORY}/{digest}.json.gz") or b"")
+        digest: store.size_bytes(f"{_AUDIT_PAYLOAD_DIRECTORY}/{digest}.json.gz") or 0
         for digest in all_referenced
     }
     selected = _select_retention_lines(parsed, payload_sizes, max_bytes)
+    archive_entries = _load_state_archive_index()
     if selected is not None:
+        archived_indexes = _archived_source_indexes(parsed, selected)
+        if max_archive_bytes > 0 and archived_indexes:
+            archive = _write_state_archive(parsed, archived_indexes)
+            if archive is not None:
+                archive_entries.append(archive)
+                try:
+                    _write_state_archive_index(archive_entries)
+                except Exception:
+                    with contextlib.suppress(Exception):
+                        store.delete(archive["key"])
+                    raise
         store.write_bytes("audit.jsonl", b"".join(raw_line for _, raw_line in selected))
-        _, all_referenced = _parse_retention_lines(
-            [raw_line for _index, raw_line in selected]
-        )
+        _, all_referenced = _parse_retention_lines([raw_line for _index, raw_line in selected])
+    if archive_entries and _archive_bytes(archive_entries) > max_archive_bytes:
+        _prune_state_archives(archive_entries, max_archive_bytes)
     prefix = f"{_AUDIT_PAYLOAD_DIRECTORY}/"
-    for key in store.list_keys(prefix):
-        digest = key.removeprefix(prefix).removesuffix(".json.gz")
-        if digest not in all_referenced:
-            store.delete(key)
+    retained_payload_bytes = 0
+    with state_lock(_AUDIT_PAYLOAD_BYTES_KEY):
+        for key in store.list_keys(prefix):
+            if not key.endswith(".json.gz"):
+                continue
+            digest = key.removeprefix(prefix).removesuffix(".json.gz")
+            if digest not in all_referenced:
+                store.delete(key)
+                continue
+            retained_payload_bytes += store.size_bytes(key) or 0
+        _set_state_payload_bytes(retained_payload_bytes)
 
 
 def _trim_audit_log(path: Path, max_bytes: int) -> bool:
@@ -576,6 +1165,23 @@ def audit(event: str, **fields: Any) -> None:
         if fields.get("error_type"):
             call_state["error_type"] = fields["error_type"]
     with _AUDIT_LOCK:
+        if settings.state_backend != "file":
+            store = get_state_store()
+            with state_lock("audit.jsonl"):
+                record = {
+                    "id": uuid.uuid4().hex,
+                    "ts": time.time(),
+                    "event": event,
+                    **{name: _serialize_audit_value(value) for name, value in fields.items()},
+                }
+                encoded = json.dumps(record, ensure_ascii=False, default=str) + "\n"
+                log_bytes = store.append_bytes("audit.jsonl", encoded.encode("utf-8"))
+                retention_needed = log_bytes + _state_payload_bytes() > settings.max_audit_log_bytes
+                maintenance_due = _audit_maintenance_due(settings.audit_log_path)
+                if retention_needed or maintenance_due:
+                    _enforce_state_audit_storage_limit(settings.max_audit_log_bytes)
+                    _mark_audit_maintenance(settings.audit_log_path)
+            return
         record = {
             "id": uuid.uuid4().hex,
             "ts": time.time(),
@@ -583,13 +1189,6 @@ def audit(event: str, **fields: Any) -> None:
             **{name: _serialize_audit_value(value) for name, value in fields.items()},
         }
         encoded = json.dumps(record, ensure_ascii=False, default=str) + "\n"
-        if settings.state_backend != "file":
-            store = get_state_store()
-            with state_lock("audit.jsonl"):
-                existing = store.read_bytes("audit.jsonl") or b""
-                store.write_bytes("audit.jsonl", existing + encoded.encode("utf-8"))
-                _enforce_state_audit_storage_limit(settings.max_audit_log_bytes)
-            return
         path: Path = settings.audit_log_path
         path.parent.mkdir(parents=True, exist_ok=True)
         descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
@@ -853,9 +1452,7 @@ def _nested_semantic_event(record: dict[str, Any]) -> dict[str, Any] | None:
     if not event or event in _NESTED_LIFECYCLE_EVENTS:
         return None
     return {
-        name: value
-        for name, value in record.items()
-        if name not in {"id", "ts", "parent_call_id"}
+        name: value for name, value in record.items() if name not in {"id", "ts", "parent_call_id"}
     }
 
 
@@ -926,7 +1523,7 @@ def _public_audit_entry(row: dict[str, Any]) -> dict[str, Any]:
 
 def _read_audit_records() -> list[dict[str, Any]]:
     settings = get_settings()
-    max_bytes = max(1, min(settings.max_audit_tail_bytes * 4, settings.max_audit_log_bytes))
+    max_bytes = max(1, settings.max_audit_log_bytes)
     if settings.state_backend == "file":
         path = settings.audit_log_path
         if not path.exists():
@@ -956,35 +1553,24 @@ def _read_audit_records() -> list[dict[str, Any]]:
     return records
 
 
-def query_audit(
+def _matching_audit_rows(
+    records: list[dict[str, Any]],
     *,
-    limit: int = 200,
-    node: str | None = None,
-    event: str | None = None,
-    operation: str | None = None,
-    session: str | None = None,
-    search: str | None = None,
-    start_ts: float | None = None,
-    end_ts: float | None = None,
-    sort: str = "desc",
-) -> dict[str, Any]:
-    """Read, pair, filter, and sort the bounded JSONL audit log for the human UI."""
-
-    bounded_limit = max(1, min(int(limit), 2_000))
-    records = _read_audit_records()
-    if not records:
-        return {"entries": [], "count": 0, "total_matched": 0}
-
-    preview_records = [_resolve_record_payloads(record, full=False) for record in records]
-    rows = _coalesce_audit_records(preview_records)
+    node: str | None,
+    event: str | None,
+    operation: str | None,
+    session: str | None,
+    search: str | None,
+    start_ts: float | None,
+    end_ts: float | None,
+) -> list[dict[str, Any]]:
     needle = (search or "").casefold().strip()
     node_filter = (node or "").casefold().strip()
     event_filter = (event or "").casefold().strip()
     operation_filter = (operation or "").casefold().strip()
     session_filter = (session or "").casefold().strip()
     matched: list[dict[str, Any]] = []
-
-    for row in rows:
+    for row in _coalesce_audit_records(records):
         ts = float(row.get("ts") or 0)
         if start_ts is not None and ts < start_ts:
             continue
@@ -1004,7 +1590,36 @@ def query_audit(
         if needle and needle not in json.dumps(row, ensure_ascii=False, default=str).casefold():
             continue
         matched.append(row)
+    return matched
 
+
+def query_audit(
+    *,
+    limit: int = 200,
+    node: str | None = None,
+    event: str | None = None,
+    operation: str | None = None,
+    session: str | None = None,
+    search: str | None = None,
+    start_ts: float | None = None,
+    end_ts: float | None = None,
+    sort: str = "desc",
+) -> dict[str, Any]:
+    """Read, pair, filter, and sort the bounded live audit log."""
+
+    bounded_limit = max(1, min(int(limit), 2_000))
+    records = _read_audit_records()
+    preview_records = [_resolve_record_payloads(record, full=False) for record in records]
+    matched = _matching_audit_rows(
+        preview_records,
+        node=node,
+        event=event,
+        operation=operation,
+        session=session,
+        search=search,
+        start_ts=start_ts,
+        end_ts=end_ts,
+    )
     reverse = sort.lower() != "asc"
     matched.sort(key=lambda item: float(item.get("ts") or 0), reverse=reverse)
     total = len(matched)
@@ -1015,19 +1630,22 @@ def query_audit(
     }
 
 
+def _find_audit_row(records: list[dict[str, Any]], entry_id: str) -> dict[str, Any] | None:
+    return next(
+        (row for row in _coalesce_audit_records(records) if str(row.get("id") or "") == entry_id),
+        None,
+    )
+
+
 def get_audit_entry(entry_id: str, *, full: bool = True) -> dict[str, Any]:
-    """Return one coalesced audit entry, optionally materializing external payloads."""
+    """Return one live audit entry, optionally materializing hot-store payloads."""
 
     normalized = str(entry_id).strip()
     if not normalized:
         raise ValueError("audit entry id is required")
     records = _read_audit_records()
     preview_records = [_resolve_record_payloads(record, full=False) for record in records]
-    preview_rows = _coalesce_audit_records(preview_records)
-    selected = next(
-        (row for row in preview_rows if str(row.get("id") or "") == normalized),
-        None,
-    )
+    selected = _find_audit_row(preview_records, normalized)
     if selected is None:
         raise ValueError(f"Unknown audit entry: {normalized}")
     if not full:
@@ -1036,8 +1654,5 @@ def get_audit_entry(entry_id: str, *, full: bool = True) -> dict[str, Any]:
     materialized_records = list(preview_records)
     for index in selected[_AUDIT_SOURCE_INDEXES]:
         materialized_records[index] = _resolve_record_payloads(records[index], full=True)
-
-    for row in _coalesce_audit_records(materialized_records):
-        if str(row.get("id") or "") == normalized:
-            return _public_audit_entry(row)
-    raise ValueError(f"Unknown audit entry: {normalized}")
+    materialized = _find_audit_row(materialized_records, normalized)
+    return _public_audit_entry(materialized or selected)

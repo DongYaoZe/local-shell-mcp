@@ -1,4 +1,4 @@
-<!-- i18n-source-sha256: 59ecc926e83dcca7bd5e12ce60319c16f3eb27972c4c0fa649ee750fc3819a64 -->
+<!-- i18n-source-sha256: b174a1b427ca9b618c63375702f4a652941f83c6b1e1abaee1a99d1ab278deab -->
 # 設定
 
 儲存庫提供一個可直接複製的起始檔案：[`.env.example`](https://github.com/fwerkor/local-shell-mcp/blob/main/.env.example)。Docker Compose 會自動讀取由此產生的 `.env`，其他 runtime 也可使用相同的 `LOCAL_SHELL_MCP_` 環境變數。YAML 仍是 binary 或原始碼部署的可選進階輸入；請明確建立設定檔，並以 `LOCAL_SHELL_MCP_CONFIG` 或 `--config` 選取。環境變數會覆寫 YAML，因此除非確實需要 override，否則不要在兩處重複定義同一設定。YAML key 使用下表列出的欄位名稱。
@@ -66,6 +66,7 @@ LOCAL_SHELL_MCP_OAUTH_JWT_SECRET=change-me-long-random-secret
 | `max_jobs` | `LOCAL_SHELL_MCP_MAX_JOBS` | `1000` | 保留的 long-running job records 上限；active jobs 不會被 prune。 |
 | `max_audit_tail_bytes` | `LOCAL_SHELL_MCP_MAX_AUDIT_TAIL_BYTES` | `1000000` |  |
 | `max_audit_log_bytes` | `LOCAL_SHELL_MCP_MAX_AUDIT_LOG_BYTES` | `20000000` |  |
+| `max_audit_archive_bytes` | `LOCAL_SHELL_MCP_MAX_AUDIT_ARCHIVE_BYTES` | `512000000` |  |
 | `max_tmp_files` | `LOCAL_SHELL_MCP_MAX_TMP_FILES` | `500` |  |
 | `max_tmp_bytes` | `LOCAL_SHELL_MCP_MAX_TMP_BYTES` | `50000000` |  |
 | `max_transfer_archive_entries` | `LOCAL_SHELL_MCP_MAX_TRANSFER_ARCHIVE_ENTRIES` | `100000` | 解包 transferred directory archive 時允許的 entry 上限。 |

@@ -1,4 +1,4 @@
-<!-- i18n-source-sha256: 4aec137923c38de0ed4a1b760b5dbd6ce99090d508ce3fe838d35ad44b4ba4f1 -->
+<!-- i18n-source-sha256: 25bb55459e83ee02b923876bad8d288c7a2055c4474f2098d58ce1e4a5e72605 -->
 # Log audit
 
 `local-shell-mcp` menulis entri audit terstruktur untuk membantu merekonstruksi apa yang dilakukan client yang terhubung.
@@ -48,7 +48,9 @@ Log audit sangat berguna untuk:
 
 ## Retensi
 
-Log dibatasi oleh `LOCAL_SHELL_MCP_MAX_AUDIT_LOG_BYTES`. Lakukan rotasi atau ekspor secara eksternal jika membutuhkan retensi panjang.
+`audit.jsonl` aktif secara default dibatasi 20 MB oleh `LOCAL_SHELL_MCP_MAX_AUDIT_LOG_BYTES`. Saat pemeliharaan retensi berjalan, record lama dipindahkan ke arsip Zstandard mandiri `audit-archive/*.jsonl.zst` alih-alih dibuang; audit payload besar yang dieksternalkan juga dimasukkan ke arsip sebelum dibersihkan dari hot store.
+
+Arsip terkompresi memiliki batas terpisah `LOCAL_SHELL_MCP_MAX_AUDIT_ARCHIVE_BYTES`, default 512 MB. Jika batas terlampaui, arsip tertua dihapus lebih dahulu. Setel ke `0` untuk menonaktifkan retensi terkompresi jangka panjang. Web UI, kueri Activity/Audit, dan `audit_tail` hanya membaca hot log aktif. Arsip terkompresi adalah cold storage untuk retensi atau ekspor dan tidak didekompresi otomatis oleh kueri UI biasa.
 
 ## Keterbatasan
 

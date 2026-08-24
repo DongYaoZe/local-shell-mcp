@@ -54,6 +54,10 @@ def main() -> int:
         print("Docker builds must copy hatch_build.py before installing the project.")
         return 1
 
+    if 'python -c "import zstandard"' not in dockerfile:
+        print("Docker builds must verify the zstandard audit-archive runtime dependency.")
+        return 1
+
     python_job = jobs.get("build-python-package", {})
     python_artifacts = matrix_values(python_job, "artifact")
     missing_python = sorted(EXPECTED_PYTHON_ARTIFACTS - python_artifacts)
@@ -92,6 +96,11 @@ def main() -> int:
         print("Release binary matrix mismatch.")
         print(f"missing: {missing_binary}")
         print(f"extra: {extra_binary}")
+        return 1
+
+    binary_build_script = step_script(binary_job, "Build self-contained executable")
+    if "--collect-all zstandard" not in binary_build_script:
+        print("Release standalone binaries must bundle the zstandard native extension.")
         return 1
 
     package_script = step_script(binary_job, "Package executable")
