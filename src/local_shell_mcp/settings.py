@@ -364,9 +364,14 @@ if _PYDANTIC_AVAILABLE:
         max_concurrent_commands: int = 4
         max_tmux_sessions: int = 16
 
+        # Durable Logical Sessions and optional Goal plans exposed through MCP.
+        logical_sessions_enabled: bool = True
+
         # Human-facing OpenTUI/WebUI. The browser interface is mounted on the same
         # ASGI service and launches the exact same TUI executable as the local CLI.
         ui_enabled: bool = True
+        # MCP App Live Workspace. This can be disabled independently of the native UI.
+        live_workspace_enabled: bool = True
         ui_path: str = "/ui"
         ui_tui_command: str | None = None
         ui_wallpaper: Literal["bing", "aurora", "none"] = "bing"
@@ -593,7 +598,10 @@ else:
         max_concurrent_commands: int = 4
         max_tmux_sessions: int = 16
 
+        logical_sessions_enabled: bool = True
+
         ui_enabled: bool = True
+        live_workspace_enabled: bool = True
         ui_path: str = "/ui"
         ui_tui_command: str | None = None
         ui_wallpaper: Literal["bing", "aurora", "none"] = "bing"
