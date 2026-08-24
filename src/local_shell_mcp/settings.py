@@ -307,10 +307,11 @@ def _flatten_yaml(path: Path) -> dict[str, Any]:
 def _without_environment_overrides(values: dict[str, Any]) -> dict[str, Any]:
     """Drop YAML values that have an explicit LOCAL_SHELL_MCP_* override."""
 
+    environment_names = {name.casefold() for name in os.environ}
     return {
         key: value
         for key, value in values.items()
-        if f"LOCAL_SHELL_MCP_{key.upper()}" not in os.environ
+        if f"LOCAL_SHELL_MCP_{key}".casefold() not in environment_names
     }
 
 
@@ -699,15 +700,15 @@ else:
 
         def __post_init__(self, _load_environment: bool) -> None:
             if _load_environment:
+                environment = {name.casefold(): value for name, value in os.environ.items()}
                 for item in fields(self):
-                    env_name = "LOCAL_SHELL_MCP_" + item.name.upper()
-                    if env_name in os.environ:
+                    env_name = "LOCAL_SHELL_MCP_" + item.name
+                    env_value = environment.get(env_name.casefold())
+                    if env_value is not None:
                         setattr(
                             self,
                             item.name,
-                            _coerce_env_value(
-                                os.environ[env_name], getattr(self, item.name)
-                            ),
+                            _coerce_env_value(env_value, getattr(self, item.name)),
                         )
             for attr in ("workspace_root", "audit_log_path", "state_dir", "agent_config_dir"):
                 setattr(

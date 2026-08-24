@@ -130,6 +130,19 @@ ui:
     assert loaded.disable_local is True
 
 
+def test_lowercase_environment_variable_overrides_yaml_config(tmp_path, monkeypatch):
+    if not settings._PYDANTIC_AVAILABLE:
+        pytest.skip("Pydantic settings runtime is unavailable")
+    config = tmp_path / "config.yaml"
+    config.write_text("port: 9001\n", encoding="utf-8")
+    monkeypatch.setenv("LOCAL_SHELL_MCP_CONFIG", str(config))
+    monkeypatch.delenv("LOCAL_SHELL_MCP_PORT", raising=False)
+    monkeypatch.setenv("local_shell_mcp_port", "9102")
+    settings.get_settings.cache_clear()
+
+    assert settings.get_settings().port == 9102
+
+
 def test_pydantic_settings_validation_and_copy_paths(tmp_path):
     model = settings.Settings(
         workspace_root=tmp_path,
