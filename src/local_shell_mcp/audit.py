@@ -44,6 +44,7 @@ _AUDIT_ARCHIVE_DIRECTORY = "audit-archive"
 _AUDIT_ARCHIVE_INDEX_KEY = f"{_AUDIT_ARCHIVE_DIRECTORY}/index.json"
 _AUDIT_ARCHIVE_VERSION = 1
 _AUDIT_ARCHIVE_ZSTD_LEVEL = 12
+_AUDIT_ARCHIVE_MAX_PAYLOAD_MATERIALIZATION_BYTES = 16 * 1024 * 1024
 _AUDIT_ARCHIVE_KEY_RE = re.compile(r"^audit-archive/[0-9A-Za-z][0-9A-Za-z._-]*\.jsonl\.zst$")
 _AUDIT_SOURCE_INDEXES = "_audit_source_indexes"
 
@@ -266,12 +267,36 @@ def _payload_digest(value: dict[str, Any]) -> str:
     return str(metadata["sha256"])
 
 
-def _resolve_payload_reference(value: Any, *, full: bool) -> Any:
+def _payload_declared_bytes(value: dict[str, Any]) -> int:
+    metadata = value[_AUDIT_PAYLOAD_MARKER]
+    assert isinstance(metadata, dict)
+    return int(metadata["bytes"])
+
+
+def _unavailable_payload(value: dict[str, Any], digest: str, detail: str) -> dict[str, Any]:
+    return {
+        "error": "Audit payload is unavailable",
+        "payload_id": digest,
+        "detail": detail,
+        "preview": value.get("preview"),
+    }
+
+
+def _resolve_payload_reference(value: Any, *, full: bool, max_bytes: int | None = None) -> Any:
     if not _is_payload_reference(value):
         return value
     if not full:
         return value.get("preview")
     digest = _payload_digest(value)
+    if max_bytes is not None:
+        max_bytes = max(0, int(max_bytes))
+        declared_bytes = _payload_declared_bytes(value)
+        if declared_bytes > max_bytes:
+            return _unavailable_payload(
+                value,
+                digest,
+                f"payload exceeds safe materialization limit ({declared_bytes} > {max_bytes} bytes)",
+            )
     try:
         if get_settings().state_backend == "file":
             encoded = _payload_path(digest).read_bytes()
@@ -281,7 +306,17 @@ def _resolve_payload_reference(value: Any, *, full: bool) -> Any:
             )
             if encoded is None:
                 raise FileNotFoundError(digest)
-        raw = gzip.decompress(encoded)
+        if max_bytes is None:
+            raw = gzip.decompress(encoded)
+        else:
+            with gzip.GzipFile(fileobj=io.BytesIO(encoded), mode="rb") as payload_stream:
+                raw = payload_stream.read(max_bytes + 1)
+            if len(raw) > max_bytes:
+                return _unavailable_payload(
+                    value,
+                    digest,
+                    f"payload exceeds safe materialization limit ({max_bytes} bytes)",
+                )
         return json.loads(raw)
     except (
         OSError,
@@ -291,12 +326,7 @@ def _resolve_payload_reference(value: Any, *, full: bool) -> Any:
         json.JSONDecodeError,
         zlib.error,
     ) as exc:
-        return {
-            "error": "Audit payload is unavailable",
-            "payload_id": digest,
-            "detail": str(exc),
-            "preview": value.get("preview"),
-        }
+        return _unavailable_payload(value, digest, str(exc))
 
 
 def _resolve_record_payloads(record: dict[str, Any], *, full: bool) -> dict[str, Any]:
@@ -699,11 +729,19 @@ def _encode_archive_line(raw_line: bytes, record: dict[str, Any] | None) -> byte
             "raw": raw_line.decode("utf-8", errors="replace").rstrip("\r\n"),
         }
     else:
-        payloads = {
-            name: _resolve_payload_reference(value, full=True)
-            for name, value in record.items()
-            if _is_payload_reference(value)
-        }
+        payloads: dict[str, Any] = {}
+        remaining_payload_bytes = _AUDIT_ARCHIVE_MAX_PAYLOAD_MATERIALIZATION_BYTES
+        for name, value in record.items():
+            if not _is_payload_reference(value):
+                continue
+            payloads[name] = _resolve_payload_reference(
+                value,
+                full=True,
+                max_bytes=remaining_payload_bytes,
+            )
+            declared_bytes = _payload_declared_bytes(value)
+            if declared_bytes <= remaining_payload_bytes:
+                remaining_payload_bytes -= declared_bytes
         envelope = {
             "version": _AUDIT_ARCHIVE_VERSION,
             "record": record,

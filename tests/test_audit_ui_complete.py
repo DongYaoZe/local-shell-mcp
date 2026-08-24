@@ -905,6 +905,30 @@ def test_corrupt_utf8_payload_is_unavailable_instead_of_raising(tmp_path, monkey
     assert resolved["payload_id"] == digest
 
 
+def test_archive_payload_materialization_is_bounded(tmp_path, monkeypatch):
+    _configure(tmp_path, monkeypatch)
+    monkeypatch.setattr(audit_module, "_AUDIT_ARCHIVE_MAX_PAYLOAD_MATERIALIZATION_BYTES", 32)
+    reference = audit_module._write_payload("small")
+    digest = audit_module._payload_digest(reference)
+    payload_path = audit_module._payload_path(digest)
+
+    declared_large = json.loads(json.dumps(reference))
+    declared_large[audit_module._AUDIT_PAYLOAD_MARKER]["bytes"] = 33
+    payload_path.unlink()
+    declared_envelope = json.loads(
+        audit_module._encode_archive_line(b"{}\n", {"payload": declared_large})
+    )
+    assert "33 > 32 bytes" in declared_envelope["payloads"]["payload"]["detail"]
+
+    payload_path.write_bytes(gzip.compress(json.dumps("x" * 100).encode()))
+    actual_large = json.loads(json.dumps(reference))
+    actual_large[audit_module._AUDIT_PAYLOAD_MARKER]["bytes"] = 1
+    actual_envelope = json.loads(
+        audit_module._encode_archive_line(b"{}\n", {"payload": actual_large})
+    )
+    assert "32 bytes" in actual_envelope["payloads"]["payload"]["detail"]
+
+
 def test_archive_index_rejects_malformed_metadata(tmp_path, monkeypatch):
     _configure(tmp_path, monkeypatch)
     valid = {
