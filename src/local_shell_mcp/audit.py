@@ -46,6 +46,9 @@ _AUDIT_ARCHIVE_VERSION = 1
 _AUDIT_ARCHIVE_ZSTD_LEVEL = 12
 _AUDIT_ARCHIVE_MAX_PAYLOAD_MATERIALIZATION_BYTES = 16 * 1024 * 1024
 _AUDIT_ARCHIVE_KEY_RE = re.compile(r"^audit-archive/[0-9A-Za-z][0-9A-Za-z._-]*\.jsonl\.zst$")
+_AUDIT_GENERATED_ARCHIVE_KEY_RE = re.compile(
+    r"^audit-archive/(?P<start_ms>\d+)-(?P<end_ms>\d+)-\d+-[0-9a-f]{8}\.jsonl\.zst$"
+)
 _AUDIT_SOURCE_INDEXES = "_audit_source_indexes"
 
 _AUDIT_FAILURE_STATUSES = frozenset(
@@ -668,11 +671,72 @@ def _parse_archive_index(raw: bytes | None) -> list[dict[str, Any]]:
     return [entry for entry in validated if entry is not None]
 
 
+def _recovered_archive_entry(key: str, compressed_bytes: int) -> dict[str, Any] | None:
+    match = _AUDIT_GENERATED_ARCHIVE_KEY_RE.fullmatch(key)
+    if match is None or compressed_bytes < 0:
+        return None
+    start_ms = int(match.group("start_ms"))
+    end_ms = int(match.group("end_ms"))
+    if end_ms < start_ms:
+        return None
+    return _archive_metadata(
+        key=key,
+        start_ts=start_ms / 1000,
+        end_ts=end_ms / 1000,
+        records=0,
+        raw_bytes=0,
+        compressed_bytes=compressed_bytes,
+    )
+
+
+def _reconcile_archive_entries(
+    indexed: list[dict[str, Any]], discovered: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    indexed_by_key = {entry["key"]: entry for entry in indexed}
+    reconciled: list[dict[str, Any]] = []
+    for recovered in discovered:
+        current = indexed_by_key.get(recovered["key"])
+        if current is None:
+            reconciled.append(recovered)
+            continue
+        reconciled.append(
+            {
+                **current,
+                "start_ts": recovered["start_ts"],
+                "end_ts": recovered["end_ts"],
+                "compressed_bytes": recovered["compressed_bytes"],
+            }
+        )
+    return reconciled
+
+
+def _discover_file_archives(log_path: Path) -> list[dict[str, Any]]:
+    try:
+        directory = _validated_archive_directory(log_path)
+        with os.scandir(directory) as entries:
+            discovered: list[dict[str, Any]] = []
+            for entry in entries:
+                if not entry.is_file(follow_symlinks=False):
+                    continue
+                key = f"{_AUDIT_ARCHIVE_DIRECTORY}/{entry.name}"
+                try:
+                    size = entry.stat(follow_symlinks=False).st_size
+                except OSError:
+                    continue
+                recovered = _recovered_archive_entry(key, size)
+                if recovered is not None:
+                    discovered.append(recovered)
+            return discovered
+    except (FileNotFoundError, NotADirectoryError, OSError, ValueError):
+        return []
+
+
 def _load_file_archive_index(log_path: Path) -> list[dict[str, Any]]:
     try:
-        return _parse_archive_index(_archive_index_path(log_path).read_bytes())
-    except FileNotFoundError:
-        return []
+        indexed = _parse_archive_index(_archive_index_path(log_path).read_bytes())
+    except OSError:
+        indexed = []
+    return _reconcile_archive_entries(indexed, _discover_file_archives(log_path))
 
 
 def _write_file_archive_index(log_path: Path, entries: list[dict[str, Any]]) -> None:
@@ -688,7 +752,19 @@ def _write_file_archive_index(log_path: Path, entries: list[dict[str, Any]]) -> 
 
 
 def _load_state_archive_index() -> list[dict[str, Any]]:
-    return _parse_archive_index(get_state_store().read_bytes(_AUDIT_ARCHIVE_INDEX_KEY))
+    store = get_state_store()
+    indexed = _parse_archive_index(store.read_bytes(_AUDIT_ARCHIVE_INDEX_KEY))
+    discovered: list[dict[str, Any]] = []
+    for key in store.list_keys(f"{_AUDIT_ARCHIVE_DIRECTORY}/"):
+        if key == _AUDIT_ARCHIVE_INDEX_KEY:
+            continue
+        size = store.size_bytes(key)
+        if size is None:
+            continue
+        recovered = _recovered_archive_entry(key, size)
+        if recovered is not None:
+            discovered.append(recovered)
+    return _reconcile_archive_entries(indexed, discovered)
 
 
 def _write_state_archive_index(entries: list[dict[str, Any]]) -> None:

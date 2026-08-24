@@ -538,6 +538,26 @@ def test_state_archive_is_registered_before_hot_log_trim(tmp_path, monkeypatch):
     assert store.read_bytes("audit.jsonl") == original
 
 
+def test_state_archive_index_recovers_orphaned_blob(tmp_path, monkeypatch):
+    _configure_stateless(
+        tmp_path,
+        monkeypatch,
+        max_audit_log_bytes="1000",
+        max_audit_archive_bytes="50000",
+    )
+    store = get_state_store()
+    key = audit_module._archive_key(1, 2)
+    store.write_bytes(key, b"orphaned-archive")
+    store.write_bytes(audit_module._AUDIT_ARCHIVE_INDEX_KEY, b"{")
+
+    recovered = audit_module._load_state_archive_index()
+
+    assert [entry["key"] for entry in recovered] == [key]
+    assert recovered[0]["compressed_bytes"] == len(b"orphaned-archive")
+    assert audit_module._prune_state_archives(recovered, 0) == []
+    assert store.read_bytes(key) is None
+
+
 def test_state_backed_audit_archive_preserves_pruned_payloads(tmp_path, monkeypatch):
     _configure_stateless(
         tmp_path,

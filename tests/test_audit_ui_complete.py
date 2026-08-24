@@ -949,6 +949,23 @@ def test_archive_index_rejects_malformed_metadata(tmp_path, monkeypatch):
     ]
 
 
+def test_archive_index_recovers_orphaned_file_from_storage(tmp_path, monkeypatch):
+    _configure(tmp_path, monkeypatch)
+    log_path = get_settings().audit_log_path
+    key = audit_module._archive_key(1, 2)
+    archive_path = audit_module._archive_file_path(log_path, key)
+    archive_path.parent.mkdir(parents=True, exist_ok=True)
+    archive_path.write_bytes(b"orphaned-archive")
+    (archive_path.parent / "index.json").write_bytes(b"{")
+
+    recovered = audit_module._load_file_archive_index(log_path)
+
+    assert [entry["key"] for entry in recovered] == [key]
+    assert recovered[0]["compressed_bytes"] == archive_path.stat().st_size
+    assert audit_module._prune_file_archives(log_path, recovered, 0) == []
+    assert not archive_path.exists()
+
+
 def test_archive_index_write_rejects_symlinked_directory(tmp_path, monkeypatch):
     _configure(tmp_path, monkeypatch)
     log_path = get_settings().audit_log_path
