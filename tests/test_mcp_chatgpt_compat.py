@@ -122,7 +122,10 @@ async def test_mcp_metadata_for_chatgpt_developer_mode(tmp_path, monkeypatch):
     assert all(tool.outputSchema is not None for tool in tools.values())
     assert tools["run_shell"].outputSchema["title"] == "ToolResult"
     assert set(tools["run_shell"].outputSchema["properties"]) == {"ok", "message", "data"}
-    assert tools["file_write"].inputSchema["properties"]["encoding"]["enum"] == ["utf-8", "base64"]
+    assert set(tools["file_write"].inputSchema["properties"]["encoding"]["enum"]) == {
+        "utf-8",
+        "base64",
+    }
 
     content, structured = await mcp.call_tool("environment_get", {})
     assert content
