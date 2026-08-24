@@ -891,9 +891,16 @@ def _enforce_state_audit_storage_limit(
             archive = _write_state_archive(parsed, archived_indexes)
             if archive is not None:
                 archive_entries.append(archive)
+                try:
+                    _write_state_archive_index(archive_entries)
+                except Exception:
+                    with contextlib.suppress(Exception):
+                        store.delete(archive["key"])
+                    raise
         store.write_bytes("audit.jsonl", b"".join(raw_line for _, raw_line in selected))
         _, all_referenced = _parse_retention_lines([raw_line for _index, raw_line in selected])
-    _prune_state_archives(archive_entries, max_archive_bytes)
+    if archive_entries and _archive_bytes(archive_entries) > max_archive_bytes:
+        _prune_state_archives(archive_entries, max_archive_bytes)
     prefix = f"{_AUDIT_PAYLOAD_DIRECTORY}/"
     retained_payload_bytes = 0
     with state_lock(_AUDIT_PAYLOAD_BYTES_KEY):

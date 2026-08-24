@@ -504,6 +504,37 @@ def test_state_backed_audit_uses_persisted_payload_byte_counter(tmp_path, monkey
     audit_module.audit("payload_counter_inline", detail="small")
 
 
+def test_state_archive_is_registered_before_hot_log_trim(tmp_path, monkeypatch):
+    _configure_stateless(
+        tmp_path,
+        monkeypatch,
+        max_audit_log_bytes="1000",
+        max_audit_archive_bytes="50000",
+    )
+    store = get_state_store()
+    original = b"".join(
+        (json.dumps({"id": f"row-{index}", "ts": index + 1, "event": "old", "detail": "x" * 120}) + "\n").encode()
+        for index in range(20)
+    )
+    store.write_bytes("audit.jsonl", original)
+    original_write = store.write_bytes
+
+    def fail_hot_trim(key: str, value: bytes) -> None:
+        if key == "audit.jsonl":
+            raise OSError("simulated hot-log write failure")
+        original_write(key, value)
+
+    monkeypatch.setattr(store, "write_bytes", fail_hot_trim)
+    with pytest.raises(OSError, match="hot-log write failure"):
+        audit_module._enforce_state_audit_storage_limit(1000, 50000)
+
+    monkeypatch.setattr(store, "write_bytes", original_write)
+    archives = audit_module._load_state_archive_index()
+    assert len(archives) == 1
+    assert store.read_bytes(archives[0]["key"]) is not None
+    assert store.read_bytes("audit.jsonl") == original
+
+
 def test_state_backed_audit_archive_preserves_pruned_payloads(tmp_path, monkeypatch):
     _configure_stateless(
         tmp_path,
