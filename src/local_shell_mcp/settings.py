@@ -304,6 +304,17 @@ def _flatten_yaml(path: Path) -> dict[str, Any]:
     return flat
 
 
+def _without_environment_overrides(values: dict[str, Any]) -> dict[str, Any]:
+    """Drop YAML values that have an explicit LOCAL_SHELL_MCP_* override."""
+
+    environment_names = {name.casefold() for name in os.environ}
+    return {
+        key: value
+        for key, value in values.items()
+        if f"LOCAL_SHELL_MCP_{key}".casefold() not in environment_names
+    }
+
+
 if _PYDANTIC_AVAILABLE:
 
     class Settings(BaseSettings):
@@ -505,8 +516,10 @@ if _PYDANTIC_AVAILABLE:
                 self.path_denylist = []
             return self
 
-        def apply_yaml(self, path: Path) -> Settings:
+        def apply_yaml(self, path: Path, *, preserve_environment: bool = False) -> Settings:
             flat = _flatten_yaml(path)
+            if preserve_environment:
+                flat = _without_environment_overrides(flat)
             merged = self.model_dump()
             merged.update(flat)
             return Settings(**merged)
@@ -687,15 +700,15 @@ else:
 
         def __post_init__(self, _load_environment: bool) -> None:
             if _load_environment:
+                environment = {name.casefold(): value for name, value in os.environ.items()}
                 for item in fields(self):
-                    env_name = "LOCAL_SHELL_MCP_" + item.name.upper()
-                    if env_name in os.environ:
+                    env_name = "LOCAL_SHELL_MCP_" + item.name
+                    env_value = environment.get(env_name.casefold())
+                    if env_value is not None:
                         setattr(
                             self,
                             item.name,
-                            _coerce_env_value(
-                                os.environ[env_name], getattr(self, item.name)
-                            ),
+                            _coerce_env_value(env_value, getattr(self, item.name)),
                         )
             for attr in ("workspace_root", "audit_log_path", "state_dir", "agent_config_dir"):
                 setattr(
@@ -730,9 +743,12 @@ else:
         def model_copy(self, update: dict[str, Any] | None = None) -> Settings:
             return replace(self, _load_environment=False, **(update or {}))
 
-        def apply_yaml(self, path: Path) -> Settings:
+        def apply_yaml(self, path: Path, *, preserve_environment: bool = False) -> Settings:
+            flat = _flatten_yaml(path)
+            if preserve_environment:
+                flat = _without_environment_overrides(flat)
             merged = self.model_dump()
-            merged.update(_flatten_yaml(path))
+            merged.update(flat)
             return Settings(**merged, _load_environment=False)
 
         def with_workspace_relative_defaults(self) -> Settings:
@@ -756,7 +772,7 @@ def get_settings() -> Settings:
     settings = Settings()
     config = os.getenv("LOCAL_SHELL_MCP_CONFIG")
     if config:
-        settings = settings.apply_yaml(Path(config).expanduser())
+        settings = settings.apply_yaml(Path(config).expanduser(), preserve_environment=True)
     settings = settings.with_workspace_relative_defaults()
     if not settings.stateless_controller:
         settings.workspace_root.mkdir(parents=True, exist_ok=True)
