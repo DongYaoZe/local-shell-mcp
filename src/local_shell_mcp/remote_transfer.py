@@ -117,17 +117,17 @@ def _prune_orphan_download_snapshots_locked(now: float) -> None:
     }
     referenced.update(_ACTIVE_SNAPSHOT_PATHS)
     cutoff = now - _ticket_ttl_s()
-    for path in directory.iterdir():
-        if not path.is_file() or str(path) in referenced:
-            continue
-        if path.suffix != ".bin" and not path.name.endswith(".tmp"):
-            continue
-        try:
+    try:
+        for path in directory.iterdir():
+            if not path.is_file() or str(path) in referenced:
+                continue
+            if path.suffix != ".bin" and not path.name.endswith(".tmp"):
+                continue
             if path.stat().st_mtime > cutoff:
                 continue
             path.unlink(missing_ok=True)
-        except OSError:
-            continue
+    except OSError:
+        return
 
 
 def _prune_locked(now: float | None = None) -> None:

@@ -257,6 +257,22 @@ def test_active_download_snapshot_temporary_is_not_scavenged(tmp_path, monkeypat
     assert not temporary.exists()
 
 
+def test_orphan_snapshot_scan_failure_is_best_effort(tmp_path, monkeypatch):
+    _client(tmp_path, monkeypatch)
+    transfer_dir = tmp_path / ".state" / "remote-transfers"
+    transfer_dir.mkdir(parents=True, exist_ok=True)
+    original_iterdir = Path.iterdir
+
+    def fail_transfer_scan(path):
+        if path == transfer_dir:
+            raise OSError("directory disappeared")
+        return original_iterdir(path)
+
+    monkeypatch.setattr(Path, "iterdir", fail_transfer_scan)
+    with remote_transfer._TICKET_LOCK:
+        remote_transfer._prune_orphan_download_snapshots_locked(100.0)
+
+
 def test_ticket_claims_do_not_rescan_orphan_directory(tmp_path, monkeypatch):
     _client(tmp_path, monkeypatch)
     data = b"payload"
