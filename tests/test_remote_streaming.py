@@ -245,11 +245,11 @@ def test_active_download_snapshot_temporary_is_not_scavenged(tmp_path, monkeypat
     stale_now = temporary.stat().st_mtime + remote_transfer._ticket_ttl_s() + 1
 
     with remote_transfer._TICKET_LOCK:
-        remote_transfer._ACTIVE_SNAPSHOT_TEMPORARIES.add(str(temporary))
+        remote_transfer._ACTIVE_SNAPSHOT_PATHS.add(str(temporary))
         try:
             remote_transfer._prune_orphan_download_snapshots_locked(stale_now)
         finally:
-            remote_transfer._ACTIVE_SNAPSHOT_TEMPORARIES.discard(str(temporary))
+            remote_transfer._ACTIVE_SNAPSHOT_PATHS.discard(str(temporary))
 
     assert temporary.exists()
     with remote_transfer._TICKET_LOCK:
