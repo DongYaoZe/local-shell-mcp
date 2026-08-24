@@ -452,7 +452,9 @@ def test_state_backed_audit_tail_and_retention_include_external_payloads(tmp_pat
 
     store = get_state_store()
     audit_bytes = len(store.read_bytes("audit.jsonl") or b"")
-    payload_bytes = sum(len(store.read_bytes(key) or b"") for key in store.list_keys("audit-payloads/"))
+    payload_bytes = sum(
+        len(store.read_bytes(key) or b"") for key in store.list_keys("audit-payloads/")
+    )
     assert audit_bytes + payload_bytes <= get_settings().max_audit_log_bytes
 
     tail = tools._read_audit_tail_entries(10)
@@ -468,7 +470,9 @@ def test_state_backed_audit_enforces_combined_log_and_payload_budget(tmp_path, m
         max_audit_log_bytes=str(max_bytes),
         max_audit_archive_bytes="50000",
     )
-    payload = "".join(hashlib.sha256(f"payload-{index}".encode()).hexdigest() for index in range(120))
+    payload = "".join(
+        hashlib.sha256(f"payload-{index}".encode()).hexdigest() for index in range(120)
+    )
 
     audit_module.audit("state_budget_payload", payload=payload)
     store = get_state_store()
@@ -516,7 +520,10 @@ def test_state_archive_is_registered_before_hot_log_trim(tmp_path, monkeypatch):
     )
     store = get_state_store()
     original = b"".join(
-        (json.dumps({"id": f"row-{index}", "ts": index + 1, "event": "old", "detail": "x" * 120}) + "\n").encode()
+        (
+            json.dumps({"id": f"row-{index}", "ts": index + 1, "event": "old", "detail": "x" * 120})
+            + "\n"
+        ).encode()
         for index in range(20)
     )
     store.write_bytes("audit.jsonl", original)
@@ -558,6 +565,34 @@ def test_state_archive_index_recovers_orphaned_blob(tmp_path, monkeypatch):
     assert store.read_bytes(key) is None
 
 
+def test_state_archive_index_deduplicates_scan_results(tmp_path, monkeypatch):
+    _configure_stateless(
+        tmp_path,
+        monkeypatch,
+        max_audit_log_bytes="1000",
+        max_audit_archive_bytes="50000",
+    )
+    store = get_state_store()
+    key = audit_module._archive_key(1, 2)
+    payload = b"archive-bytes"
+    store.write_bytes(key, payload)
+    original_list_keys = store.list_keys
+
+    def duplicate_archive_keys(prefix: str = "") -> list[str]:
+        keys = original_list_keys(prefix)
+        if prefix == f"{audit_module._AUDIT_ARCHIVE_DIRECTORY}/" and key in keys:
+            return [*keys, key]
+        return keys
+
+    monkeypatch.setattr(store, "list_keys", duplicate_archive_keys)
+    recovered = audit_module._load_state_archive_index()
+
+    assert [entry["key"] for entry in recovered] == [key]
+    assert audit_module._archive_bytes(recovered) == len(payload)
+    assert audit_module._prune_state_archives(recovered, len(payload)) == recovered
+    assert store.read_bytes(key) == payload
+
+
 def test_state_backed_audit_archive_preserves_pruned_payloads(tmp_path, monkeypatch):
     _configure_stateless(
         tmp_path,
@@ -574,13 +609,13 @@ def test_state_backed_audit_archive_preserves_pruned_payloads(tmp_path, monkeypa
     audit_module.audit("serverless_live", detail="kept" * 300)
 
     store = get_state_store()
-    archive_keys = [
-        key for key in store.list_keys("audit-archive/") if key.endswith(".jsonl.zst")
-    ]
+    archive_keys = [key for key in store.list_keys("audit-archive/") if key.endswith(".jsonl.zst")]
     assert archive_keys
     assert len(store.read_bytes("audit.jsonl") or b"") <= get_settings().max_audit_log_bytes
 
-    with zstd.ZstdDecompressor().stream_reader(io.BytesIO(store.read_bytes(archive_keys[0]))) as reader:
+    with zstd.ZstdDecompressor().stream_reader(
+        io.BytesIO(store.read_bytes(archive_keys[0]))
+    ) as reader:
         archived_lines = reader.read().splitlines()
     envelopes = [json.loads(line) for line in archived_lines]
     archived = next(
@@ -620,7 +655,6 @@ async def test_remote_only_job_controls_reject_local_shell_jobs(tmp_path, monkey
     ):
         with pytest.raises(ValueError, match="local shell jobs are unavailable"):
             await operation()
-
 
 
 @pytest.mark.asyncio
@@ -858,7 +892,9 @@ async def test_memory_relay_aborts_destination_on_invalid_chunk(tmp_path, monkey
 
 
 @pytest.mark.asyncio
-async def test_direct_transfer_failure_closes_receiver_and_checks_destination(tmp_path, monkeypatch):
+async def test_direct_transfer_failure_closes_receiver_and_checks_destination(
+    tmp_path, monkeypatch
+):
     _configure_workspace(
         tmp_path,
         monkeypatch,
@@ -1027,7 +1063,11 @@ async def test_object_store_transfer_uses_presigned_urls_and_deletes_object(tmp_
     assert fake_s3.presigned == [("put_object", "PUT"), ("get_object", "GET")]
     assert len(fake_s3.deleted) == 1
     assert fake_s3.deleted[0][0] == "transfer-bucket"
-    assert [tool for _, tool, _ in calls] == ["transfer_stat", "transfer_put_url", "transfer_get_url"]
+    assert [tool for _, tool, _ in calls] == [
+        "transfer_stat",
+        "transfer_put_url",
+        "transfer_get_url",
+    ]
     assert events == [
         "presign:put_object",
         "upload",

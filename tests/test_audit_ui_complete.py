@@ -177,7 +177,13 @@ def test_coalescing_keeps_semantic_child_details_without_duplicate_rows():
             "parent_call_id": "call-1",
             "ok": False,
         },
-        {"ts": 4, "event": "mcp_tool_call_end", "call_id": "call-1", "tool": "revoke_file_link", "ok": True},
+        {
+            "ts": 4,
+            "event": "mcp_tool_call_end",
+            "call_id": "call-1",
+            "tool": "revoke_file_link",
+            "ok": True,
+        },
     ]
 
     rows = audit_module._coalesce_audit_records(records)
@@ -187,9 +193,7 @@ def test_coalescing_keeps_semantic_child_details_without_duplicate_rows():
         {"event": "download_link_revoked", "path": "/tmp/report.txt", "token": "token-1"}
     ]
     assert rows[0][audit_module._AUDIT_SOURCE_INDEXES] == [0, 1, 2, 3]
-    units = audit_module._retention_units(
-        [(b"line\n", record, set()) for record in records]
-    )
+    units = audit_module._retention_units([(b"line\n", record, set()) for record in records])
     assert len(units) == 1
     assert [item[0] for item in units[0]] == [0, 1, 2, 3]
 
@@ -540,9 +544,7 @@ def test_audit_periodically_runs_payload_housekeeping_below_budget(tmp_path, mon
     assert calls == 1
 
 
-def test_audit_pressure_backoff_avoids_repeated_scans_for_recent_orphans(
-    tmp_path, monkeypatch
-):
+def test_audit_pressure_backoff_avoids_repeated_scans_for_recent_orphans(tmp_path, monkeypatch):
     _configure(tmp_path, monkeypatch)
     monkeypatch.setenv("LOCAL_SHELL_MCP_MAX_AUDIT_LOG_BYTES", "12000")
     get_settings.cache_clear()
@@ -657,9 +659,7 @@ def test_failed_retention_pass_is_retried_without_backoff(tmp_path, monkeypatch)
     assert audit_module._audit_pressure_backoff_active(log_path) is True
 
 
-def test_audit_enters_full_retention_scan_only_after_storage_exceeds_budget(
-    tmp_path, monkeypatch
-):
+def test_audit_enters_full_retention_scan_only_after_storage_exceeds_budget(tmp_path, monkeypatch):
     _configure(tmp_path, monkeypatch)
     monkeypatch.setenv("LOCAL_SHELL_MCP_MAX_AUDIT_LOG_BYTES", "3000")
     get_settings.cache_clear()
@@ -791,7 +791,9 @@ def test_audit_retention_bounds_log_and_external_payload_bytes(tmp_path, monkeyp
     assert stored_bytes <= max_bytes
     assert all(not path.exists() for path in first_payloads)
     entries = audit_module.query_audit(sort="asc")["entries"]
-    hot_events = [json.loads(line)["event"] for line in get_settings().audit_log_path.read_text().splitlines()]
+    hot_events = [
+        json.loads(line)["event"] for line in get_settings().audit_log_path.read_text().splitlines()
+    ]
     assert [entry["event"] for entry in entries] == hot_events
     second_entry = next(entry for entry in entries if entry["event"] == "second_large_event")
     assert audit_module.get_audit_entry(second_entry["id"])["payload"] == second
@@ -805,9 +807,7 @@ def test_audit_archive_budget_prunes_oldest_compressed_files(tmp_path, monkeypat
 
     for batch in range(8):
         for index in range(20):
-            audit_module.audit(
-                "archive_budget_event", batch=batch, index=index, detail="x" * 120
-            )
+            audit_module.audit("archive_budget_event", batch=batch, index=index, detail="x" * 120)
 
     archives = audit_module._load_file_archive_index(get_settings().audit_log_path)
     assert archives
@@ -929,6 +929,28 @@ def test_archive_payload_materialization_is_bounded(tmp_path, monkeypatch):
     assert "32 bytes" in actual_envelope["payloads"]["payload"]["detail"]
 
 
+def test_archive_payload_materialization_budget_is_shared_across_batch(tmp_path, monkeypatch):
+    _configure(tmp_path, monkeypatch)
+    monkeypatch.setattr(audit_module, "_AUDIT_ARCHIVE_MAX_PAYLOAD_MATERIALIZATION_BYTES", 32)
+    first = audit_module._write_payload("x" * 16)
+    second = audit_module._write_payload("y" * 16)
+    parsed = [
+        (b'{"id":"first"}\n', {"id": "first", "payload": first}, set()),
+        (b'{"id":"second"}\n', {"id": "second", "payload": second}, set()),
+    ]
+    log_path = get_settings().audit_log_path
+
+    archive = audit_module._write_file_archive(log_path, parsed, [0, 1])
+
+    assert archive is not None
+    archive_path = audit_module._archive_file_path(log_path, archive["key"])
+    with audit_module.zstd.ZstdDecompressor().stream_reader(archive_path.open("rb")) as reader:
+        envelopes = [json.loads(line) for line in reader.read().splitlines()]
+    assert envelopes[0]["payloads"]["payload"] == "x" * 16
+    assert envelopes[1]["payloads"]["payload"]["error"] == "Audit payload is unavailable"
+    assert "safe materialization limit" in envelopes[1]["payloads"]["payload"]["detail"]
+
+
 def test_archive_index_rejects_malformed_metadata(tmp_path, monkeypatch):
     _configure(tmp_path, monkeypatch)
     valid = {
@@ -944,9 +966,7 @@ def test_archive_index_rejects_malformed_metadata(tmp_path, monkeypatch):
         {"version": audit_module._AUDIT_ARCHIVE_VERSION, "archives": [malformed, valid]}
     ).encode()
 
-    assert audit_module._parse_archive_index(raw) == [
-        {**valid, "start_ts": 1.0, "end_ts": 2.0}
-    ]
+    assert audit_module._parse_archive_index(raw) == [{**valid, "start_ts": 1.0, "end_ts": 2.0}]
 
 
 def test_archive_index_recovers_orphaned_file_from_storage(tmp_path, monkeypatch):
@@ -964,6 +984,60 @@ def test_archive_index_recovers_orphaned_file_from_storage(tmp_path, monkeypatch
     assert recovered[0]["compressed_bytes"] == archive_path.stat().st_size
     assert audit_module._prune_file_archives(log_path, recovered, 0) == []
     assert not archive_path.exists()
+
+
+def test_archive_reconciliation_removes_only_stale_temporary_files(tmp_path, monkeypatch):
+    _configure(tmp_path, monkeypatch)
+    log_path = get_settings().audit_log_path
+    directory = audit_module._validated_archive_directory(log_path, create=True)
+    recent = directory / ".recent.jsonl.zst.1.1.tmp"
+    stale = directory / ".stale.jsonl.zst.1.1.tmp"
+    recent.write_bytes(b"recent")
+    stale.write_bytes(b"stale")
+    stale_time = time.time() - audit_module._AUDIT_PAYLOAD_PRUNE_GRACE_S - 1
+    os.utime(stale, (stale_time, stale_time))
+
+    audit_module._load_file_archive_index(log_path)
+
+    assert recent.exists()
+    assert not stale.exists()
+
+
+def test_file_archive_pruning_waits_for_hot_log_commit(tmp_path, monkeypatch):
+    _configure(tmp_path, monkeypatch)
+    log_path = get_settings().audit_log_path
+    original = b"".join(
+        (
+            json.dumps({"id": f"row-{index}", "ts": index + 1, "event": "old", "detail": "x" * 120})
+            + "\n"
+        ).encode()
+        for index in range(20)
+    )
+    log_path.write_bytes(original)
+    old_key = audit_module._archive_key(1, 2)
+    old_path = audit_module._archive_file_path(log_path, old_key)
+    old_path.parent.mkdir(parents=True, exist_ok=True)
+    old_path.write_bytes(b"older-history")
+    audit_module._write_file_archive_index(
+        log_path,
+        [audit_module._recovered_archive_entry(old_key, old_path.stat().st_size)],
+    )
+    original_replace = audit_module.os.replace
+
+    def fail_hot_log_replace(source, destination):
+        if Path(destination) == log_path:
+            raise OSError("simulated hot-log replace failure")
+        return original_replace(source, destination)
+
+    monkeypatch.setattr(audit_module.os, "replace", fail_hot_log_replace)
+    with pytest.raises(OSError, match="hot-log replace failure"):
+        audit_module._enforce_audit_storage_limit(log_path, 1000, 1)
+
+    monkeypatch.setattr(audit_module.os, "replace", original_replace)
+    archives = audit_module._load_file_archive_index(log_path)
+    assert old_path.exists()
+    assert len(archives) >= 2
+    assert log_path.read_bytes() == original
 
 
 def test_archive_index_write_rejects_symlinked_directory(tmp_path, monkeypatch):
@@ -1004,9 +1078,7 @@ def test_query_audit_reads_complete_hot_log_not_tail_window(tmp_path, monkeypatc
         }
         for index in range(30)
     ]
-    path.write_text(
-        "".join(json.dumps(record) + "\n" for record in records), encoding="utf-8"
-    )
+    path.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
     assert path.stat().st_size > get_settings().max_audit_tail_bytes * 4
 
     result = audit_module.query_audit(limit=100, search="hot_history", sort="asc")
