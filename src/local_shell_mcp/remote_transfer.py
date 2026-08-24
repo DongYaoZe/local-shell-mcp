@@ -35,7 +35,7 @@ REMOTE_TRANSFER_DOWNLOAD_PREFIX = f"{REMOTE_TRANSFER_PREFIX}/download/"
 _TRANSFER_CHUNK_BYTES = 1024 * 1024
 _CONTENT_RANGE_RE = re.compile(r"^bytes (\d+)-(\d+)/(\d+)$")
 _TICKET_LOCK = threading.RLock()
-_ACTIVE_SNAPSHOT_TEMPORARIES: set[str] = set()
+_ACTIVE_SNAPSHOT_PATHS: set[str] = set()
 _ORPHAN_PRUNE_INTERVAL_S = 60.0
 _LAST_ORPHAN_PRUNE_AT = 0.0
 
@@ -115,7 +115,7 @@ def _prune_orphan_download_snapshots_locked(now: float) -> None:
         for ticket in _TICKETS.values()
         if ticket.cleanup_path
     }
-    referenced.update(_ACTIVE_SNAPSHOT_TEMPORARIES)
+    referenced.update(_ACTIVE_SNAPSHOT_PATHS)
     cutoff = now - _ticket_ttl_s()
     for path in directory.iterdir():
         if not path.is_file() or str(path) in referenced:
@@ -232,8 +232,9 @@ def _create_download_snapshot(
     snapshot = _download_snapshot_path(token)
     temporary = snapshot.with_name(snapshot.name + f".{secrets.token_hex(8)}.tmp")
     digest = hashlib.sha256()
+    completed = False
     with _TICKET_LOCK:
-        _ACTIVE_SNAPSHOT_TEMPORARIES.add(str(temporary))
+        _ACTIVE_SNAPSHOT_PATHS.update((str(temporary), str(snapshot)))
     try:
         with source.open("rb") as source_handle, temporary.open("xb") as output:
             before = os.fstat(source_handle.fileno())
@@ -268,10 +269,13 @@ def _create_download_snapshot(
         with contextlib.suppress(OSError):
             temporary.chmod(0o600)
         os.replace(temporary, snapshot)
+        completed = True
         return snapshot
     finally:
         with _TICKET_LOCK:
-            _ACTIVE_SNAPSHOT_TEMPORARIES.discard(str(temporary))
+            _ACTIVE_SNAPSHOT_PATHS.discard(str(temporary))
+            if not completed:
+                _ACTIVE_SNAPSHOT_PATHS.discard(str(snapshot))
         temporary.unlink(missing_ok=True)
 
 
@@ -300,6 +304,9 @@ def create_download_ticket(
     except Exception:
         snapshot.unlink(missing_ok=True)
         raise
+    finally:
+        with _TICKET_LOCK:
+            _ACTIVE_SNAPSHOT_PATHS.discard(str(snapshot))
 
 
 def revoke_transfer_ticket(token: str) -> dict[str, Any]:
