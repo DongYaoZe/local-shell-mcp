@@ -6,6 +6,7 @@ import io
 import json
 import os
 import tarfile
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -33,6 +34,8 @@ def _configure(tmp_path, monkeypatch, **extra):
         monkeypatch.setenv(key, value)
     get_settings.cache_clear()
     remote_transfer._TICKETS.clear()
+    remote_transfer._ACTIVE_SNAPSHOT_PATHS.clear()
+    remote_transfer._LAST_ORPHAN_PRUNE_AT = 0.0
 
 
 def test_filesystem_binary_glob_context_and_limits(tmp_path, monkeypatch):
@@ -419,6 +422,22 @@ def test_transfer_archive_validation_pack_and_unpack(tmp_path, monkeypatch):
     dir_target.mkdir()
     transfer._remove_existing_path(dir_target)
     assert not dir_target.exists()
+
+
+def test_completed_download_snapshot_is_protected_until_ticket_registration(
+    tmp_path, monkeypatch
+):
+    _configure(tmp_path, monkeypatch)
+    source = tmp_path / "source"
+    source.write_bytes(b"data")
+    digest = hashlib.sha256(b"data").hexdigest()
+    monkeypatch.setattr(remote_transfer, "_now", lambda: time.time() + 3600)
+
+    ticket = remote_transfer.create_download_ticket("source", 4, digest)
+    snapshot = Path(remote_transfer._TICKETS[ticket["token"]].path)
+
+    assert snapshot.exists()
+    assert str(snapshot) not in remote_transfer._ACTIVE_SNAPSHOT_PATHS
 
 
 def test_remote_transfer_validation_claim_and_endpoint_errors(tmp_path, monkeypatch):
