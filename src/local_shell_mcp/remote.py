@@ -2077,6 +2077,37 @@ def _parse_worker_http_json(url: str, status_code: int, response_body: str) -> d
     return parsed
 
 
+class _WorkerRequestCancellation:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._cancelled = False
+        self._process: subprocess.Popen[bytes] | None = None
+
+    def attach(self, process: subprocess.Popen[bytes]) -> None:
+        with self._lock:
+            self._process = process
+            cancelled = self._cancelled
+        if cancelled:
+            with contextlib.suppress(OSError):
+                process.kill()
+
+    def detach(self, process: subprocess.Popen[bytes]) -> None:
+        with self._lock:
+            if self._process is process:
+                self._process = None
+
+    def cancel(self) -> None:
+        with self._lock:
+            self._cancelled = True
+            process = self._process
+        if process is not None:
+            with contextlib.suppress(OSError):
+                process.kill()
+
+
+_worker_request_context = threading.local()
+
+
 def _worker_post_json_with_curl(
     url: str,
     body: bytes,
@@ -2111,13 +2142,29 @@ def _worker_post_json_with_curl(
         command.extend(["-H", f"{name}: {value}"])
     command.append(url)
 
-    completed = subprocess.run(  # noqa: S603
-        command,
-        input=body,
-        capture_output=True,
-        check=False,
-        creationflags=_worker_subprocess_creationflags(),
-    )
+    cancellation = getattr(_worker_request_context, "cancellation", None)
+    if cancellation is None:
+        completed = subprocess.run(  # noqa: S603
+            command,
+            input=body,
+            capture_output=True,
+            check=False,
+            creationflags=_worker_subprocess_creationflags(),
+        )
+    else:
+        process = subprocess.Popen(  # noqa: S603
+            command,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            creationflags=_worker_subprocess_creationflags(),
+        )
+        cancellation.attach(process)
+        try:
+            stdout, stderr = process.communicate(input=body)
+        finally:
+            cancellation.detach(process)
+        completed = subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
     stdout = completed.stdout.decode("utf-8", errors="replace")
     stderr = completed.stderr.decode("utf-8", errors="replace").strip()
     response_body, marker, status_text = stdout.rpartition(status_marker)
@@ -2217,6 +2264,51 @@ def _worker_error_is_retryable(exc: Exception) -> bool:
     return not isinstance(exc, ValueError)
 
 
+def _worker_post_json_in_cancellable_thread(
+    url: str,
+    payload: dict[str, Any],
+    headers: dict[str, str] | None,
+    timeout: float | None,
+    cancellation: _WorkerRequestCancellation,
+) -> dict[str, Any]:
+    previous = getattr(_worker_request_context, "cancellation", None)
+    _worker_request_context.cancellation = cancellation
+    try:
+        return _worker_post_json(url, payload, headers, timeout)
+    finally:
+        if previous is None:
+            with contextlib.suppress(AttributeError):
+                del _worker_request_context.cancellation
+        else:
+            _worker_request_context.cancellation = previous
+
+
+async def _worker_post_json_cancellable(
+    url: str,
+    payload: dict[str, Any],
+    headers: dict[str, str] | None,
+    timeout: float | None,
+) -> dict[str, Any]:
+    cancellation = _WorkerRequestCancellation()
+    request = asyncio.create_task(
+        asyncio.to_thread(
+            _worker_post_json_in_cancellable_thread,
+            url,
+            payload,
+            headers,
+            timeout,
+            cancellation,
+        )
+    )
+    try:
+        return await asyncio.shield(request)
+    except asyncio.CancelledError:
+        cancellation.cancel()
+        with contextlib.suppress(Exception):
+            await asyncio.shield(request)
+        raise
+
+
 async def _worker_post_json_forever(
     url: str,
     payload: dict[str, Any],
@@ -2225,8 +2317,11 @@ async def _worker_post_json_forever(
     operation: str = "request",
 ) -> dict[str, Any]:
     attempt = 0
+    cancellable = urllib.parse.urlsplit(url).path.endswith(f"{REMOTE_API_PREFIX}/result")
     while True:
         try:
+            if cancellable:
+                return await _worker_post_json_cancellable(url, payload, headers, timeout)
             return await asyncio.to_thread(_worker_post_json, url, payload, headers, timeout)
         except Exception as exc:  # noqa: BLE001
             if not _worker_error_is_retryable(exc):

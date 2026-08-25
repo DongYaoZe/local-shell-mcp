@@ -3,6 +3,7 @@
 import asyncio
 import subprocess
 import sys
+import threading
 import urllib.error
 from io import BytesIO
 from types import SimpleNamespace
@@ -348,6 +349,51 @@ def test_worker_post_json_uses_curl_and_parses_success(monkeypatch):
     assert body == b'{"invite": "abc"}'
     assert check is False
     assert creationflags == remote._worker_subprocess_creationflags()  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_worker_result_cancellation_terminates_active_curl(monkeypatch):
+    started = threading.Event()
+    killed = threading.Event()
+
+    class FakePopen:
+        def __init__(self, command, *, stdin, stdout, stderr, creationflags):  # noqa: ANN001
+            assert command[0] == "/usr/bin/curl"
+            assert stdin is subprocess.PIPE
+            assert stdout is subprocess.PIPE
+            assert stderr is subprocess.PIPE
+            assert creationflags == remote._worker_subprocess_creationflags()  # noqa: SLF001
+            self.returncode = None
+
+        def communicate(self, input):  # noqa: A002, ANN001
+            assert input == b'{"job_id": "job-1"}'
+            started.set()
+            killed.wait(1)
+            self.returncode = -9
+            return b"", b"terminated"
+
+        def kill(self):
+            killed.set()
+
+    monkeypatch.setattr(remote.shutil, "which", lambda name: "/usr/bin/curl" if name == "curl" else None)
+    monkeypatch.setattr(remote.subprocess, "Popen", FakePopen)
+
+    submission = asyncio.create_task(
+        remote._worker_post_json_forever(  # noqa: SLF001
+            "https://example.test/remote/result",
+            {"job_id": "job-1"},
+            {"Authorization": "Bearer token"},
+            30,
+            "submit result",
+        )
+    )
+    assert await asyncio.to_thread(started.wait, 1)
+
+    submission.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(submission, timeout=1)
+
+    assert killed.is_set()
 
 
 def test_worker_post_json_curl_reports_non_2xx_body(monkeypatch):
