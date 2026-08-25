@@ -60,6 +60,7 @@ async def test_run_worker_overrides_stale_scope(tmp_path, monkeypatch):
     monkeypatch.setattr(cli.remote, "_read_worker_identity", lambda server, name=None: None)
     monkeypatch.setattr(cli.remote, "_write_worker_identity", lambda data: None)
     calls = 0
+    poll_payloads = []
 
     async def fake_post(*args, **kwargs):
         nonlocal calls
@@ -68,6 +69,7 @@ async def test_run_worker_overrides_stale_scope(tmp_path, monkeypatch):
         assert os.environ["LOCAL_SHELL_MCP_ALLOW_FULL_CONTAINER"] == "true"
         if calls == 1:
             return {"ok": True, "data": {"token": "access", "name": "worker"}}
+        poll_payloads.append(args[1])
         raise RuntimeError("stop polling")
 
     monkeypatch.setattr(cli.remote, "_worker_post_json_forever", fake_post)
@@ -75,6 +77,9 @@ async def test_run_worker_overrides_stale_scope(tmp_path, monkeypatch):
         await cli.remote.run_worker(
             "https://example.test", "invite", workdir=str(tmp_path)
         )
+
+    assert len(poll_payloads) == 1
+    assert "lane" not in poll_payloads[0]
 
 
 @pytest.mark.asyncio
@@ -93,7 +98,12 @@ async def test_run_worker_reports_version_and_applies_poll_upgrade(tmp_path, mon
         if url.endswith("/remote/register"):
             return {
                 "ok": True,
-                "data": {"token": "access", "name": "worker", "poll_timeout_s": 17},
+                "data": {
+                    "token": "access",
+                    "name": "worker",
+                    "poll_timeout_s": 17,
+                    "poll_protocol_version": cli.remote.REMOTE_WORKER_POLL_PROTOCOL_VERSION,
+                },
             }
         if upgrade_called:
             raise RuntimeError("stop polling")
@@ -156,7 +166,14 @@ async def test_run_worker_transfer_does_not_block_interactive_jobs(tmp_path, mon
 
     async def fake_post(url, payload, headers=None, timeout=None, operation="request"):
         if url.endswith("/remote/register"):
-            return {"ok": True, "data": {"token": "access", "name": "worker"}}
+            return {
+                "ok": True,
+                "data": {
+                    "token": "access",
+                    "name": "worker",
+                    "poll_protocol_version": cli.remote.REMOTE_WORKER_POLL_PROTOCOL_VERSION,
+                },
+            }
         if url.endswith("/remote/poll"):
             lane = payload["lane"]
             if lane not in served_lanes:

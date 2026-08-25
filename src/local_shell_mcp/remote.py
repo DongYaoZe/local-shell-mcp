@@ -627,6 +627,7 @@ class RemoteManager:
             "poll_interval_s": 0,
             "poll_timeout_s": get_settings().remote_poll_timeout_s,
             "heartbeat_interval_s": _remote_heartbeat_interval_s(),
+            "poll_protocol_version": REMOTE_WORKER_POLL_PROTOCOL_VERSION,
         }
 
     async def resume_worker(self, access: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -655,6 +656,7 @@ class RemoteManager:
             "poll_interval_s": 0,
             "poll_timeout_s": get_settings().remote_poll_timeout_s,
             "heartbeat_interval_s": _remote_heartbeat_interval_s(),
+            "poll_protocol_version": REMOTE_WORKER_POLL_PROTOCOL_VERSION,
         }
 
     def _default_machine_name(self, payload: dict[str, Any]) -> str:
@@ -2451,7 +2453,7 @@ class _WorkerLaneState:
 
 
 async def _worker_poll_lane(
-    lane: str,
+    lane: str | None,
     server: str,
     headers: dict[str, str],
     heartbeat_interval_s: float,
@@ -2600,6 +2602,7 @@ async def _run_worker_locked(
         machine_name = data["name"]
     heartbeat_interval_s = float(data.get("heartbeat_interval_s") or _remote_heartbeat_interval_s())
     poll_request_timeout_s = _worker_poll_request_timeout_s(data)
+    controller_poll_protocol_version = _worker_poll_protocol_version(data)
     _write_worker_identity(
         {"server": server, "name": machine_name, "access": access, "workdir": workdir}
     )
@@ -2616,6 +2619,11 @@ async def _run_worker_locked(
     lane_state = _WorkerLaneState()
     lane_state_changed = asyncio.Event()
     upgrade_lock = asyncio.Lock()
+    lanes: tuple[str | None, ...]
+    if controller_poll_protocol_version >= REMOTE_WORKER_LANE_PROTOCOL_VERSION:
+        lanes = (REMOTE_WORKER_INTERACTIVE_LANE, REMOTE_WORKER_TRANSFER_LANE)
+    else:
+        lanes = (None,)
     lane_tasks = [
         asyncio.create_task(
             _worker_poll_lane(
@@ -2628,9 +2636,9 @@ async def _run_worker_locked(
                 lane_state_changed,
                 upgrade_lock,
             ),
-            name=f"remote-worker-{lane}-lane",
+            name=f"remote-worker-{lane or 'legacy'}-lane",
         )
-        for lane in (REMOTE_WORKER_INTERACTIVE_LANE, REMOTE_WORKER_TRANSFER_LANE)
+        for lane in lanes
     ]
     try:
         await asyncio.gather(*lane_tasks)
