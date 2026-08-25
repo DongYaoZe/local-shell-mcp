@@ -18,7 +18,11 @@ from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 
-import zstandard as zstd
+try:
+    import zstandard as zstd
+except ImportError:
+    # Remote worker bundles intentionally omit ABI-specific native dependencies.
+    zstd = None
 
 from .settings import get_settings
 from .state_store import get_state_store, state_lock
@@ -881,7 +885,7 @@ def _write_file_archive(
     parsed: list[tuple[bytes, dict[str, Any] | None, set[str]]],
     indexes: list[int],
 ) -> dict[str, Any] | None:
-    if not indexes:
+    if not indexes or zstd is None:
         return None
     start_ts, end_ts = _archive_time_bounds(parsed, indexes)
     key = _archive_key(start_ts, end_ts)
@@ -924,7 +928,7 @@ def _write_file_archive(
 def _write_state_archive(
     parsed: list[tuple[bytes, dict[str, Any] | None, set[str]]], indexes: list[int]
 ) -> dict[str, Any] | None:
-    if not indexes:
+    if not indexes or zstd is None:
         return None
     start_ts, end_ts = _archive_time_bounds(parsed, indexes)
     key = _archive_key(start_ts, end_ts)
@@ -1030,8 +1034,12 @@ def _enforce_audit_storage_limit(
     if max_archive_bytes > 0 and archived_indexes:
         try:
             archive = _write_file_archive(log_path, parsed, archived_indexes)
-        except (OSError, zstd.ZstdError):
+        except OSError:
             return False
+        except Exception as exc:
+            if zstd is not None and isinstance(exc, zstd.ZstdError):
+                return False
+            raise
         if archive is not None:
             archive_entries.append(archive)
             try:

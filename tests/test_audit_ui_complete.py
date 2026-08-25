@@ -799,6 +799,22 @@ def test_audit_retention_bounds_log_and_external_payload_bytes(tmp_path, monkeyp
     assert audit_module.get_audit_entry(second_entry["id"])["payload"] == second
 
 
+def test_audit_retention_trims_without_zstandard(tmp_path, monkeypatch):
+    _configure(tmp_path, monkeypatch)
+    monkeypatch.setenv("LOCAL_SHELL_MCP_MAX_AUDIT_LOG_BYTES", "2500")
+    monkeypatch.setenv("LOCAL_SHELL_MCP_MAX_AUDIT_ARCHIVE_BYTES", "1200")
+    monkeypatch.setattr(audit_module, "zstd", None)
+    get_settings.cache_clear()
+
+    for index in range(40):
+        audit_module.audit("no_zstd_event", index=index, detail="x" * 120)
+
+    log_path = get_settings().audit_log_path
+    assert log_path.stat().st_size <= 2500
+    assert audit_module._load_file_archive_index(log_path) == []
+    assert not list((tmp_path / audit_module._AUDIT_ARCHIVE_DIRECTORY).glob("*.jsonl.zst"))
+
+
 def test_audit_archive_budget_prunes_oldest_compressed_files(tmp_path, monkeypatch):
     _configure(tmp_path, monkeypatch)
     monkeypatch.setenv("LOCAL_SHELL_MCP_MAX_AUDIT_LOG_BYTES", "2500")
