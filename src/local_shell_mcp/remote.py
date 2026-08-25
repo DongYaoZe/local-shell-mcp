@@ -50,7 +50,7 @@ from .fs_ops import (
     write_content,
     write_text,
 )
-from .jobs import list_jobs, retry_job, start_job, stop_job, tail_job
+from .jobs import JOB_LIST_DEFAULT_LIMIT, list_jobs, retry_job, start_job, stop_job, tail_job
 from .models import ok_result as _ok
 from .patch_ops import git_apply_command, git_apply_prefix, normalize_patch_text
 from .peer_transfer import close_peer_receiver, open_peer_receiver
@@ -1698,7 +1698,10 @@ async def _execute_job_worker_tool(tool: str, args: dict[str, Any]) -> Any:
         return await start_job(args["command"], args.get("cwd", "."), args.get("name"))
 
     if tool == "job_list":
-        return await list_jobs(args.get("include_finished", True))
+        return await list_jobs(
+            args.get("include_finished", True),
+            args.get("limit", JOB_LIST_DEFAULT_LIMIT),
+        )
 
     if tool == "job_tail":
         return await tail_job(args["job_id"], args.get("lines", 200))
