@@ -47,6 +47,7 @@ from .fs_ops import (
 )
 from .image_ops import ImageFile, assert_view_image_size, read_image
 from .jobs import (
+    JOB_LIST_DEFAULT_LIMIT,
     ManagedJobContext,
     list_jobs,
     register_managed_job_handler,
@@ -2690,17 +2691,18 @@ def _register_job_tools(mcp: FastMCP, settings: Any, read_only_tool: ToolAnnotat
     @mcp.tool(structured_output=True, annotations=read_only_tool, meta=shell_read_meta)
     async def job_list(
         include_finished: bool = True,
+        limit: int = JOB_LIST_DEFAULT_LIMIT,
         machine: str | None = None,
     ) -> ToolResult:
-        """List tracked jobs locally or on a remote machine."""
+        """List tracked jobs locally or on a remote machine. Active jobs are returned first; limit is clamped to 1-1000."""
         if machine:
             return await _remote_call(
                 settings,
                 machine,
                 "job_list",
-                {"include_finished": include_finished},
+                {"include_finished": include_finished, "limit": limit},
             )
-        return await _tool_call(list_jobs, include_finished)
+        return await _tool_call(list_jobs, include_finished, limit)
 
     @mcp.tool(structured_output=True, annotations=read_only_tool, meta=shell_read_meta)
     async def job_tail(
