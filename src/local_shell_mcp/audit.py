@@ -18,16 +18,13 @@ from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 
-try:
-    import zstandard as zstd
-except ImportError:
-    # Remote worker bundles intentionally omit ABI-specific native dependencies.
-    zstd = None
-
 from .settings import get_settings
 from .state_store import get_state_store, state_lock
 
 _AUDIT_ENABLED: ContextVar[bool] = ContextVar("local_shell_mcp_audit_enabled", default=True)
+_AUDIT_ARCHIVE_ENABLED: ContextVar[bool] = ContextVar(
+    "local_shell_mcp_audit_archive_enabled", default=True
+)
 _AUDIT_CALL_ID: ContextVar[str] = ContextVar("local_shell_mcp_audit_call_id", default="")
 _AUDIT_CALL_STATE: ContextVar[dict[str, Any] | None] = ContextVar(
     "local_shell_mcp_audit_call_state", default=None
@@ -885,7 +882,7 @@ def _write_file_archive(
     parsed: list[tuple[bytes, dict[str, Any] | None, set[str]]],
     indexes: list[int],
 ) -> dict[str, Any] | None:
-    if not indexes or zstd is None:
+    if not indexes:
         return None
     start_ts, end_ts = _archive_time_bounds(parsed, indexes)
     key = _archive_key(start_ts, end_ts)
@@ -896,10 +893,12 @@ def _write_file_archive(
     remaining_payload_bytes = _AUDIT_ARCHIVE_MAX_PAYLOAD_MATERIALIZATION_BYTES
     try:
         descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        from . import audit_archive_codec
+
         with (
             os.fdopen(descriptor, "wb") as destination,
-            zstd.ZstdCompressor(level=_AUDIT_ARCHIVE_ZSTD_LEVEL).stream_writer(
-                destination, closefd=False
+            audit_archive_codec.stream_writer(
+                destination, level=_AUDIT_ARCHIVE_ZSTD_LEVEL
             ) as compressor,
         ):
             for index in indexes:
@@ -928,15 +927,17 @@ def _write_file_archive(
 def _write_state_archive(
     parsed: list[tuple[bytes, dict[str, Any] | None, set[str]]], indexes: list[int]
 ) -> dict[str, Any] | None:
-    if not indexes or zstd is None:
+    if not indexes:
         return None
     start_ts, end_ts = _archive_time_bounds(parsed, indexes)
     key = _archive_key(start_ts, end_ts)
+    from . import audit_archive_codec
+
     destination = io.BytesIO()
     raw_bytes = 0
     remaining_payload_bytes = _AUDIT_ARCHIVE_MAX_PAYLOAD_MATERIALIZATION_BYTES
-    with zstd.ZstdCompressor(level=_AUDIT_ARCHIVE_ZSTD_LEVEL).stream_writer(
-        destination, closefd=False
+    with audit_archive_codec.stream_writer(
+        destination, level=_AUDIT_ARCHIVE_ZSTD_LEVEL
     ) as compressor:
         for index in indexes:
             raw_line, record, _payload_ids = parsed[index]
@@ -1031,15 +1032,13 @@ def _enforce_audit_storage_limit(
         return _prune_payload_store(log_path)
 
     archived_indexes = _archived_source_indexes(parsed, selected)
-    if max_archive_bytes > 0 and archived_indexes:
+    if _AUDIT_ARCHIVE_ENABLED.get() and max_archive_bytes > 0 and archived_indexes:
+        from . import audit_archive_codec
+
         try:
             archive = _write_file_archive(log_path, parsed, archived_indexes)
-        except OSError:
+        except (OSError, audit_archive_codec.ZstdError):
             return False
-        except Exception as exc:
-            if zstd is not None and isinstance(exc, zstd.ZstdError):
-                return False
-            raise
         if archive is not None:
             archive_entries.append(archive)
             try:
@@ -1079,7 +1078,7 @@ def _enforce_state_audit_storage_limit(
     archive_entries = _load_state_archive_index()
     if selected is not None:
         archived_indexes = _archived_source_indexes(parsed, selected)
-        if max_archive_bytes > 0 and archived_indexes:
+        if _AUDIT_ARCHIVE_ENABLED.get() and max_archive_bytes > 0 and archived_indexes:
             archive = _write_state_archive(parsed, archived_indexes)
             if archive is not None:
                 archive_entries.append(archive)
@@ -1140,6 +1139,15 @@ def suppress_audit() -> Iterator[None]:
         yield
     finally:
         _AUDIT_ENABLED.reset(token)
+
+
+@contextmanager
+def suppress_audit_archives() -> Iterator[None]:
+    token = _AUDIT_ARCHIVE_ENABLED.set(False)
+    try:
+        yield
+    finally:
+        _AUDIT_ARCHIVE_ENABLED.reset(token)
 
 
 @contextmanager

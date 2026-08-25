@@ -139,18 +139,21 @@ def _load_config_or_migrate() -> dict[str, Any]:
 
 
 async def run_enrolled_worker() -> None:
+    from .audit import suppress_audit_archives
+
     config = _load_config_or_migrate()
     identity = remote._read_worker_identity(
         str(config["server"]), str(config.get("name") or "")
     )  # noqa: SLF001
     if not identity:
         raise RuntimeError("worker identity is missing or invalid; run the join command again")
-    await remote.run_worker(
-        str(config["server"]),
-        "",
-        str(config.get("name") or "") or None,
-        str(config.get("workdir") or "") or None,
-    )
+    with suppress_audit_archives():
+        await remote.run_worker(
+            str(config["server"]),
+            "",
+            str(config.get("name") or "") or None,
+            str(config.get("workdir") or "") or None,
+        )
 
 
 def _worker_run_exec_argv() -> list[str]:

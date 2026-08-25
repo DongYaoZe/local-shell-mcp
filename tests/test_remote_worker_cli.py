@@ -3,12 +3,36 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import subprocess
+import sys
 
 import pytest
 
+from local_shell_mcp import audit as audit_module
 from local_shell_mcp import remote_worker_cli as cli
 from local_shell_mcp import remote_worker_service as service
 from local_shell_mcp import remote_worker_state as state
+
+
+def test_worker_cli_import_does_not_require_zstandard():
+    script = r'''
+import builtins
+import sys
+
+real_import = builtins.__import__
+
+
+def guarded_import(name, globals=None, locals=None, fromlist=(), level=0):
+    if name == "zstandard":
+        raise ModuleNotFoundError("zstandard must not be imported by the worker startup path")
+    return real_import(name, globals, locals, fromlist, level)
+
+
+builtins.__import__ = guarded_import
+import local_shell_mcp.remote_worker_cli  # noqa: F401
+assert "local_shell_mcp.audit_archive_codec" not in sys.modules
+'''
+    subprocess.run([sys.executable, "-c", script], check=True, env=os.environ.copy())
 
 
 def _configure(tmp_path, monkeypatch):
@@ -295,11 +319,13 @@ async def test_run_enrolled_worker_and_migrate_legacy_identity(tmp_path, monkeyp
     calls = []
 
     async def fake_run(server, invite, name=None, workdir=None, persist=False):
+        assert audit_module._AUDIT_ARCHIVE_ENABLED.get() is False  # noqa: SLF001
         calls.append((server, invite, name, workdir, persist))
 
     monkeypatch.setattr(cli.remote, "run_worker", fake_run)
     await cli.run_enrolled_worker()
     assert calls == [("https://example.test", "", "worker-a", str(tmp_path), False)]
+    assert audit_module._AUDIT_ARCHIVE_ENABLED.get() is True  # noqa: SLF001
     assert state.worker_config_path().exists()
 
 
