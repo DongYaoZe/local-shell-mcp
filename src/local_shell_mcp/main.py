@@ -4,6 +4,9 @@ import argparse
 import os
 import sys
 
+# Long-lived MCP connections must not prevent process supervisors from observing exit.
+_GRACEFUL_SHUTDOWN_TIMEOUT_S = 10
+
 
 def _with_oauth_routes(inner_app):  # noqa: ANN001
     from contextlib import asynccontextmanager
@@ -111,6 +114,7 @@ def run_mcp() -> None:
             host=settings.host,
             port=settings.port,
             forwarded_allow_ips=settings.forwarded_allow_ips,
+            timeout_graceful_shutdown=_GRACEFUL_SHUTDOWN_TIMEOUT_S,
         )
         return
     if hasattr(mcp, "sse_app"):
@@ -125,6 +129,7 @@ def run_mcp() -> None:
             host=settings.host,
             port=settings.port,
             forwarded_allow_ips=settings.forwarded_allow_ips,
+            timeout_graceful_shutdown=_GRACEFUL_SHUTDOWN_TIMEOUT_S,
         )
         return
 
@@ -148,6 +153,7 @@ def run_http() -> None:
         host=settings.host,
         port=settings.port,
         forwarded_allow_ips=settings.forwarded_allow_ips,
+        timeout_graceful_shutdown=_GRACEFUL_SHUTDOWN_TIMEOUT_S,
     )
 
 
