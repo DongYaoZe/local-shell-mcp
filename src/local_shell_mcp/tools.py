@@ -70,7 +70,7 @@ from .oauth import ALL_OAUTH_SCOPES
 from .patch_ops import git_apply_command, git_apply_prefix, normalize_patch_text
 from .playwright_ops import playwright_run_script
 from .process_utils import managed_process_kwargs
-from .remote import remote_manager
+from .remote import REMOTE_WORKER_TRANSFER_LANE, remote_manager
 from .remote_transfer import (
     create_download_ticket,
     create_upload_ticket,
@@ -1433,7 +1433,9 @@ def _unwrap_remote_transfer_result(result: dict, *, machine: str, tool: str) -> 
 async def _remote_transfer_data(
     machine: str, tool: str, args: dict, timeout_s: int | None = None
 ) -> Any:
-    result = await remote_manager().call(machine, tool, args, timeout_s)
+    result = await remote_manager().call(
+        machine, tool, args, timeout_s, lane=REMOTE_WORKER_TRANSFER_LANE
+    )
     return _unwrap_remote_transfer_result(result, machine=machine, tool=tool)
 
 

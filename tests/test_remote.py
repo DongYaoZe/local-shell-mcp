@@ -3,6 +3,7 @@
 import asyncio
 import subprocess
 import sys
+import threading
 import urllib.error
 from io import BytesIO
 from types import SimpleNamespace
@@ -88,7 +89,7 @@ async def test_poll_requires_upgrade_before_dequeuing_jobs(tmp_path, monkeypatch
     mismatch = await manager.poll(
         worker.token,
         {
-            "protocol_version": remote.REMOTE_WORKER_POLL_PROTOCOL_VERSION,
+            "protocol_version": 1,
             "worker_version": "0.0.0",
         },
     )
@@ -100,6 +101,7 @@ async def test_poll_requires_upgrade_before_dequeuing_jobs(tmp_path, monkeypatch
     }
     assert worker.queue.qsize() == 1
     assert worker.info["lsm_version"] == "0.0.0"
+    assert worker.info["poll_protocol_version"] == 1
 
     matched = await manager.poll(
         worker.token,
@@ -154,6 +156,130 @@ async def test_remote_queue_is_bounded_per_worker(tmp_path, monkeypatch):
 
     with pytest.raises(RuntimeError, match="queue is full"):
         await manager.call("worker-a", "list_files", {"path": "."}, timeout_s=1)
+
+
+@pytest.mark.asyncio
+async def test_lane_aware_worker_routes_transfer_jobs_separately(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOCAL_SHELL_MCP_WORKSPACE_ROOT", str(tmp_path))
+    monkeypatch.setenv("LOCAL_SHELL_MCP_STATE_DIR", str(tmp_path / ".state"))
+    get_settings.cache_clear()
+    manager = remote.RemoteManager()
+    worker = remote.RemoteWorker(
+        name="worker-a",
+        token="token-a",
+        info={"poll_protocol_version": remote.REMOTE_WORKER_POLL_PROTOCOL_VERSION},
+    )
+    manager.workers[worker.name] = worker
+    manager.tokens[worker.token] = worker.name
+
+    transfer_call = asyncio.create_task(
+        manager.call("worker-a", "transfer_stat", {"path": "."}, timeout_s=2)
+    )
+    interactive_call = asyncio.create_task(
+        manager.call("worker-a", "list_files", {"path": "."}, timeout_s=2)
+    )
+    await asyncio.sleep(0)
+
+    interactive = await manager.poll(
+        worker.token,
+        {
+            "protocol_version": remote.REMOTE_WORKER_POLL_PROTOCOL_VERSION,
+            "worker_version": remote.__version__,
+            "lane": remote.REMOTE_WORKER_INTERACTIVE_LANE,
+        },
+    )
+    transfer = await manager.poll(
+        worker.token,
+        {
+            "protocol_version": remote.REMOTE_WORKER_POLL_PROTOCOL_VERSION,
+            "worker_version": remote.__version__,
+            "lane": remote.REMOTE_WORKER_TRANSFER_LANE,
+        },
+    )
+
+    assert interactive["job"]["tool"] == "list_files"
+    assert transfer["job"]["tool"] == "transfer_stat"
+    await manager.submit_result(
+        worker.token,
+        {"job_id": interactive["job"]["id"], "ok": True, "data": []},
+    )
+    await manager.submit_result(
+        worker.token,
+        {"job_id": transfer["job"]["id"], "ok": True, "data": {"type": "directory"}},
+    )
+    await interactive_call
+    await transfer_call
+
+
+@pytest.mark.asyncio
+async def test_invalid_worker_poll_protocol_uses_legacy_queue(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOCAL_SHELL_MCP_WORKSPACE_ROOT", str(tmp_path))
+    monkeypatch.setenv("LOCAL_SHELL_MCP_STATE_DIR", str(tmp_path / ".state"))
+    get_settings.cache_clear()
+    manager = remote.RemoteManager()
+    worker = remote.RemoteWorker(
+        name="worker-a",
+        token="token-a",
+        info={"poll_protocol_version": "future"},
+    )
+    manager.workers[worker.name] = worker
+    manager.tokens[worker.token] = worker.name
+
+    call = asyncio.create_task(
+        manager.call("worker-a", "transfer_stat", {"path": "."}, timeout_s=2)
+    )
+    await asyncio.sleep(0)
+
+    assert worker.queue.qsize() == 1
+    assert worker.transfer_queue.qsize() == 0
+    polled = await manager.poll(
+        worker.token,
+        {"protocol_version": 1, "worker_version": remote.__version__},
+    )
+    await manager.submit_result(
+        worker.token,
+        {"job_id": polled["job"]["id"], "ok": True, "data": {"type": "directory"}},
+    )
+    await call
+
+
+@pytest.mark.asyncio
+async def test_lane_upgrade_migrates_queued_transfer_jobs(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOCAL_SHELL_MCP_WORKSPACE_ROOT", str(tmp_path))
+    monkeypatch.setenv("LOCAL_SHELL_MCP_STATE_DIR", str(tmp_path / ".state"))
+    get_settings.cache_clear()
+    manager = remote.RemoteManager()
+    worker = remote.RemoteWorker(
+        name="worker-a",
+        token="token-a",
+        info={"poll_protocol_version": 1},
+    )
+    manager.workers[worker.name] = worker
+    manager.tokens[worker.token] = worker.name
+
+    call = asyncio.create_task(
+        manager.call("worker-a", "transfer_stat", {"path": "."}, timeout_s=2)
+    )
+    await asyncio.sleep(0)
+    assert worker.queue.qsize() == 1
+    assert worker.transfer_queue.qsize() == 0
+
+    polled = await manager.poll(
+        worker.token,
+        {
+            "protocol_version": remote.REMOTE_WORKER_POLL_PROTOCOL_VERSION,
+            "worker_version": remote.__version__,
+            "lane": remote.REMOTE_WORKER_TRANSFER_LANE,
+        },
+    )
+
+    assert polled["job"]["tool"] == "transfer_stat"
+    assert worker.queue.qsize() == 0
+    await manager.submit_result(
+        worker.token,
+        {"job_id": polled["job"]["id"], "ok": True, "data": {"type": "directory"}},
+    )
+    await call
 
 @pytest.mark.asyncio
 async def test_join_script_loads_vendored_worker_dependencies(tmp_path, monkeypatch):
@@ -223,6 +349,51 @@ def test_worker_post_json_uses_curl_and_parses_success(monkeypatch):
     assert body == b'{"invite": "abc"}'
     assert check is False
     assert creationflags == remote._worker_subprocess_creationflags()  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_worker_result_cancellation_terminates_active_curl(monkeypatch):
+    started = threading.Event()
+    killed = threading.Event()
+
+    class FakePopen:
+        def __init__(self, command, *, stdin, stdout, stderr, creationflags):  # noqa: ANN001
+            assert command[0] == "/usr/bin/curl"
+            assert stdin is subprocess.PIPE
+            assert stdout is subprocess.PIPE
+            assert stderr is subprocess.PIPE
+            assert creationflags == remote._worker_subprocess_creationflags()  # noqa: SLF001
+            self.returncode = None
+
+        def communicate(self, input):  # noqa: A002, ANN001
+            assert input == b'{"job_id": "job-1"}'
+            started.set()
+            killed.wait(1)
+            self.returncode = -9
+            return b"", b"terminated"
+
+        def kill(self):
+            killed.set()
+
+    monkeypatch.setattr(remote.shutil, "which", lambda name: "/usr/bin/curl" if name == "curl" else None)
+    monkeypatch.setattr(remote.subprocess, "Popen", FakePopen)
+
+    submission = asyncio.create_task(
+        remote._worker_post_json_forever(  # noqa: SLF001
+            "https://example.test/remote/result",
+            {"job_id": "job-1"},
+            {"Authorization": "Bearer token"},
+            30,
+            "submit result",
+        )
+    )
+    assert await asyncio.to_thread(started.wait, 1)
+
+    submission.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(submission, timeout=1)
+
+    assert killed.is_set()
 
 
 def test_worker_post_json_curl_reports_non_2xx_body(monkeypatch):
@@ -578,15 +749,16 @@ async def test_worker_result_submission_sends_heartbeats_while_retrying(monkeypa
     def fake_post(url, payload, request_headers=None, timeout=None):
         nonlocal result_attempts
         assert request_headers == headers
-        assert timeout == 30
         if url.endswith("/result"):
+            assert timeout == remote._worker_result_request_timeout_s(result)  # noqa: SLF001
             assert payload == result
             result_attempts += 1
             if result_attempts < 3:
                 raise RuntimeError(f"temporary result failure {result_attempts}")
             return {"ok": True, "data": {"accepted": True}}
         assert url.endswith("/heartbeat")
-        assert payload == {}
+        assert timeout == 30
+        assert payload == {"job_id": "job-1"}
         heartbeat_calls.append(url)
         return {"ok": True, "data": {"accepted": True}}
 
@@ -607,6 +779,52 @@ async def test_worker_result_submission_sends_heartbeats_while_retrying(monkeypa
     heartbeat_count = len(heartbeat_calls)
     await asyncio.sleep(0.02)
     assert len(heartbeat_calls) == heartbeat_count
+
+
+def test_worker_result_request_timeout_scales_with_payload_size():
+    small = {"job_id": "job-1", "ok": True, "data": {"stdout": "ok"}}
+    large = {"job_id": "job-1", "ok": True, "data": {"stdout": "x" * (3 * 1024 * 1024)}}
+
+    assert remote._worker_result_request_timeout_s(small) == 30  # noqa: SLF001
+    assert remote._worker_result_request_timeout_s(large) > 120  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_worker_result_submission_stops_when_controller_cancels(monkeypatch):
+    result_attempts = 0
+    heartbeat_calls = []
+    result = {"job_id": "job-1", "ok": True, "data": {"stdout": "x"}}
+    headers = {"Authorization": "Bearer token"}
+
+    def fake_post(url, payload, request_headers=None, timeout=None):
+        nonlocal result_attempts
+        assert request_headers == headers
+        if url.endswith("/result"):
+            result_attempts += 1
+            raise RuntimeError("slow result upload")
+        assert url.endswith("/heartbeat")
+        assert timeout == 30
+        assert payload == {"job_id": "job-1"}
+        heartbeat_calls.append(payload)
+        return {"ok": True, "data": {"accepted": True, "cancelled": True}}
+
+    monkeypatch.setattr(remote, "_worker_post_json", fake_post)
+    monkeypatch.setattr(remote, "_WORKER_RETRY_INITIAL_DELAY_S", 0.05)
+    monkeypatch.setattr(remote, "_WORKER_RETRY_MAX_DELAY_S", 0.05)
+
+    response = await remote._submit_worker_result_with_heartbeat(  # noqa: SLF001
+        result,
+        "https://example.test",
+        headers,
+        0.005,
+    )
+
+    assert response == {"ok": True, "data": {"accepted": False, "cancelled": True}}
+    assert result_attempts >= 1
+    assert heartbeat_calls == [{"job_id": "job-1"}]
+    attempts_after_cancel = result_attempts
+    await asyncio.sleep(0.06)
+    assert result_attempts == attempts_after_cancel
 
 
 @pytest.mark.asyncio

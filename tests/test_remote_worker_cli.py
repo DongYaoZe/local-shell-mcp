@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 
@@ -59,6 +60,7 @@ async def test_run_worker_overrides_stale_scope(tmp_path, monkeypatch):
     monkeypatch.setattr(cli.remote, "_read_worker_identity", lambda server, name=None: None)
     monkeypatch.setattr(cli.remote, "_write_worker_identity", lambda data: None)
     calls = 0
+    poll_payloads = []
 
     async def fake_post(*args, **kwargs):
         nonlocal calls
@@ -67,6 +69,7 @@ async def test_run_worker_overrides_stale_scope(tmp_path, monkeypatch):
         assert os.environ["LOCAL_SHELL_MCP_ALLOW_FULL_CONTAINER"] == "true"
         if calls == 1:
             return {"ok": True, "data": {"token": "access", "name": "worker"}}
+        poll_payloads.append(args[1])
         raise RuntimeError("stop polling")
 
     monkeypatch.setattr(cli.remote, "_worker_post_json_forever", fake_post)
@@ -74,6 +77,9 @@ async def test_run_worker_overrides_stale_scope(tmp_path, monkeypatch):
         await cli.remote.run_worker(
             "https://example.test", "invite", workdir=str(tmp_path)
         )
+
+    assert len(poll_payloads) == 1
+    assert "lane" not in poll_payloads[0]
 
 
 @pytest.mark.asyncio
@@ -85,14 +91,22 @@ async def test_run_worker_reports_version_and_applies_poll_upgrade(tmp_path, mon
     monkeypatch.setattr(cli.remote, "_read_worker_identity", lambda server, name=None: None)
     monkeypatch.setattr(cli.remote, "_write_worker_identity", lambda data: None)
     calls = []
+    upgrade_called = False
 
     async def fake_post(url, payload, headers=None, timeout=None, operation="request"):
         calls.append((url, payload, headers, timeout, operation))
         if url.endswith("/remote/register"):
             return {
                 "ok": True,
-                "data": {"token": "access", "name": "worker", "poll_timeout_s": 17},
+                "data": {
+                    "token": "access",
+                    "name": "worker",
+                    "poll_timeout_s": 17,
+                    "poll_protocol_version": cli.remote.REMOTE_WORKER_POLL_PROTOCOL_VERSION,
+                },
             }
+        if upgrade_called:
+            raise RuntimeError("stop polling")
         return {
             "ok": True,
             "data": {
@@ -102,25 +116,100 @@ async def test_run_worker_reports_version_and_applies_poll_upgrade(tmp_path, mon
         }
 
     async def fake_upgrade(server, target_version):
+        nonlocal upgrade_called
         assert server == "https://example.test"
         assert target_version == "9.9.9"
-        raise SystemExit(0)
+        upgrade_called = True
+        raise RuntimeError("upgrade failed")
 
     monkeypatch.setattr(cli.remote, "_worker_post_json_forever", fake_post)
     monkeypatch.setattr(cli.remote, "_upgrade_worker_runtime", fake_upgrade)
+    monkeypatch.setattr(cli.remote, "_worker_retry_delay", lambda attempt: 0)
 
-    with pytest.raises(SystemExit):
+    with pytest.raises(RuntimeError, match="stop polling"):
         await cli.remote.run_worker(
             "https://example.test", "invite", workdir=str(tmp_path)
         )
 
+    assert upgrade_called is True
     assert calls[1][3] == 27
     poll_payload = calls[1][1]
     assert poll_payload == {
         "protocol_version": cli.remote.REMOTE_WORKER_POLL_PROTOCOL_VERSION,
         "worker_version": cli.remote.__version__,
         "poll_timeout_s": 17,
+        "lane": "interactive",
     }
+
+
+@pytest.mark.asyncio
+async def test_run_worker_transfer_does_not_block_interactive_jobs(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOCAL_SHELL_MCP_WORKSPACE_ROOT", str(tmp_path))
+    monkeypatch.setenv("LOCAL_SHELL_MCP_ALLOW_FULL_CONTAINER", "false")
+    monkeypatch.setattr(cli.remote, "worker_capabilities", lambda: [])
+    monkeypatch.setattr(cli.remote, "worker_info", lambda workdir: {})
+    monkeypatch.setattr(cli.remote, "_read_worker_identity", lambda server, name=None: None)
+    monkeypatch.setattr(cli.remote, "_write_worker_identity", lambda data: None)
+
+    transfer_started = asyncio.Event()
+    interactive_result_submitted = asyncio.Event()
+    served_lanes = set()
+    submitted_results = []
+
+    async def fake_execute(tool, args):
+        if tool == "transfer_upload_url":
+            transfer_started.set()
+            await asyncio.Event().wait()
+        assert tool == "run_shell"
+        assert transfer_started.is_set()
+        return {"exit_code": 0, "stdout": "ok\n"}
+
+    async def fake_post(url, payload, headers=None, timeout=None, operation="request"):
+        if url.endswith("/remote/register"):
+            return {
+                "ok": True,
+                "data": {
+                    "token": "access",
+                    "name": "worker",
+                    "poll_protocol_version": cli.remote.REMOTE_WORKER_POLL_PROTOCOL_VERSION,
+                },
+            }
+        if url.endswith("/remote/poll"):
+            lane = payload["lane"]
+            if lane not in served_lanes:
+                served_lanes.add(lane)
+                if lane == "transfer":
+                    return {
+                        "ok": True,
+                        "data": {
+                            "job": {
+                                "id": "transfer",
+                                "tool": "transfer_upload_url",
+                                "args": {},
+                            },
+                        },
+                    }
+                return {
+                    "ok": True,
+                    "data": {"job": {"id": "interactive", "tool": "run_shell", "args": {}}},
+                }
+            await asyncio.wait_for(interactive_result_submitted.wait(), timeout=1)
+            raise RuntimeError("stop polling")
+        if url.endswith("/remote/result"):
+            submitted_results.append(payload)
+            if payload.get("job_id") == "interactive":
+                interactive_result_submitted.set()
+            return {"ok": True, "data": {"accepted": True}}
+        raise AssertionError(url)
+
+    monkeypatch.setattr(cli.remote, "execute_worker_tool", fake_execute)
+    monkeypatch.setattr(cli.remote, "_worker_post_json_forever", fake_post)
+
+    with pytest.raises(RuntimeError, match="stop polling"):
+        await cli.remote.run_worker("https://example.test", "invite", workdir=str(tmp_path))
+
+    assert interactive_result_submitted.is_set()
+    assert [result["job_id"] for result in submitted_results] == ["interactive"]
 
 
 @pytest.mark.asyncio
