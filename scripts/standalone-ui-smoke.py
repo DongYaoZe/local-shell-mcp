@@ -137,17 +137,28 @@ TERMINAL_QUERY_RESPONSES = (
 )
 
 
-def terminal_query_responses(chunk: bytes) -> tuple[bytes, ...]:
-    return tuple(response for query, response in TERMINAL_QUERY_RESPONSES if query in chunk)
+def scan_terminal_queries(chunk: bytes) -> tuple[tuple[bytes, ...], bytes]:
+    responses: list[bytes] = []
+    offset = 0
+    while offset < len(chunk):
+        matched = False
+        for query, response in TERMINAL_QUERY_RESPONSES:
+            if chunk.startswith(query, offset):
+                responses.append(response)
+                offset += len(query)
+                matched = True
+                break
+        if not matched:
+            offset += 1
 
-
-def terminal_query_tail(chunk: bytes) -> bytes:
     max_prefix = max(len(query) for query, _response in TERMINAL_QUERY_RESPONSES) - 1
+    tail = b""
     for length in range(min(len(chunk), max_prefix), 0, -1):
         suffix = chunk[-length:]
-        if any(query.startswith(suffix) for query, _response in TERMINAL_QUERY_RESPONSES):
-            return suffix
-    return b""
+        if any(len(suffix) < len(query) and query.startswith(suffix) for query, _response in TERMINAL_QUERY_RESPONSES):
+            tail = suffix
+            break
+    return tuple(responses), tail
 
 
 async def exercise_native_terminal(port: int) -> None:
@@ -191,9 +202,9 @@ async def exercise_native_terminal(port: int) -> None:
                     )
                     output.extend(chunk)
                     query_chunk = query_tail + chunk
-                    for response in terminal_query_responses(query_chunk):
+                    responses, query_tail = scan_terminal_queries(query_chunk)
+                    for response in responses:
                         await websocket.send(response)
-                    query_tail = terminal_query_tail(query_chunk)
                 if marker in output:
                     break
     finally:
