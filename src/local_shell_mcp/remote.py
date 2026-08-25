@@ -2172,7 +2172,6 @@ def _worker_post_json(
 _WORKER_RETRY_INITIAL_DELAY_S = 1.0
 _WORKER_RETRY_MAX_DELAY_S = 30.0
 _WORKER_RESULT_MIN_TIMEOUT_S = 30.0
-_WORKER_RESULT_MAX_TIMEOUT_S = 120.0
 _WORKER_RESULT_TIMEOUT_GRACE_S = 15.0
 _WORKER_RESULT_MIN_UPLOAD_BYTES_PER_S = 16 * 1024
 
@@ -2180,12 +2179,9 @@ _WORKER_RESULT_MIN_UPLOAD_BYTES_PER_S = 16 * 1024
 def _worker_result_request_timeout_s(result: dict[str, Any]) -> float:
     body_bytes = len(json.dumps(result).encode("utf-8"))
     transfer_budget_s = body_bytes / _WORKER_RESULT_MIN_UPLOAD_BYTES_PER_S
-    return min(
-        _WORKER_RESULT_MAX_TIMEOUT_S,
-        max(
-            _WORKER_RESULT_MIN_TIMEOUT_S,
-            _WORKER_RESULT_TIMEOUT_GRACE_S + transfer_budget_s,
-        ),
+    return max(
+        _WORKER_RESULT_MIN_TIMEOUT_S,
+        _WORKER_RESULT_TIMEOUT_GRACE_S + transfer_budget_s,
     )
 
 

@@ -737,10 +737,10 @@ async def test_worker_result_submission_sends_heartbeats_while_retrying(monkeypa
 
 def test_worker_result_request_timeout_scales_with_payload_size():
     small = {"job_id": "job-1", "ok": True, "data": {"stdout": "ok"}}
-    large = {"job_id": "job-1", "ok": True, "data": {"stdout": "x" * (1400 * 1024)}}
+    large = {"job_id": "job-1", "ok": True, "data": {"stdout": "x" * (3 * 1024 * 1024)}}
 
     assert remote._worker_result_request_timeout_s(small) == 30  # noqa: SLF001
-    assert 30 < remote._worker_result_request_timeout_s(large) <= 120  # noqa: SLF001
+    assert remote._worker_result_request_timeout_s(large) > 120  # noqa: SLF001
 
 
 @pytest.mark.asyncio
