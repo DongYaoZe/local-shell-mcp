@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 import sys
+from contextlib import nullcontext
 
 import pytest
 
@@ -319,13 +320,11 @@ async def test_run_enrolled_worker_and_migrate_legacy_identity(tmp_path, monkeyp
     calls = []
 
     async def fake_run(server, invite, name=None, workdir=None, persist=False):
-        assert audit_module._AUDIT_ARCHIVE_ENABLED.get() is False  # noqa: SLF001
         calls.append((server, invite, name, workdir, persist))
 
     monkeypatch.setattr(cli.remote, "run_worker", fake_run)
     await cli.run_enrolled_worker()
     assert calls == [("https://example.test", "", "worker-a", str(tmp_path), False)]
-    assert audit_module._AUDIT_ARCHIVE_ENABLED.get() is True  # noqa: SLF001
     assert state.worker_config_path().exists()
 
 
@@ -336,6 +335,20 @@ async def test_run_enrolled_worker_rejects_missing_identity(tmp_path, monkeypatc
     monkeypatch.setattr(cli.remote, "_read_worker_identity", lambda server, name=None: None)
     with pytest.raises(RuntimeError, match="join command again"):
         await cli.run_enrolled_worker()
+
+
+def test_legacy_worker_cli_suppresses_audit_archives(monkeypatch):
+    monkeypatch.setattr(service, "worker_run_lock", nullcontext)
+    observed = []
+
+    async def fake_locked(server, invite, name=None, workdir=None, persist=False):
+        observed.append(audit_module._AUDIT_ARCHIVE_ENABLED.get())  # noqa: SLF001
+
+    monkeypatch.setattr(cli.remote, "_run_worker_locked", fake_locked)
+    cli.remote.run_worker_cli(["--server", "https://example.test", "--invite", "x"])
+
+    assert observed == [False]
+    assert audit_module._AUDIT_ARCHIVE_ENABLED.get() is True  # noqa: SLF001
 
 
 def test_cli_legacy_and_lifecycle_dispatch(tmp_path, monkeypatch, capsys):
