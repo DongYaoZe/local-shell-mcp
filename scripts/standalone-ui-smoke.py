@@ -128,19 +128,26 @@ def api_request(
     return payload.get("data") or {}
 
 
+TERMINAL_QUERY_RESPONSES = (
+    (b"\x1b[c", b"\x1b[?1;2c"),
+    (b"\x1b[>c", b"\x1b[>0;10;1c"),
+    (b"\x1b[5n", b"\x1b[0n"),
+    (b"\x1b[6n", b"\x1b[1;1R"),
+    (b"\x1b[?6n", b"\x1b[?1;1R"),
+)
+
+
 def terminal_query_responses(chunk: bytes) -> tuple[bytes, ...]:
-    responses: list[bytes] = []
-    queries = (
-        (b"\x1b[c", b"\x1b[?1;2c"),
-        (b"\x1b[>c", b"\x1b[>0;10;1c"),
-        (b"\x1b[5n", b"\x1b[0n"),
-        (b"\x1b[6n", b"\x1b[1;1R"),
-        (b"\x1b[?6n", b"\x1b[?1;1R"),
-    )
-    for query, response in queries:
-        if query in chunk:
-            responses.append(response)
-    return tuple(responses)
+    return tuple(response for query, response in TERMINAL_QUERY_RESPONSES if query in chunk)
+
+
+def terminal_query_tail(chunk: bytes) -> bytes:
+    max_prefix = max(len(query) for query, _response in TERMINAL_QUERY_RESPONSES) - 1
+    for length in range(min(len(chunk), max_prefix), 0, -1):
+        suffix = chunk[-length:]
+        if any(query.startswith(suffix) for query, _response in TERMINAL_QUERY_RESPONSES):
+            return suffix
+    return b""
 
 
 async def exercise_native_terminal(port: int) -> None:
@@ -159,6 +166,7 @@ async def exercise_native_terminal(port: int) -> None:
     )
     marker = b"native-terminal-smoke-ok"
     output = bytearray()
+    query_tail = b""
     try:
         async with websockets.connect(
             uri,
@@ -182,8 +190,10 @@ async def exercise_native_terminal(port: int) -> None:
                         else message
                     )
                     output.extend(chunk)
-                    for response in terminal_query_responses(chunk):
+                    query_chunk = query_tail + chunk
+                    for response in terminal_query_responses(query_chunk):
                         await websocket.send(response)
+                    query_tail = terminal_query_tail(query_chunk)
                 if marker in output:
                     break
     finally:
