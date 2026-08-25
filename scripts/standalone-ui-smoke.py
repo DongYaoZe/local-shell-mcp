@@ -128,6 +128,21 @@ def api_request(
     return payload.get("data") or {}
 
 
+def terminal_query_responses(chunk: bytes) -> tuple[bytes, ...]:
+    responses: list[bytes] = []
+    queries = (
+        (b"\x1b[c", b"\x1b[?1;2c"),
+        (b"\x1b[>c", b"\x1b[>0;10;1c"),
+        (b"\x1b[5n", b"\x1b[0n"),
+        (b"\x1b[6n", b"\x1b[1;1R"),
+        (b"\x1b[?6n", b"\x1b[?1;1R"),
+    )
+    for query, response in queries:
+        if query in chunk:
+            responses.append(response)
+    return tuple(responses)
+
+
 async def exercise_native_terminal(port: int) -> None:
     started = api_request(
         port,
@@ -161,11 +176,14 @@ async def exercise_native_terminal(port: int) -> None:
                         message = await asyncio.wait_for(websocket.recv(), timeout=remaining)
                     except TimeoutError:
                         break
-                    output.extend(
+                    chunk = (
                         message.encode("utf-8", errors="replace")
                         if isinstance(message, str)
                         else message
                     )
+                    output.extend(chunk)
+                    for response in terminal_query_responses(chunk):
+                        await websocket.send(response)
                 if marker in output:
                     break
     finally:
