@@ -2633,9 +2633,10 @@ async def run_worker(
     workdir: str | None = None,
     persist: bool = False,
 ) -> None:
+    from .audit import suppress_audit_archives
     from .remote_worker_service import worker_run_lock
 
-    with worker_run_lock():
+    with worker_run_lock(), suppress_audit_archives():
         await _run_worker_locked(server, invite, name, workdir, persist)
 
 

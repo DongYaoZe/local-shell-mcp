@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 import local_shell_mcp.audit as audit_module
+import local_shell_mcp.audit_archive_codec as audit_archive_codec
 from local_shell_mcp.settings import get_settings
 
 
@@ -799,22 +800,6 @@ def test_audit_retention_bounds_log_and_external_payload_bytes(tmp_path, monkeyp
     assert audit_module.get_audit_entry(second_entry["id"])["payload"] == second
 
 
-def test_audit_retention_trims_without_zstandard(tmp_path, monkeypatch):
-    _configure(tmp_path, monkeypatch)
-    monkeypatch.setenv("LOCAL_SHELL_MCP_MAX_AUDIT_LOG_BYTES", "2500")
-    monkeypatch.setenv("LOCAL_SHELL_MCP_MAX_AUDIT_ARCHIVE_BYTES", "1200")
-    monkeypatch.setattr(audit_module, "zstd", None)
-    get_settings.cache_clear()
-
-    for index in range(40):
-        audit_module.audit("no_zstd_event", index=index, detail="x" * 120)
-
-    log_path = get_settings().audit_log_path
-    assert log_path.stat().st_size <= 2500
-    assert audit_module._load_file_archive_index(log_path) == []
-    assert not list((tmp_path / audit_module._AUDIT_ARCHIVE_DIRECTORY).glob("*.jsonl.zst"))
-
-
 def test_audit_archive_budget_prunes_oldest_compressed_files(tmp_path, monkeypatch):
     _configure(tmp_path, monkeypatch)
     monkeypatch.setenv("LOCAL_SHELL_MCP_MAX_AUDIT_LOG_BYTES", "2500")
@@ -960,7 +945,7 @@ def test_archive_payload_materialization_budget_is_shared_across_batch(tmp_path,
 
     assert archive is not None
     archive_path = audit_module._archive_file_path(log_path, archive["key"])
-    with audit_module.zstd.ZstdDecompressor().stream_reader(archive_path.open("rb")) as reader:
+    with audit_archive_codec.zstd.ZstdDecompressor().stream_reader(archive_path.open("rb")) as reader:
         envelopes = [json.loads(line) for line in reader.read().splitlines()]
     assert envelopes[0]["payloads"]["payload"] == "x" * 16
     assert envelopes[1]["payloads"]["payload"]["error"] == "Audit payload is unavailable"

@@ -3,12 +3,37 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import subprocess
+import sys
+from contextlib import nullcontext
 
 import pytest
 
+from local_shell_mcp import audit as audit_module
 from local_shell_mcp import remote_worker_cli as cli
 from local_shell_mcp import remote_worker_service as service
 from local_shell_mcp import remote_worker_state as state
+
+
+def test_worker_cli_import_does_not_require_zstandard():
+    script = r'''
+import builtins
+import sys
+
+real_import = builtins.__import__
+
+
+def guarded_import(name, globals=None, locals=None, fromlist=(), level=0):
+    if name == "zstandard":
+        raise ModuleNotFoundError("zstandard must not be imported by the worker startup path")
+    return real_import(name, globals, locals, fromlist, level)
+
+
+builtins.__import__ = guarded_import
+import local_shell_mcp.remote_worker_cli  # noqa: F401
+assert "local_shell_mcp.audit_archive_codec" not in sys.modules
+'''
+    subprocess.run([sys.executable, "-c", script], check=True, env=os.environ.copy())
 
 
 def _configure(tmp_path, monkeypatch):
@@ -310,6 +335,20 @@ async def test_run_enrolled_worker_rejects_missing_identity(tmp_path, monkeypatc
     monkeypatch.setattr(cli.remote, "_read_worker_identity", lambda server, name=None: None)
     with pytest.raises(RuntimeError, match="join command again"):
         await cli.run_enrolled_worker()
+
+
+def test_legacy_worker_cli_suppresses_audit_archives(monkeypatch):
+    monkeypatch.setattr(service, "worker_run_lock", nullcontext)
+    observed = []
+
+    async def fake_locked(server, invite, name=None, workdir=None, persist=False):
+        observed.append(audit_module._AUDIT_ARCHIVE_ENABLED.get())  # noqa: SLF001
+
+    monkeypatch.setattr(cli.remote, "_run_worker_locked", fake_locked)
+    cli.remote.run_worker_cli(["--server", "https://example.test", "--invite", "x"])
+
+    assert observed == [False]
+    assert audit_module._AUDIT_ARCHIVE_ENABLED.get() is True  # noqa: SLF001
 
 
 def test_cli_legacy_and_lifecycle_dispatch(tmp_path, monkeypatch, capsys):
