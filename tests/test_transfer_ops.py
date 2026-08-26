@@ -4,6 +4,7 @@ import asyncio
 import io
 import tarfile
 import threading
+from pathlib import Path
 
 import pytest
 
@@ -252,6 +253,36 @@ def test_directory_pack_cancellation_removes_active_archive(tmp_path, monkeypatc
     temp = root / ".local-shell-mcp" / "tmp"
     assert not list(temp.glob("transfer-pack-*"))
     assert not list(temp.glob("transfer-pack-*.local-shell-mcp-active"))
+
+
+def test_directory_pack_refreshes_archive_lease_for_directory_entries(tmp_path, monkeypatch):
+    root = _workspace(tmp_path, monkeypatch)
+    source = root / "src"
+    (source / "a" / "b" / "c").mkdir(parents=True)
+    original_refresh = transfer_module.refresh_temp_file_lease
+    refreshes: list[tuple[Path, bool]] = []
+    clock = 0.0
+
+    def advancing_monotonic():
+        nonlocal clock
+        clock += transfer_module._TEMP_LEASE_REFRESH_INTERVAL_S + 1.0
+        return clock
+
+    def record_refresh(path, *, create=True):
+        refreshes.append((path, create))
+        original_refresh(path, create=create)
+
+    monkeypatch.setattr(transfer_module.time, "monotonic", advancing_monotonic)
+    monkeypatch.setattr(transfer_module, "refresh_temp_file_lease", record_refresh)
+    monkeypatch.setattr(transfer_module, "_sha256_file", lambda *args, **kwargs: "digest")
+
+    pack = transfer_pack_dir("src", compression="none")
+    archive = transfer_module.resolve_path(pack["archive_path"], must_exist=True)
+    activity_refreshes = [
+        path for path, create in refreshes if path == archive and create is False
+    ]
+
+    assert len(activity_refreshes) >= 2
 
 
 def test_directory_snapshot_polls_cancellation_while_enumerating(tmp_path, monkeypatch):

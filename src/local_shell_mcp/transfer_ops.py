@@ -42,6 +42,21 @@ def _raise_if_cancelled(cancel_event: threading.Event | None) -> None:
         raise InterruptedError("transfer operation was cancelled")
 
 
+def _poll_transfer_activity(
+    cancel_event: threading.Event | None,
+    lease_path: Path | None,
+    last_refresh_at: float,
+) -> float:
+    _raise_if_cancelled(cancel_event)
+    if lease_path is None:
+        return last_refresh_at
+    now = time.monotonic()
+    if now - last_refresh_at >= _TEMP_LEASE_REFRESH_INTERVAL_S:
+        refresh_temp_file_lease(lease_path, create=False)
+        return now
+    return last_refresh_at
+
+
 class _LeaseRefreshingReader:
     def __init__(
         self,
@@ -55,11 +70,11 @@ class _LeaseRefreshingReader:
         self._last_refresh = 0.0
 
     def _before_io(self) -> None:
-        _raise_if_cancelled(self._cancel_event)
-        now = time.monotonic()
-        if now - self._last_refresh >= _TEMP_LEASE_REFRESH_INTERVAL_S:
-            refresh_temp_file_lease(self._lease_path, create=False)
-            self._last_refresh = now
+        self._last_refresh = _poll_transfer_activity(
+            self._cancel_event,
+            self._lease_path,
+            self._last_refresh,
+        )
 
     def read(self, size: int = -1) -> bytes:
         self._before_io()
@@ -107,14 +122,24 @@ def _entry_signature(path: Path) -> tuple[Any, ...]:
 def _snapshot_transferable_tree(
     path: Path,
     cancel_event: threading.Event | None = None,
+    lease_path: Path | None = None,
 ) -> dict[str, tuple[Any, ...]]:
     snapshot: dict[str, tuple[Any, ...]] = {}
+    last_lease_refresh = 0.0
+
+    def poll() -> None:
+        nonlocal last_lease_refresh
+        last_lease_refresh = _poll_transfer_activity(
+            cancel_event,
+            lease_path,
+            last_lease_refresh,
+        )
 
     def visit(directory: Path) -> None:
         children: list[Path] = []
         iterator = directory.iterdir()
         while True:
-            _raise_if_cancelled(cancel_event)
+            poll()
             try:
                 child = next(iterator)
             except StopIteration:
@@ -122,7 +147,7 @@ def _snapshot_transferable_tree(
             children.append(child)
         children.sort(key=lambda item: item.name)
         for child in children:
-            _raise_if_cancelled(cancel_event)
+            poll()
             relative = child.relative_to(path).as_posix()
             signature = _entry_signature(child)
             snapshot[relative] = signature
@@ -572,9 +597,14 @@ def transfer_pack_dir(
     archive.parent.mkdir(parents=True, exist_ok=True)
     refresh_temp_file_lease(archive)
     try:
+        last_lease_refresh = 0.0
         with tarfile.open(archive, mode) as tar:
             for relative, signature in snapshot.items():
-                _raise_if_cancelled(cancel_event)
+                last_lease_refresh = _poll_transfer_activity(
+                    cancel_event,
+                    archive,
+                    last_lease_refresh,
+                )
                 source = src / relative
                 if _entry_signature(source) != signature:
                     raise RuntimeError(
@@ -594,7 +624,7 @@ def transfer_pack_dir(
                         "source directory changed during packing; retry after writes finish"
                     )
         _raise_if_cancelled(cancel_event)
-        if _snapshot_transferable_tree(src, cancel_event) != snapshot:
+        if _snapshot_transferable_tree(src, cancel_event, archive) != snapshot:
             raise RuntimeError("source directory changed during packing; retry after writes finish")
         size = archive.stat().st_size
         digest = _sha256_file(archive, cancel_event=cancel_event)
