@@ -2048,7 +2048,7 @@ async def _copy_packed_dir_to_remote(
                 "cleanup_archive": True,
             },
         )
-    except Exception:
+    except (asyncio.CancelledError, Exception):
         await _remote_cleanup_file(dst_machine, dst_archive.get("path", ""))
         raise
     finally:
