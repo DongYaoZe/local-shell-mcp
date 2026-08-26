@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import io
 import tarfile
+import threading
 
 import pytest
 
@@ -202,6 +204,80 @@ def test_directory_pack_rejects_symlinks_before_archive_creation(tmp_path, monke
 
     with pytest.raises(ValueError, match="does not support symlinks"):
         transfer_pack_dir("src")
+
+
+def test_directory_pack_detects_concurrent_source_mutation(tmp_path, monkeypatch):
+    root = _workspace(tmp_path, monkeypatch)
+    source = root / "src" / "payload.bin"
+    source.parent.mkdir()
+    source.write_bytes(b"a" * (128 * 1024))
+    original_read = transfer_module._LeaseRefreshingReader.read
+    mutated = False
+
+    def mutate_after_read(self, size=-1):
+        nonlocal mutated
+        data = original_read(self, size)
+        if data and not mutated:
+            mutated = True
+            with source.open("ab") as handle:
+                handle.write(b"changed")
+        return data
+
+    monkeypatch.setattr(transfer_module._LeaseRefreshingReader, "read", mutate_after_read)
+
+    with pytest.raises(RuntimeError, match="source directory changed during packing"):
+        transfer_pack_dir("src", compression="none")
+
+    assert not list((root / ".local-shell-mcp" / "tmp").glob("transfer-pack-*"))
+
+
+def test_directory_pack_cancellation_removes_active_archive(tmp_path, monkeypatch):
+    root = _workspace(tmp_path, monkeypatch)
+    source = root / "src" / "payload.bin"
+    source.parent.mkdir()
+    source.write_bytes(b"a" * (128 * 1024))
+    cancel_event = threading.Event()
+    original_read = transfer_module._LeaseRefreshingReader.read
+
+    def cancel_on_first_read(self, size=-1):
+        cancel_event.set()
+        return original_read(self, size)
+
+    monkeypatch.setattr(transfer_module._LeaseRefreshingReader, "read", cancel_on_first_read)
+
+    with pytest.raises(InterruptedError, match="cancelled"):
+        transfer_pack_dir("src", compression="none", cancel_event=cancel_event)
+
+    temp = root / ".local-shell-mcp" / "tmp"
+    assert not list(temp.glob("transfer-pack-*"))
+    assert not list(temp.glob("transfer-pack-*.local-shell-mcp-active"))
+
+
+@pytest.mark.asyncio
+async def test_async_pack_cancellation_waits_for_thread_cleanup(tmp_path, monkeypatch):
+    _workspace(tmp_path, monkeypatch)
+    started = threading.Event()
+    stopped = threading.Event()
+
+    def blocking_pack(path, compression, cancel_event):
+        started.set()
+        assert cancel_event.wait(2)
+        stopped.set()
+        raise InterruptedError("transfer operation was cancelled")
+
+    monkeypatch.setattr(transfer_module, "transfer_pack_dir", blocking_pack)
+    task = asyncio.create_task(transfer_module.transfer_pack_dir_async("src", "none"))
+    for _ in range(100):
+        if started.is_set():
+            break
+        await asyncio.sleep(0.01)
+    assert started.is_set()
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert stopped.is_set()
 
 
 def test_unpack_failure_preserves_existing_destination(tmp_path, monkeypatch):

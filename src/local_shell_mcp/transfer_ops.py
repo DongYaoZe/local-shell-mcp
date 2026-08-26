@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import binascii
 import contextlib
@@ -10,6 +11,8 @@ import shutil
 import stat
 import tarfile
 import tempfile
+import threading
+import time
 import uuid
 from pathlib import Path
 from typing import Any
@@ -18,7 +21,9 @@ from .fs_ops import (
     _path_lock,
     _path_locks,
     prune_temp_dir,
+    refresh_temp_file_lease,
     relative_display,
+    release_temp_file_lease,
     resolve_path,
     temp_dir,
 )
@@ -27,6 +32,93 @@ from .settings import get_settings
 DEFAULT_TRANSFER_CHUNK_BYTES = 1024 * 1024
 MAX_TRANSFER_CHUNK_BYTES = 4 * 1024 * 1024
 _TRANSFER_TMP_MARKER = "local-shell-mcp-transfer"
+_TEMP_LEASE_REFRESH_INTERVAL_S = 1.0
+
+
+def _raise_if_cancelled(cancel_event: threading.Event | None) -> None:
+    if cancel_event is not None and cancel_event.is_set():
+        raise InterruptedError("transfer operation was cancelled")
+
+
+class _LeaseRefreshingReader:
+    def __init__(
+        self,
+        handle: Any,
+        lease_path: Path,
+        cancel_event: threading.Event | None = None,
+    ) -> None:
+        self._handle = handle
+        self._lease_path = lease_path
+        self._cancel_event = cancel_event
+        self._last_refresh = 0.0
+
+    def read(self, size: int = -1) -> bytes:
+        _raise_if_cancelled(self._cancel_event)
+        now = time.monotonic()
+        if now - self._last_refresh >= _TEMP_LEASE_REFRESH_INTERVAL_S:
+            refresh_temp_file_lease(self._lease_path, create=False)
+            self._last_refresh = now
+        data = self._handle.read(size)
+        _raise_if_cancelled(self._cancel_event)
+        return data
+
+
+def _copy_stream(
+    source: Any,
+    destination: Any,
+    *,
+    lease_path: Path,
+    cancel_event: threading.Event | None = None,
+) -> None:
+    reader = _LeaseRefreshingReader(source, lease_path, cancel_event)
+    while True:
+        chunk = reader.read(DEFAULT_TRANSFER_CHUNK_BYTES)
+        if not chunk:
+            return
+        destination.write(chunk)
+
+
+def _entry_signature(path: Path) -> tuple[Any, ...]:
+    info = path.lstat()
+    mode = info.st_mode
+    if stat.S_ISLNK(mode):
+        raise ValueError(f"directory transfer does not support symlinks: {relative_display(path)}")
+    if stat.S_ISDIR(mode):
+        return ("dir",)
+    if stat.S_ISREG(mode):
+        return ("file", info.st_size, info.st_mtime_ns, info.st_ino)
+    raise ValueError(f"directory transfer does not support special files: {relative_display(path)}")
+
+
+def _snapshot_transferable_tree(
+    path: Path,
+    cancel_event: threading.Event | None = None,
+) -> dict[str, tuple[Any, ...]]:
+    snapshot: dict[str, tuple[Any, ...]] = {}
+
+    def visit(directory: Path) -> None:
+        for child in sorted(directory.iterdir(), key=lambda item: item.name):
+            _raise_if_cancelled(cancel_event)
+            relative = child.relative_to(path).as_posix()
+            signature = _entry_signature(child)
+            snapshot[relative] = signature
+            if signature[0] == "dir":
+                visit(child)
+
+    visit(path)
+    return snapshot
+
+
+async def _run_cancellable_transfer(function: Any, *args: Any) -> dict[str, Any]:
+    cancel_event = threading.Event()
+    worker = asyncio.create_task(asyncio.to_thread(function, *args, cancel_event))
+    try:
+        return await asyncio.shield(worker)
+    except asyncio.CancelledError:
+        cancel_event.set()
+        with contextlib.suppress(Exception):
+            await asyncio.shield(worker)
+        raise
 
 
 def normalize_chunk_size(chunk_size: int | None = None) -> int:
@@ -36,19 +128,27 @@ def normalize_chunk_size(chunk_size: int | None = None) -> int:
     return min(requested, MAX_TRANSFER_CHUNK_BYTES)
 
 
-def _sha256_file(path: Path, chunk_size: int = DEFAULT_TRANSFER_CHUNK_BYTES) -> str:
+def _sha256_file(
+    path: Path,
+    chunk_size: int = DEFAULT_TRANSFER_CHUNK_BYTES,
+    cancel_event: threading.Event | None = None,
+) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as fh:
         while True:
+            _raise_if_cancelled(cancel_event)
+            refresh_temp_file_lease(path, create=False)
             chunk = fh.read(chunk_size)
             if not chunk:
                 break
             digest.update(chunk)
+    _raise_if_cancelled(cancel_event)
     return digest.hexdigest()
 
 
 def transfer_stat(path: str, sha256: bool = True) -> dict[str, Any]:
     p = resolve_path(path, must_exist=True)
+    refresh_temp_file_lease(p, create=False)
     stat = p.stat()
     if p.is_file():
         result: dict[str, Any] = {
@@ -79,6 +179,7 @@ def transfer_read_chunk(
     path: str, offset: int = 0, chunk_size: int | None = None
 ) -> dict[str, Any]:
     p = resolve_path(path, must_exist=True)
+    refresh_temp_file_lease(p, create=False)
     if not p.is_file():
         raise IsADirectoryError(str(p))
     size = p.stat().st_size
@@ -115,6 +216,7 @@ def _transfer_metadata_path(tmp: Path) -> Path:
 def _write_transfer_metadata(tmp: Path, metadata: dict[str, Any]) -> None:
     path = _transfer_metadata_path(tmp)
     temporary = path.with_name(path.name + f".{uuid.uuid4().hex}.tmp")
+    refresh_temp_file_lease(temporary)
     try:
         temporary.write_text(json.dumps(metadata, indent=2, sort_keys=True), encoding="utf-8")
         with contextlib.suppress(OSError):
@@ -122,6 +224,7 @@ def _write_transfer_metadata(tmp: Path, metadata: dict[str, Any]) -> None:
         os.replace(temporary, path)
     finally:
         temporary.unlink(missing_ok=True)
+        release_temp_file_lease(temporary)
 
 
 def _read_transfer_metadata(tmp: Path) -> dict[str, Any]:
@@ -190,6 +293,8 @@ def transfer_begin_write(
         tmp = _transfer_temp_path(dst, transfer_id)
         with tmp.open("xb"):
             pass
+        refresh_temp_file_lease(tmp)
+        refresh_temp_file_lease(_transfer_metadata_path(tmp))
         try:
             _write_transfer_metadata(
                 tmp,
@@ -202,6 +307,8 @@ def transfer_begin_write(
             )
         except Exception:
             tmp.unlink(missing_ok=True)
+            release_temp_file_lease(tmp)
+            release_temp_file_lease(_transfer_metadata_path(tmp))
             raise
     return {
         "path": relative_display(dst),
@@ -241,6 +348,8 @@ def _write_transfer_payload(
     payload: bytes,
     digest: str,
 ) -> dict[str, Any]:
+    refresh_temp_file_lease(tmp, create=False)
+    refresh_temp_file_lease(_transfer_metadata_path(tmp), create=False)
     with _path_lock(tmp):
         if not tmp.exists():
             raise FileNotFoundError(str(tmp))
@@ -291,6 +400,8 @@ def transfer_mark_complete_write(path: str, transfer_id: str) -> dict[str, Any]:
 
     dst = resolve_path(path, follow_final_symlink=False)
     tmp = _transfer_temp_path(dst, transfer_id)
+    refresh_temp_file_lease(tmp, create=False)
+    refresh_temp_file_lease(_transfer_metadata_path(tmp), create=False)
     with _path_lock(tmp):
         if not tmp.exists():
             raise FileNotFoundError(str(tmp))
@@ -317,6 +428,8 @@ def transfer_finish_write(
     dst = resolve_path(path, follow_final_symlink=False)
     tmp = _transfer_temp_path(dst, transfer_id)
     metadata_path = _transfer_metadata_path(tmp)
+    refresh_temp_file_lease(tmp, create=False)
+    refresh_temp_file_lease(metadata_path, create=False)
     with _path_locks([dst, tmp]):
         if not tmp.exists():
             raise FileNotFoundError(str(tmp))
@@ -341,6 +454,9 @@ def transfer_finish_write(
             raise FileExistsError(str(dst))
         os.replace(tmp, dst)
         metadata_path.unlink(missing_ok=True)
+        release_temp_file_lease(tmp)
+        release_temp_file_lease(metadata_path)
+        refresh_temp_file_lease(dst)
     return {
         "path": relative_display(dst),
         "bytes": size,
@@ -359,6 +475,8 @@ def transfer_abort_write(path: str, transfer_id: str) -> dict[str, Any]:
             tmp.unlink()
             deleted = True
         metadata_path.unlink(missing_ok=True)
+        release_temp_file_lease(tmp)
+        release_temp_file_lease(metadata_path)
     return {
         "path": relative_display(dst),
         "temp_path": relative_display(tmp),
@@ -376,61 +494,87 @@ def transfer_alloc_temp_path(suffix: str = ".bin") -> dict[str, Any]:
     return {"path": relative_display(path)}
 
 
-def _assert_transferable_tree(path: Path) -> None:
-    if path.is_symlink():
-        raise ValueError(f"directory transfer does not support symlinks: {relative_display(path)}")
-    for child in path.rglob("*"):
-        if child.is_symlink():
-            raise ValueError(
-                f"directory transfer does not support symlinks: {relative_display(child)}"
-            )
-        mode = child.lstat().st_mode
-        if not (stat.S_ISREG(mode) or stat.S_ISDIR(mode)):
-            raise ValueError(
-                f"directory transfer does not support special files: {relative_display(child)}"
-            )
-
-
-def transfer_pack_dir(path: str, compression: str = "gz") -> dict[str, Any]:
+def transfer_pack_dir(
+    path: str,
+    compression: str = "gz",
+    cancel_event: threading.Event | None = None,
+) -> dict[str, Any]:
     prune_temp_dir()
     if compression not in {"gz", "none"}:
         raise ValueError("compression must be 'gz' or 'none'")
     src = resolve_path(path, must_exist=True)
     if not src.is_dir():
         raise NotADirectoryError(str(src))
-    _assert_transferable_tree(src)
+    _raise_if_cancelled(cancel_event)
+    snapshot = _snapshot_transferable_tree(src, cancel_event)
     suffix = ".tar.gz" if compression == "gz" else ".tar"
     mode = "w:gz" if compression == "gz" else "w"
     archive = temp_dir() / f"transfer-pack-{uuid.uuid4().hex}{suffix}"
     archive.parent.mkdir(parents=True, exist_ok=True)
+    refresh_temp_file_lease(archive)
     try:
         with tarfile.open(archive, mode) as tar:
-            for child in src.iterdir():
-                tar.add(child, arcname=child.name, recursive=True)
+            for relative, signature in snapshot.items():
+                _raise_if_cancelled(cancel_event)
+                source = src / relative
+                if _entry_signature(source) != signature:
+                    raise RuntimeError(
+                        "source directory changed during packing; retry after writes finish"
+                    )
+                info = tar.gettarinfo(str(source), arcname=relative)
+                if signature[0] == "dir":
+                    tar.addfile(info)
+                    continue
+                with source.open("rb") as handle:
+                    tar.addfile(
+                        info,
+                        _LeaseRefreshingReader(handle, archive, cancel_event),
+                    )
+                if _entry_signature(source) != signature:
+                    raise RuntimeError(
+                        "source directory changed during packing; retry after writes finish"
+                    )
+        _raise_if_cancelled(cancel_event)
+        if _snapshot_transferable_tree(src, cancel_event) != snapshot:
+            raise RuntimeError("source directory changed during packing; retry after writes finish")
         size = archive.stat().st_size
+        digest = _sha256_file(archive, cancel_event=cancel_event)
     except Exception:
         archive.unlink(missing_ok=True)
+        release_temp_file_lease(archive)
         raise
     return {
         "path": relative_display(src),
         "archive_path": relative_display(archive),
         "bytes": size,
-        "sha256": _sha256_file(archive),
+        "sha256": digest,
         "compression": compression,
     }
 
 
-def _safe_members(tar: tarfile.TarFile, dst: Path) -> list[tarfile.TarInfo]:
+async def transfer_pack_dir_async(path: str, compression: str = "gz") -> dict[str, Any]:
+    return await _run_cancellable_transfer(transfer_pack_dir, path, compression)
+
+
+def _safe_members(
+    tar: tarfile.TarFile,
+    dst: Path,
+    cancel_event: threading.Event | None = None,
+    lease_path: Path | None = None,
+) -> list[tarfile.TarInfo]:
     settings = get_settings()
     base = dst.resolve(strict=False)
-    members = tar.getmembers()
     max_entries = max(1, settings.max_transfer_archive_entries)
-    if len(members) > max_entries:
-        raise ValueError(f"archive contains {len(members)} entries; max is {max_entries}")
     total_bytes = 0
     seen_paths: set[str] = set()
     safe: list[tarfile.TarInfo] = []
+    members = iter(tar) if hasattr(tar, "__iter__") else iter(tar.getmembers())
     for member in members:
+        _raise_if_cancelled(cancel_event)
+        if lease_path is not None:
+            refresh_temp_file_lease(lease_path, create=False)
+        if len(safe) >= max_entries:
+            raise ValueError(f"archive contains more than {max_entries} entries")
         member_path = Path(member.name)
         if member_path.is_absolute() or ".." in member_path.parts:
             raise ValueError(f"unsafe archive member path: {member.name}")
@@ -468,10 +612,13 @@ def transfer_unpack_archive(
     dst_path: str,
     overwrite: bool = True,
     cleanup_archive: bool = True,
+    cancel_event: threading.Event | None = None,
 ) -> dict[str, Any]:
     archive = resolve_path(archive_path, must_exist=True)
     if not archive.is_file():
         raise FileNotFoundError(str(archive))
+    refresh_temp_file_lease(archive, create=False)
+    _raise_if_cancelled(cancel_event)
     dst = resolve_path(dst_path, follow_final_symlink=False)
     dst.parent.mkdir(parents=True, exist_ok=True)
     staging = Path(tempfile.mkdtemp(prefix=f".{dst.name}.unpack-", dir=str(dst.parent)))
@@ -480,8 +627,9 @@ def transfer_unpack_archive(
     committed = False
     try:
         with tarfile.open(archive, "r:*") as tar:
-            members = _safe_members(tar, staging)
+            members = _safe_members(tar, staging, cancel_event, archive)
             for member in members:
+                _raise_if_cancelled(cancel_event)
                 target = staging / member.name
                 if member.isdir():
                     target.mkdir(parents=True, exist_ok=True)
@@ -492,11 +640,17 @@ def transfer_unpack_archive(
                     if source is None:
                         raise ValueError(f"archive member has no file data: {member.name}")
                     with source, target.open("xb") as out:
-                        shutil.copyfileobj(source, out)
+                        _copy_stream(
+                            source,
+                            out,
+                            lease_path=archive,
+                            cancel_event=cancel_event,
+                        )
                     os.chmod(target, member.mode & 0o777)
                     continue
                 raise ValueError(f"unsupported archive member type: {member.name}")
 
+        _raise_if_cancelled(cancel_event)
         with _path_lock(dst):
             exists = os.path.lexists(dst)
             if (
@@ -538,6 +692,8 @@ def transfer_unpack_archive(
                 cleanup_errors.append(f"could not remove transfer archive {archive}: {exc}")
             else:
                 archive_deleted = not archive.exists()
+                if archive_deleted:
+                    release_temp_file_lease(archive)
         return {
             "path": relative_display(dst),
             "archive_path": relative_display(archive),
@@ -557,3 +713,18 @@ def transfer_unpack_archive(
             if os.path.lexists(backup):
                 with contextlib.suppress(OSError):
                     _remove_existing_path(backup)
+
+
+async def transfer_unpack_archive_async(
+    archive_path: str,
+    dst_path: str,
+    overwrite: bool = True,
+    cleanup_archive: bool = True,
+) -> dict[str, Any]:
+    return await _run_cancellable_transfer(
+        transfer_unpack_archive,
+        archive_path,
+        dst_path,
+        overwrite,
+        cleanup_archive,
+    )
