@@ -82,10 +82,10 @@ from .transfer_ops import (
     transfer_begin_write,
     transfer_finish_write,
     transfer_mark_complete_write,
-    transfer_pack_dir,
+    transfer_pack_dir_async,
     transfer_read_chunk,
     transfer_stat,
-    transfer_unpack_archive,
+    transfer_unpack_archive_async,
     transfer_write_chunk,
 )
 from .version import version_info as get_version_info
@@ -122,8 +122,6 @@ REMOTE_NON_CANCELLABLE_WORKER_TOOLS = frozenset(
         "transfer_write_chunk",
         "transfer_finish_write",
         "transfer_abort_write",
-        "transfer_pack_dir",
-        "transfer_unpack_archive",
         "transfer_upload_url",
         "transfer_download_url",
         "transfer_open_receiver",
@@ -1832,13 +1830,10 @@ async def _execute_transfer_worker_tool(tool: str, args: dict[str, Any]) -> Any:
         return await asyncio.to_thread(transfer_alloc_temp_path, args.get("suffix", ".bin"))
 
     if tool == "transfer_pack_dir":
-        return await asyncio.to_thread(
-            transfer_pack_dir, args["path"], args.get("compression", "gz")
-        )
+        return await transfer_pack_dir_async(args["path"], args.get("compression", "gz"))
 
     if tool == "transfer_unpack_archive":
-        return await asyncio.to_thread(
-            transfer_unpack_archive,
+        return await transfer_unpack_archive_async(
             args["archive_path"],
             args["dst_path"],
             args.get("overwrite", True),

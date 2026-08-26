@@ -214,6 +214,41 @@ async def test_remote_cleanup_file_stays_on_transfer_lane(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_cancelled_remote_unpack_cleans_destination_archive(monkeypatch):
+    cleaned: list[tuple[str, str]] = []
+
+    async def transfer(machine, tool, args, timeout_s=None):
+        del timeout_s
+        if tool == "transfer_alloc_temp_path":
+            return {"path": "remote-transfer.tar.gz"}
+        if tool == "transfer_unpack_archive":
+            raise asyncio.CancelledError
+        raise AssertionError((machine, tool, args))
+
+    async def copy_local(*args, **kwargs):
+        del args, kwargs
+        return {"chunks": 1}
+
+    async def cleanup(machine, path):
+        cleaned.append((machine, path))
+
+    monkeypatch.setattr(tools, "_remote_transfer_data", transfer)
+    monkeypatch.setattr(tools, "_copy_local_file_to_remote", copy_local)
+    monkeypatch.setattr(tools, "_remote_cleanup_file", cleanup)
+
+    pack = {
+        "path": "src",
+        "archive_path": "source.tar.gz",
+        "bytes": 1,
+        "sha256": "digest",
+    }
+    with pytest.raises(asyncio.CancelledError):
+        await tools._copy_packed_dir_to_remote(pack, None, "worker-a", "dst", True, None)
+
+    assert cleaned == [("worker-a", "remote-transfer.tar.gz")]
+
+
+@pytest.mark.asyncio
 async def test_remote_upload_recovers_lost_chunk_acknowledgement(tmp_path, monkeypatch):
     root = _workspace(tmp_path, monkeypatch)
     (root / "src-machine").mkdir()

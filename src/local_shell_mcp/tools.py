@@ -111,9 +111,9 @@ from .transfer_ops import (
     DEFAULT_TRANSFER_CHUNK_BYTES,
     normalize_chunk_size,
     transfer_alloc_temp_path,
-    transfer_pack_dir,
+    transfer_pack_dir_async,
     transfer_stat,
-    transfer_unpack_archive,
+    transfer_unpack_archive_async,
 )
 from .version import version_info as get_version_info
 
@@ -2048,7 +2048,7 @@ async def _copy_packed_dir_to_remote(
                 "cleanup_archive": True,
             },
         )
-    except Exception:
+    except (asyncio.CancelledError, Exception):
         await _remote_cleanup_file(dst_machine, dst_archive.get("path", ""))
         raise
     finally:
@@ -2120,8 +2120,8 @@ async def _copy_remote_dir_to_local(
             total_bytes=pack["bytes"],
             chunks=copy_result["chunks"],
         )
-        unpack = await asyncio.to_thread(
-            transfer_unpack_archive, archive["path"], destination_path, overwrite, True
+        unpack = await transfer_unpack_archive_async(
+            archive["path"], destination_path, overwrite, True
         )
     finally:
         with suppress(Exception):
@@ -2146,7 +2146,7 @@ async def _copy_local_dir_to_remote(
     progress: TransferProgress | None = None,
 ) -> dict:
     await _report_transfer_progress(progress, phase="packing", bytes_transferred=0)
-    pack = await asyncio.to_thread(transfer_pack_dir, source_path, "gz")
+    pack = await transfer_pack_dir_async(source_path, "gz")
     return await _copy_packed_dir_to_remote(
         pack,
         None,

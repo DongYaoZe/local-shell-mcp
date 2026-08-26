@@ -296,6 +296,8 @@ async def test_every_worker_tool_dispatch_branch(monkeypatch, tmp_path):
         "grep",
         "playwright_run_script",
         "_apply_patch_text",
+        "transfer_pack_dir_async",
+        "transfer_unpack_archive_async",
     ):
         monkeypatch.setattr(remote, name, async_value)
     for name in (
@@ -313,8 +315,6 @@ async def test_every_worker_tool_dispatch_branch(monkeypatch, tmp_path):
         "transfer_finish_write",
         "transfer_abort_write",
         "transfer_alloc_temp_path",
-        "transfer_pack_dir",
-        "transfer_unpack_archive",
         "_worker_upload_url",
         "_worker_download_url",
     ):
@@ -592,6 +592,31 @@ async def test_remote_mutation_timeout_and_claimed_cancellation_cleanup(
     assert job_id not in manager.pending
     assert job_id not in manager.pending_machines
     assert job_id not in manager.claimed_jobs
+
+
+@pytest.mark.asyncio
+async def test_claimed_directory_pack_is_cancelled_by_controller(tmp_path, monkeypatch):
+    _configure(tmp_path, monkeypatch)
+    manager = remote.RemoteManager()
+    manager._registry_loaded = True
+    worker = remote.RemoteWorker("node", "token", last_seen=100)
+    manager.workers["node"] = worker
+    manager.tokens["token"] = "node"
+    monkeypatch.setattr(remote, "_utc", lambda: 100.0)
+
+    task = asyncio.create_task(
+        manager.call("node", "transfer_pack_dir", {"path": "large"}, timeout_s=10)
+    )
+    polled = await manager.poll("token")
+    job_id = polled["job"]["id"]
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert job_id not in manager.pending
+    assert job_id in manager.cancelled_jobs
+    heartbeat = await manager.heartbeat("token", {"job_id": job_id})
+    assert heartbeat["cancelled"] is True
 
 
 def test_worker_upload_protocol_and_generated_execution_edges(tmp_path, monkeypatch):
