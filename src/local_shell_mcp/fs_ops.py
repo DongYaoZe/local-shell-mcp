@@ -155,6 +155,28 @@ def _is_direct_temp_path(path: Path) -> bool:
         return False
 
 
+def acquire_temp_file_lease(path: Path) -> bool:
+    """Create or refresh a temp-file lease, raising if the marker cannot be written.
+
+    Returns ``True`` only when this call created the marker, which lets callers roll
+    back a lease they introduced if a following publication step fails.
+    """
+
+    if not _is_direct_temp_path(path):
+        return False
+    marker = _temp_file_lease_marker(path)
+    while True:
+        try:
+            marker.touch(exist_ok=False)
+        except FileExistsError:
+            try:
+                os.utime(marker, None)
+            except FileNotFoundError:
+                continue
+            return False
+        return True
+
+
 def refresh_temp_file_lease(path: Path, *, create: bool = True) -> None:
     """Keep a temp file out of pruning while another process may still be using it."""
 
@@ -164,7 +186,7 @@ def refresh_temp_file_lease(path: Path, *, create: bool = True) -> None:
     if not create and not marker.exists():
         return
     try:
-        marker.touch(exist_ok=True)
+        acquire_temp_file_lease(path)
     except OSError:
         return
 

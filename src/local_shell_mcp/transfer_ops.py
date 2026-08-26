@@ -14,12 +14,14 @@ import tempfile
 import threading
 import time
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 from .fs_ops import (
     _path_lock,
     _path_locks,
+    acquire_temp_file_lease,
     prune_temp_dir,
     refresh_temp_file_lease,
     relative_display,
@@ -52,15 +54,27 @@ class _LeaseRefreshingReader:
         self._cancel_event = cancel_event
         self._last_refresh = 0.0
 
-    def read(self, size: int = -1) -> bytes:
+    def _before_io(self) -> None:
         _raise_if_cancelled(self._cancel_event)
         now = time.monotonic()
         if now - self._last_refresh >= _TEMP_LEASE_REFRESH_INTERVAL_S:
             refresh_temp_file_lease(self._lease_path, create=False)
             self._last_refresh = now
+
+    def read(self, size: int = -1) -> bytes:
+        self._before_io()
         data = self._handle.read(size)
         _raise_if_cancelled(self._cancel_event)
         return data
+
+    def seek(self, offset: int, whence: int = os.SEEK_SET) -> int:
+        self._before_io()
+        result = self._handle.seek(offset, whence)
+        _raise_if_cancelled(self._cancel_event)
+        return result
+
+    def tell(self) -> int:
+        return self._handle.tell()
 
 
 def _copy_stream(
@@ -97,7 +111,17 @@ def _snapshot_transferable_tree(
     snapshot: dict[str, tuple[Any, ...]] = {}
 
     def visit(directory: Path) -> None:
-        for child in sorted(directory.iterdir(), key=lambda item: item.name):
+        children: list[Path] = []
+        iterator = directory.iterdir()
+        while True:
+            _raise_if_cancelled(cancel_event)
+            try:
+                child = next(iterator)
+            except StopIteration:
+                break
+            children.append(child)
+        children.sort(key=lambda item: item.name)
+        for child in children:
             _raise_if_cancelled(cancel_event)
             relative = child.relative_to(path).as_posix()
             signature = _entry_signature(child)
@@ -109,16 +133,46 @@ def _snapshot_transferable_tree(
     return snapshot
 
 
-async def _run_cancellable_transfer(function: Any, *args: Any) -> dict[str, Any]:
+async def _run_cancellable_transfer(
+    function: Any,
+    *args: Any,
+    cancelled_result_cleanup: Callable[[dict[str, Any]], None] | None = None,
+) -> dict[str, Any]:
     cancel_event = threading.Event()
     worker = asyncio.create_task(asyncio.to_thread(function, *args, cancel_event))
     try:
         return await asyncio.shield(worker)
     except asyncio.CancelledError:
         cancel_event.set()
-        with contextlib.suppress(Exception):
-            await asyncio.shield(worker)
+        try:
+            result = await asyncio.shield(worker)
+        except Exception:
+            pass
+        else:
+            if cancelled_result_cleanup is not None:
+                with contextlib.suppress(Exception):
+                    cancelled_result_cleanup(result)
         raise
+
+
+def _archive_path_from_result(result: dict[str, Any]) -> Path | None:
+    value = result.get("archive_path")
+    if not isinstance(value, str) or not value:
+        return None
+    path = Path(value)
+    if not path.is_absolute():
+        path = get_settings().workspace_root / path
+    return path
+
+
+def _cleanup_cancelled_pack_result(result: dict[str, Any]) -> None:
+    archive = _archive_path_from_result(result)
+    if archive is None:
+        return
+    try:
+        archive.unlink(missing_ok=True)
+    finally:
+        release_temp_file_lease(archive)
 
 
 def normalize_chunk_size(chunk_size: int | None = None) -> int:
@@ -452,11 +506,16 @@ def transfer_finish_write(
             raise ValueError("file sha256 mismatch")
         if not bool(metadata.get("overwrite", True)) and os.path.lexists(dst):
             raise FileExistsError(str(dst))
-        os.replace(tmp, dst)
+        destination_lease_created = acquire_temp_file_lease(dst)
+        try:
+            os.replace(tmp, dst)
+        except Exception:
+            if destination_lease_created:
+                release_temp_file_lease(dst)
+            raise
         metadata_path.unlink(missing_ok=True)
         release_temp_file_lease(tmp)
         release_temp_file_lease(metadata_path)
-        refresh_temp_file_lease(dst)
     return {
         "path": relative_display(dst),
         "bytes": size,
@@ -553,7 +612,12 @@ def transfer_pack_dir(
 
 
 async def transfer_pack_dir_async(path: str, compression: str = "gz") -> dict[str, Any]:
-    return await _run_cancellable_transfer(transfer_pack_dir, path, compression)
+    return await _run_cancellable_transfer(
+        transfer_pack_dir,
+        path,
+        compression,
+        cancelled_result_cleanup=_cleanup_cancelled_pack_result,
+    )
 
 
 def _safe_members(
@@ -626,29 +690,31 @@ def transfer_unpack_archive(
     members: list[tarfile.TarInfo] = []
     committed = False
     try:
-        with tarfile.open(archive, "r:*") as tar:
-            members = _safe_members(tar, staging, cancel_event, archive)
-            for member in members:
-                _raise_if_cancelled(cancel_event)
-                target = staging / member.name
-                if member.isdir():
-                    target.mkdir(parents=True, exist_ok=True)
-                    continue
-                if member.isfile():
-                    target.parent.mkdir(parents=True, exist_ok=True)
-                    source = tar.extractfile(member)
-                    if source is None:
-                        raise ValueError(f"archive member has no file data: {member.name}")
-                    with source, target.open("xb") as out:
-                        _copy_stream(
-                            source,
-                            out,
-                            lease_path=archive,
-                            cancel_event=cancel_event,
-                        )
-                    os.chmod(target, member.mode & 0o777)
-                    continue
-                raise ValueError(f"unsupported archive member type: {member.name}")
+        with archive.open("rb") as archive_handle:
+            archive_reader = _LeaseRefreshingReader(archive_handle, archive, cancel_event)
+            with tarfile.open(fileobj=archive_reader, mode="r:*") as tar:
+                members = _safe_members(tar, staging, cancel_event, archive)
+                for member in members:
+                    _raise_if_cancelled(cancel_event)
+                    target = staging / member.name
+                    if member.isdir():
+                        target.mkdir(parents=True, exist_ok=True)
+                        continue
+                    if member.isfile():
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        source = tar.extractfile(member)
+                        if source is None:
+                            raise ValueError(f"archive member has no file data: {member.name}")
+                        with source, target.open("xb") as out:
+                            _copy_stream(
+                                source,
+                                out,
+                                lease_path=archive,
+                                cancel_event=cancel_event,
+                            )
+                        os.chmod(target, member.mode & 0o777)
+                        continue
+                    raise ValueError(f"unsupported archive member type: {member.name}")
 
         _raise_if_cancelled(cancel_event)
         with _path_lock(dst):
