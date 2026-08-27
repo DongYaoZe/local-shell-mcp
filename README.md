@@ -144,6 +144,8 @@ Read the dedicated [ChatGPT connector guide](https://fwerkor.github.io/local-she
 
 ## DeepSeek Harness plugin
 
+[![dsh.so install](https://www.dsh.so/badge/install/local-shell-mcp.svg)](https://www.dsh.so/artifact/local-shell-mcp)
+
 The repository root is also a DSH plugin bundle. With a normal LSM HTTP/MCP service running on the same host, install it directly into a DSH profile:
 
 ```bash
