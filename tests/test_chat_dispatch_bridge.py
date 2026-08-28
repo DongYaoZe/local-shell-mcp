@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -277,7 +278,15 @@ class ChatDispatchBridgeTests(unittest.TestCase):
         async def listed():
             return {tool.name: tool for tool in await tools.build_mcp().list_tools()}
 
-        visible = asyncio.run(listed())
+        with patch.dict(
+            os.environ,
+            {"LOCAL_SHELL_MCP_WORKSPACE_ROOT": self.tmp.name},
+        ):
+            tools.get_settings.cache_clear()
+            try:
+                visible = asyncio.run(listed())
+            finally:
+                tools.get_settings.cache_clear()
         self.assertIn("chat_dispatch", visible)
         tool = visible["chat_dispatch"]
         self.assertTrue(tool.annotations.openWorldHint)
@@ -299,6 +308,18 @@ class ChatDispatchBridgeTests(unittest.TestCase):
 
 
 class ChatDispatchBackendContractTests(unittest.TestCase):
+    def test_path_fence_accepts_equivalent_root_alias(self):
+        configured_root = Path("configured-root")
+        module_path = Path("resolved-root") / "src" / "lws" / "chat_dispatch.py"
+
+        def samefile(candidate, expected):
+            return Path(candidate).name == "resolved-root" and Path(expected) == configured_root
+
+        with patch.object(chat_dispatch_bridge.os.path, "samefile", side_effect=samefile):
+            self.assertTrue(
+                chat_dispatch_bridge._is_path_within_root(module_path, configured_root)
+            )
+
     def test_resolve_backend_uses_configured_or_workspace_checkout(self):
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp)

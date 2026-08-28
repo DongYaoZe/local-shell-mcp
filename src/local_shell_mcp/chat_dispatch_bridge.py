@@ -26,6 +26,26 @@ _REQUIRED_BACKEND_API = (
 )
 
 
+def _is_path_within_root(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        pass
+
+    # Windows may resolve the imported module through a long path while the
+    # configured checkout retains an equivalent 8.3 alias (or vice versa).
+    # Compare existing ancestors by filesystem identity rather than weakening
+    # the fence to a case-folded or prefix-based string comparison.
+    for parent in path.parents:
+        try:
+            if os.path.samefile(parent, root):
+                return True
+        except OSError:
+            continue
+    return False
+
+
 def _resolve_lws_repo(settings: Any) -> Path:
     configured = str(getattr(settings, "chat_dispatch_lws_repo", None) or "").strip()
     if configured:
@@ -59,12 +79,10 @@ def _load_backend(settings: Any) -> tuple[Path, ModuleType]:
             sys.path.insert(0, src)
         module = importlib.import_module("lws.chat_dispatch")
         module_path = Path(getattr(module, "__file__", "")).resolve()
-        try:
-            module_path.relative_to(root)
-        except ValueError as exc:
+        if not _is_path_within_root(module_path, root):
             raise RuntimeError(
                 f"Refusing chat dispatch backend loaded from unexpected path: {module_path}"
-            ) from exc
+            )
         missing = [name for name in _REQUIRED_BACKEND_API if not hasattr(module, name)]
         if missing:
             raise RuntimeError(
