@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -20,11 +21,13 @@ from local_shell_mcp.shell_ops import (
     PUBLIC_RUN_SHELL_TIMEOUT_CAP_S,
     PUBLIC_TOOL_WATCHDOG_TIMEOUT_S,
     _close_process_transport,
+    _terminate_process_group,
     public_run_shell_timeout,
     resize_shell,
     run_shell,
     send_shell,
 )
+from local_shell_mcp.subprocess_output import decode_subprocess_output
 from local_shell_mcp.tmux_helper import TmuxSelection
 from local_shell_mcp.tools import build_mcp
 
@@ -189,6 +192,50 @@ async def test_close_process_transport_closes_stdin_and_transport():
     assert events == ["stdin-close", "stdin-wait-closed", "transport-close"]
 
 
+def test_decode_subprocess_output_handles_utf8_and_native_lines(monkeypatch):
+    monkeypatch.setattr("local_shell_mcp.subprocess_output.locale.getencoding", lambda: "cp936")
+    data = "PowerShell 中文\n".encode() + "CMD 中文\n".encode("cp936")
+
+    assert decode_subprocess_output(data) == "PowerShell 中文\nCMD 中文\n"
+
+
+@pytest.mark.asyncio
+async def test_terminate_process_group_uses_taskkill_for_windows(monkeypatch):
+    calls = []
+
+    class FakeTarget:
+        pid = 4321
+        returncode = None
+
+        def kill(self):
+            raise AssertionError("taskkill should terminate the target tree")
+
+    class FakeKiller:
+        returncode = 0
+
+        async def wait(self):
+            return self.returncode
+
+    async def fake_create_subprocess_exec(*args, **kwargs):  # noqa: ANN002, ANN003
+        calls.append((args, kwargs))
+        return FakeKiller()
+
+    async def fake_wait_for_process_exit(proc, timeout_s):  # noqa: ANN001, ARG001
+        assert isinstance(proc, FakeTarget)
+        return True
+
+    monkeypatch.setattr(shell_ops_module.sys, "platform", "win32")
+    monkeypatch.setattr(shell_ops_module.shutil, "which", lambda name: None)
+    monkeypatch.setattr(
+        shell_ops_module.asyncio, "create_subprocess_exec", fake_create_subprocess_exec
+    )
+    monkeypatch.setattr(shell_ops_module, "_wait_for_process_exit", fake_wait_for_process_exit)
+
+    assert await _terminate_process_group(FakeTarget()) == ""  # type: ignore[arg-type]
+    assert calls[0][0] == ("taskkill.exe", "/PID", "4321", "/T", "/F")
+    assert calls[0][1]["stdin"] is shell_ops_module.subprocess.DEVNULL
+
+
 @pytest.mark.asyncio
 async def test_run_shell_timeout_includes_subprocess_spawn(tmp_path, monkeypatch):
     monkeypatch.setenv("LOCAL_SHELL_MCP_WORKSPACE_ROOT", str(tmp_path))
@@ -217,6 +264,17 @@ async def test_run_shell_fast_command_succeeds(tmp_path, monkeypatch):
     assert result.ok is True
     assert result.timed_out is False
     assert "ok" in result.stdout
+
+
+@pytest.mark.asyncio
+async def test_run_shell_decodes_native_python_unicode_output(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOCAL_SHELL_MCP_WORKSPACE_ROOT", str(tmp_path))
+    get_settings.cache_clear()
+
+    result = await run_shell(python_shell_command("print('中文路径测试')"), timeout_s=5)
+
+    assert result.ok is True
+    assert result.stdout.strip() == "中文路径测试"
 
 
 @pytest.mark.asyncio
@@ -283,6 +341,29 @@ async def test_run_shell_timeout_marks_result_and_cleans_up(tmp_path, monkeypatc
 
     assert result.ok is False
     assert result.timed_out is True
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows process-tree regression")
+@pytest.mark.asyncio
+async def test_run_shell_timeout_kills_windows_child_process(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOCAL_SHELL_MCP_WORKSPACE_ROOT", str(tmp_path))
+    get_settings.cache_clear()
+    marker = tmp_path / "orphan-child-survived.txt"
+    child_code = (
+        "import time; from pathlib import Path; time.sleep(3); "
+        f"Path({str(marker)!r}).write_text('survived', encoding='utf-8')"
+    )
+    parent_code = (
+        "import subprocess, sys, time; "
+        f"subprocess.Popen([sys.executable, '-c', {child_code!r}]); time.sleep(30)"
+    )
+
+    result = await run_shell(python_shell_command(parent_code), timeout_s=1)
+    await asyncio.sleep(3)
+
+    assert result.timed_out is True
+    assert result.duration_ms < 5000
+    assert not marker.exists()
 
 
 @pytest.mark.asyncio

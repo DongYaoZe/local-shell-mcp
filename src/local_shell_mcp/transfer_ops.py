@@ -294,7 +294,10 @@ def _transfer_metadata_path(tmp: Path) -> Path:
 
 def _write_transfer_metadata(tmp: Path, metadata: dict[str, Any]) -> None:
     path = _transfer_metadata_path(tmp)
-    temporary = path.with_name(path.name + f".{uuid.uuid4().hex}.tmp")
+    # Do not repeat the already-long transfer name in the atomic staging file.
+    # The previous form exceeded legacy Windows MAX_PATH in normal pytest and
+    # deeply nested workspace paths even though the final metadata path fit.
+    temporary = path.with_name(f".{_TRANSFER_TMP_MARKER}-metadata-{uuid.uuid4().hex}.tmp")
     refresh_temp_file_lease(temporary)
     try:
         temporary.write_text(json.dumps(metadata, indent=2, sort_keys=True), encoding="utf-8")

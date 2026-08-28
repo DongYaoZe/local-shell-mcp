@@ -32,6 +32,7 @@ from .shell_ops import (
     start_shell,
 )
 from .state_store import get_state_store, state_lock
+from .subprocess_output import decode_subprocess_output
 
 JOB_STORE_FILE_NAME = "jobs.json"
 JOB_STORE_BACKUP_FILE_NAME = "jobs.json.bak"
@@ -843,7 +844,7 @@ def _read_log_tail(path: str | None, lines: int) -> str:
         data = get_state_store().read_bytes(path.removeprefix("state://")) or b""
         max_bytes = max(1, get_settings().max_job_log_bytes)
         data = data[-max_bytes:]
-        text = data.decode("utf-8", errors="replace")
+        text = decode_subprocess_output(data)
         if lines > 0:
             split = text.splitlines()
             text = "\n".join(split[-max(1, lines) :])
@@ -859,7 +860,7 @@ def _read_log_tail(path: str | None, lines: int) -> str:
         if size > max_bytes:
             handle.seek(size - max_bytes)
         data = handle.read(max_bytes)
-    text = data.decode("utf-8", errors="replace")
+    text = decode_subprocess_output(data)
     if lines > 0:
         split = text.splitlines()
         text = "\n".join(split[-max(1, lines) :])

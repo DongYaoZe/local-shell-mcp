@@ -370,17 +370,23 @@ def test_shell_process_termination_native_sessions_and_dispatch(tmp_path, monkey
         def kill(self):
             self.killed = True
 
-    proc = Proc()
-    waits = iter([False, True])
-    monkeypatch.setattr(shell, "_wait_for_process_exit", lambda *args: asyncio.sleep(0, result=next(waits)))
-    monkeypatch.setattr(
-        shell.os,
-        "killpg",
-        lambda *args: (_ for _ in ()).throw(OSError()),
-        raising=False,
-    )
-    assert asyncio.run(shell._terminate_process_group(proc)) == ""
-    assert proc.terminated and proc.killed
+    with monkeypatch.context() as patch:
+        patch.setattr(shell.sys, "platform", "linux")
+        proc = Proc()
+        waits = iter([False, True])
+        patch.setattr(
+            shell,
+            "_wait_for_process_exit",
+            lambda *args: asyncio.sleep(0, result=next(waits)),
+        )
+        patch.setattr(
+            shell.os,
+            "killpg",
+            lambda *args: (_ for _ in ()).throw(OSError()),
+            raising=False,
+        )
+        assert asyncio.run(shell._terminate_process_group(proc)) == ""
+        assert proc.terminated and proc.killed
 
     proc = Proc()
     monkeypatch.setattr(shell, "_wait_for_process_exit", lambda *args: asyncio.sleep(0, result=False))

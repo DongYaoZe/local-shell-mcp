@@ -33,6 +33,26 @@ def _workspace(tmp_path, monkeypatch):
     return tmp_path
 
 
+def test_transfer_metadata_uses_short_atomic_staging_name(tmp_path, monkeypatch):
+    root = _workspace(tmp_path, monkeypatch)
+    transfer_tmp = root / ("x" * 140)
+    replaced = []
+    real_replace = transfer_module.os.replace
+
+    def capture_replace(source, destination):
+        replaced.append((Path(source), Path(destination)))
+        return real_replace(source, destination)
+
+    monkeypatch.setattr(transfer_module.os, "replace", capture_replace)
+    transfer_module._write_transfer_metadata(transfer_tmp, {"ok": True})
+
+    expected = transfer_module._transfer_metadata_path(transfer_tmp)
+    source, destination = next(item for item in replaced if item[1] == expected)
+    assert source.name.startswith(".local-shell-mcp-transfer-metadata-")
+    assert len(source.name) < 80
+    assert destination == expected
+
+
 def test_chunked_transfer_round_trip_and_checksum(tmp_path, monkeypatch):
     root = _workspace(tmp_path, monkeypatch)
     data = bytes(range(256)) * 3000 + b"tail"

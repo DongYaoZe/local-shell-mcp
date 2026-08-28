@@ -32,6 +32,7 @@ from .shell_environment import (
 from .shell_environment import (
     shell_program_name as _shell_program_name,
 )
+from .subprocess_output import decode_subprocess_output
 from .tmux_helper import resolve_tmux, tmux_socket_name
 
 PUBLIC_RUN_SHELL_DEFAULT_TIMEOUT_S = 10
@@ -253,6 +254,9 @@ async def _wait_for_process_exit(proc: asyncio.subprocess.Process, timeout_s: in
 
 
 async def _terminate_process_group(proc: asyncio.subprocess.Process) -> str:
+    if sys.platform == "win32":
+        return await _terminate_windows_process_tree(proc)
+
     try:
         os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
     except Exception:
@@ -271,6 +275,45 @@ async def _terminate_process_group(proc: asyncio.subprocess.Process) -> str:
     if output:
         return ""
     return "Process did not exit after SIGKILL"
+
+
+async def _terminate_windows_process_tree(proc: asyncio.subprocess.Process) -> str:
+    """Terminate a Windows shell and all descendants before releasing its pipes."""
+
+    taskkill_error = ""
+    killer: asyncio.subprocess.Process | None = None
+    try:
+        killer = await asyncio.create_subprocess_exec(
+            shutil.which("taskkill.exe") or "taskkill.exe",
+            "/PID",
+            str(proc.pid),
+            "/T",
+            "/F",
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            **managed_process_kwargs(),
+        )
+        try:
+            await asyncio.wait_for(killer.wait(), timeout=KILL_TERMINATION_TIMEOUT_S)
+        except TimeoutError:
+            taskkill_error = "Windows taskkill timed out"
+            with suppress(ProcessLookupError):
+                killer.kill()
+            await _wait_for_process_exit(killer, KILL_TERMINATION_TIMEOUT_S)
+        if killer.returncode not in {None, 0} and not taskkill_error:
+            taskkill_error = f"Windows taskkill exited with code {killer.returncode}"
+    except Exception as exc:
+        taskkill_error = f"Windows taskkill failed: {type(exc).__name__}"
+
+    if await _wait_for_process_exit(proc, KILL_TERMINATION_TIMEOUT_S):
+        return ""
+
+    with suppress(ProcessLookupError):
+        proc.kill()
+    if await _wait_for_process_exit(proc, KILL_TERMINATION_TIMEOUT_S):
+        return taskkill_error or "Windows process tree did not exit after taskkill"
+    return taskkill_error or "Windows process tree did not exit after forced termination"
 
 
 async def _finish_reader_tasks(
@@ -368,8 +411,8 @@ async def run_shell(
     stdout_b, stderr_b, total_truncated = _shared_tail_bytes(
         bytes(stdout_tail.data), bytes(stderr_tail.data), output_limit
     )
-    stdout = stdout_b.decode(errors="replace")
-    stderr = stderr_b.decode(errors="replace")
+    stdout = decode_subprocess_output(stdout_b)
+    stderr = decode_subprocess_output(stderr_b)
     truncated = stdout_tail.truncated or stderr_tail.truncated or total_truncated
     duration_ms = int((time.time() - start) * 1000)
     result = CommandResult(
@@ -486,8 +529,8 @@ async def _run_exec(
         duration_ms=duration_ms,
         cwd=relative_display(resolved_cwd),
         command=command,
-        stdout=stdout_b.decode(errors="replace"),
-        stderr=stderr_b.decode(errors="replace"),
+        stdout=decode_subprocess_output(stdout_b),
+        stderr=decode_subprocess_output(stderr_b),
         truncated=stdout_tail.truncated or stderr_tail.truncated or total_truncated,
     )
     audit(

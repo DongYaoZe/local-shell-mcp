@@ -7,6 +7,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
+from conftest import python_shell_command
 
 import local_shell_mcp.jobs as jobs_module
 from local_shell_mcp.jobs import (
@@ -30,6 +31,16 @@ async def _wait_for_shell_job_completion(job_id: str, timeout_s: float = 15.0):
         if row["status"] != "running" or time.monotonic() >= deadline:
             return row
         await asyncio.sleep(0.1)
+
+
+def test_read_log_tail_decodes_native_windows_code_page(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOCAL_SHELL_MCP_WORKSPACE_ROOT", str(tmp_path))
+    monkeypatch.setattr("local_shell_mcp.subprocess_output.locale.getencoding", lambda: "cp936")
+    get_settings.cache_clear()
+    log = tmp_path / "job.log"
+    log.write_bytes("任务完成\n".encode("cp936"))
+
+    assert jobs_module._read_log_tail(str(log), lines=20) == "任务完成\n"
 
 
 def test_job_store_lock_retries_then_succeeds(tmp_path, monkeypatch):
@@ -734,7 +745,10 @@ async def test_completed_job_retains_output_and_exit_code(tmp_path, monkeypatch)
     monkeypatch.setenv("LOCAL_SHELL_MCP_STATE_DIR", str(tmp_path / ".local-shell-mcp"))
     get_settings.cache_clear()
 
-    job = await start_job("printf 'completed-output\n'; exit 3")
+    command = python_shell_command("import sys; print('completed-output'); sys.exit(3)")
+    if os.name == "nt":
+        command += "; exit $LASTEXITCODE"
+    job = await start_job(command)
     row = await _wait_for_shell_job_completion(job["job_id"])
 
     assert row["status"] == "failed"
@@ -753,7 +767,7 @@ async def test_job_log_is_bounded_and_reports_truncation(tmp_path, monkeypatch):
     monkeypatch.setenv("LOCAL_SHELL_MCP_MAX_JOB_LOG_BYTES", "32")
     get_settings.cache_clear()
 
-    job = await start_job("python3 -c \"print('x' * 200)\"")
+    job = await start_job(python_shell_command("print('x' * 200)"))
     row = await _wait_for_shell_job_completion(job["job_id"])
 
     assert row["status"] == "succeeded"
