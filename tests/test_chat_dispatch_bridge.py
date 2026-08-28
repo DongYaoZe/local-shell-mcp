@@ -78,15 +78,38 @@ class ChatDispatchBridgeTests(unittest.TestCase):
             "_load_backend",
             return_value=(self.root, FakeBackend),
         )
-        self.load_patch.start()
+        self.load_mock = self.load_patch.start()
+        self.watchdog_ensure_patch = patch.object(
+            chat_dispatch_bridge,
+            "ensure_chat_dispatch_watchdog",
+            return_value={"started": False, "status": "running", "alive": True},
+        )
+        self.watchdog_inspect_patch = patch.object(
+            chat_dispatch_bridge,
+            "inspect_chat_dispatch_watchdog",
+            return_value={"status": "running", "alive": True},
+        )
+        self.watchdog_stop_patch = patch.object(
+            chat_dispatch_bridge,
+            "stop_chat_dispatch_watchdog",
+            return_value={"requested": True, "status": "stopped", "alive": False},
+        )
+        self.watchdog_ensure_patch.start()
+        self.watchdog_inspect_patch.start()
+        self.watchdog_stop_patch.start()
         self.settings = SimpleNamespace(
             workspace_root=Path(self.tmp.name),
             chat_dispatch_lws_repo=None,
             chat_dispatch_max_windows=4,
             chat_dispatch_idle_close_s=90,
+            chat_dispatch_watchdog_enabled=True,
+            chat_dispatch_watchdog_interval_s=15,
         )
 
     def tearDown(self):
+        self.watchdog_stop_patch.stop()
+        self.watchdog_inspect_patch.stop()
+        self.watchdog_ensure_patch.stop()
         self.load_patch.stop()
         self.tmp.cleanup()
 
@@ -108,6 +131,7 @@ class ChatDispatchBridgeTests(unittest.TestCase):
         self.assertEqual(job.kwargs["max_windows"], 3)
         self.assertEqual(job.kwargs["idle_close_s"], 45)
         self.assertEqual(FakeBackend.ensure_calls[-1]["repo_root"], self.root)
+        self.assertEqual(result["watchdog"]["status"], "running")
 
     def test_enqueue_requires_idempotency_key_before_loading_backend(self):
         with self.assertRaisesRegex(ValueError, "idempotency_key is required"):
@@ -146,6 +170,56 @@ class ChatDispatchBridgeTests(unittest.TestCase):
                 self.settings, action="status", limit=501
             )
 
+    def test_action_and_runtime_bounds_are_validated(self):
+        with self.assertRaisesRegex(ValueError, "action must be one of"):
+            chat_dispatch_bridge.manage_chat_dispatch(self.settings, action="unknown")
+        with self.assertRaisesRegex(ValueError, "max_windows must be between"):
+            chat_dispatch_bridge.manage_chat_dispatch(
+                self.settings, action="status", max_windows=0
+            )
+        with self.assertRaisesRegex(ValueError, "idle_close_s must be between"):
+            chat_dispatch_bridge.manage_chat_dispatch(
+                self.settings, action="status", idle_close_s=0
+            )
+
+    def test_enqueue_requires_nonempty_prompt_after_target_validation(self):
+        with self.assertRaisesRegex(ValueError, "prompt is required"):
+            chat_dispatch_bridge.manage_chat_dispatch(
+                self.settings,
+                action="enqueue",
+                prompt="",
+                conversation_url="https://chatgpt.com/c/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+                idempotency_key="request-empty",
+            )
+
+    def test_cancel_requires_dispatch_id(self):
+        with self.assertRaisesRegex(ValueError, "dispatch_id is required"):
+            chat_dispatch_bridge.manage_chat_dispatch(self.settings, action="cancel")
+
+    def test_ensure_starts_worker_and_resident_watchdog(self):
+        result = chat_dispatch_bridge.manage_chat_dispatch(
+            self.settings, action="ensure", limit=9
+        )
+
+        self.assertTrue(result["worker"]["started"])
+        self.assertEqual(result["watchdog"]["status"], "running")
+        self.assertEqual(FakeBackend.status_calls[-1], {"dispatch_id": None, "limit": 9})
+
+    def test_watchdog_can_be_disabled_for_enqueue_and_ensure(self):
+        self.settings.chat_dispatch_watchdog_enabled = False
+
+        enqueue = chat_dispatch_bridge.manage_chat_dispatch(
+            self.settings,
+            action="enqueue",
+            prompt="work",
+            conversation_url="https://chatgpt.com/c/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+            idempotency_key="request-disabled",
+        )
+        ensured = chat_dispatch_bridge.manage_chat_dispatch(self.settings, action="ensure")
+
+        self.assertEqual(enqueue["watchdog"]["status"], "disabled")
+        self.assertEqual(ensured["watchdog"]["status"], "disabled")
+
     def test_status_does_not_start_worker(self):
         result = chat_dispatch_bridge.manage_chat_dispatch(
             self.settings, action="status", dispatch_id="chat_1", limit=7
@@ -155,6 +229,29 @@ class ChatDispatchBridgeTests(unittest.TestCase):
         self.assertEqual(
             FakeBackend.status_calls[-1], {"dispatch_id": "chat_1", "limit": 7}
         )
+        self.assertEqual(result["watchdog"]["status"], "running")
+
+    def test_watchdog_status_and_stop_do_not_load_backend_but_start_validates_it(self):
+        self.assertEqual(
+            chat_dispatch_bridge.manage_chat_dispatch(
+                self.settings, action="watchdog_status"
+            )["watchdog"]["status"],
+            "running",
+        )
+        self.assertEqual(
+            chat_dispatch_bridge.manage_chat_dispatch(
+                self.settings, action="watchdog_stop"
+            )["watchdog"]["status"],
+            "stopped",
+        )
+        self.assertEqual(self.load_mock.call_count, 0)
+        self.assertEqual(
+            chat_dispatch_bridge.manage_chat_dispatch(
+                self.settings, action="watchdog_start"
+            )["watchdog"]["status"],
+            "running",
+        )
+        self.assertEqual(self.load_mock.call_count, 1)
 
     def test_cancel_is_followed_by_worker_ensure_for_page_cleanup(self):
         FakeStore.jobs["chat_1"] = SimpleNamespace(
@@ -202,6 +299,54 @@ class ChatDispatchBridgeTests(unittest.TestCase):
 
 
 class ChatDispatchBackendContractTests(unittest.TestCase):
+    def test_resolve_backend_uses_configured_or_workspace_checkout(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            configured = workspace / "configured"
+            default = workspace / "tools" / "localshell-web-supervisor"
+            for root in (configured, default):
+                backend = root / "src" / "lws" / "chat_dispatch.py"
+                backend.parent.mkdir(parents=True)
+                backend.write_text("# fixture\n", encoding="utf-8")
+
+            resolved = chat_dispatch_bridge._resolve_lws_repo(
+                SimpleNamespace(
+                    workspace_root=workspace,
+                    chat_dispatch_lws_repo=str(configured),
+                )
+            )
+            fallback = chat_dispatch_bridge._resolve_lws_repo(
+                SimpleNamespace(workspace_root=workspace, chat_dispatch_lws_repo=None)
+            )
+
+            self.assertEqual(resolved, configured.resolve())
+            self.assertEqual(fallback, default.resolve())
+
+    def test_resolve_backend_reports_all_missing_candidates(self):
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            self.assertRaisesRegex(RuntimeError, "Checked:"),
+        ):
+            chat_dispatch_bridge._resolve_lws_repo(
+                SimpleNamespace(workspace_root=Path(tmp), chat_dispatch_lws_repo=None)
+            )
+
+    def test_backend_loaded_from_different_checkout_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "expected"
+            module = SimpleNamespace(__file__=str(Path(tmp) / "other" / "chat_dispatch.py"))
+            old_cache = chat_dispatch_bridge._BACKEND_CACHE
+            chat_dispatch_bridge._BACKEND_CACHE = None
+            try:
+                with (
+                    patch.object(chat_dispatch_bridge, "_resolve_lws_repo", return_value=root),
+                    patch.object(chat_dispatch_bridge.importlib, "import_module", return_value=module),
+                    self.assertRaisesRegex(RuntimeError, "unexpected path"),
+                ):
+                    chat_dispatch_bridge._load_backend(SimpleNamespace())
+            finally:
+                chat_dispatch_bridge._BACKEND_CACHE = old_cache
+
     def test_incompatible_backend_fails_with_missing_api_names(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

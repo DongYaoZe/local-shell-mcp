@@ -8,6 +8,13 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any
 
+from .chat_dispatch_watchdog import (
+    DEFAULT_WATCHDOG_INTERVAL_S,
+    ensure_chat_dispatch_watchdog,
+    inspect_chat_dispatch_watchdog,
+    stop_chat_dispatch_watchdog,
+)
+
 _BACKEND_LOCK = threading.Lock()
 _BACKEND_CACHE: tuple[Path, ModuleType] | None = None
 _REQUIRED_BACKEND_API = (
@@ -107,8 +114,19 @@ def manage_chat_dispatch(
     """Model-facing synchronous control plane for the short-lived LWS chat dispatcher."""
 
     normalized = str(action or "enqueue").strip().lower()
-    if normalized not in {"enqueue", "status", "cancel", "ensure"}:
-        raise ValueError("action must be one of: enqueue, status, cancel, ensure")
+    if normalized not in {
+        "enqueue",
+        "status",
+        "cancel",
+        "ensure",
+        "watchdog_start",
+        "watchdog_status",
+        "watchdog_stop",
+    }:
+        raise ValueError(
+            "action must be one of: enqueue, status, cancel, ensure, "
+            "watchdog_start, watchdog_status, watchdog_stop"
+        )
     if limit < 1 or limit > 500:
         raise ValueError("limit must be between 1 and 500")
     if normalized == "enqueue":
@@ -123,6 +141,24 @@ def manage_chat_dispatch(
             raise ValueError(
                 "conversation_key is required with project_url so retries resolve the same child"
             )
+    watchdog_interval = int(
+        getattr(settings, "chat_dispatch_watchdog_interval_s", DEFAULT_WATCHDOG_INTERVAL_S)
+    )
+    if normalized == "watchdog_status":
+        return {"action": normalized, "watchdog": inspect_chat_dispatch_watchdog(settings)}
+    if normalized == "watchdog_start":
+        # Fail before creating a resident process if the configured LWS checkout is missing
+        # or exposes an incompatible dispatch contract.
+        _load_backend(settings)
+        return {
+            "action": normalized,
+            "watchdog": ensure_chat_dispatch_watchdog(
+                settings,
+                interval_s=watchdog_interval,
+            ),
+        }
+    if normalized == "watchdog_stop":
+        return {"action": normalized, "watchdog": stop_chat_dispatch_watchdog(settings)}
     root, backend = _load_backend(settings)
     windows = _bounded_max_windows(settings, max_windows)
     idle = _bounded_idle_close(settings, idle_close_s)
@@ -151,16 +187,23 @@ def manage_chat_dispatch(
             if should_start
             else {"started": False, "detail": "dispatch is already terminal"}
         )
+        watchdog = (
+            ensure_chat_dispatch_watchdog(settings, interval_s=watchdog_interval)
+            if bool(getattr(settings, "chat_dispatch_watchdog_enabled", True))
+            else {"started": False, "status": "disabled"}
+        )
         return {
             "action": normalized,
             "dispatch": payload,
             "worker": worker,
+            "watchdog": watchdog,
             "message": "dispatch durably queued" if should_start else "existing idempotent dispatch returned",
         }
 
     if normalized == "status":
         return {
             "action": normalized,
+            "watchdog": inspect_chat_dispatch_watchdog(settings),
             **backend.chat_dispatch_status(dispatch_id=dispatch_id, limit=limit),
         }
 
@@ -187,8 +230,14 @@ def manage_chat_dispatch(
         idle_close_s=idle,
         repo_root=root,
     )
+    watchdog = (
+        ensure_chat_dispatch_watchdog(settings, interval_s=watchdog_interval)
+        if bool(getattr(settings, "chat_dispatch_watchdog_enabled", True))
+        else {"started": False, "status": "disabled"}
+    )
     return {
         "action": normalized,
         "worker": worker,
+        "watchdog": watchdog,
         **backend.chat_dispatch_status(dispatch_id=dispatch_id, limit=limit),
     }

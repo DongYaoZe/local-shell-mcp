@@ -3237,9 +3237,10 @@ def _register_chat_dispatch_tools(mcp: FastMCP, settings: Any) -> None:
         drained, waits idle_close_s, then closes only that owned page. Ambiguous Send outcomes
         are fenced as RECONCILE_REQUIRED and are never replayed automatically.
 
-        Use action="status" with optional dispatch_id to inspect durable jobs/pages; use
-        action="cancel" only for a pre-send dispatch; use action="ensure" to restart a
-        short-lived dispatcher for pending durable work.
+        Use action="status" with optional dispatch_id to inspect durable jobs/pages and the
+        resident watchdog; use action="cancel" only for a pre-send dispatch; use action="ensure"
+        to restart a short-lived dispatcher for pending durable work. watchdog_start,
+        watchdog_status, and watchdog_stop manage the hidden detached recovery loop.
         """
 
         return await asyncio.to_thread(

@@ -83,6 +83,7 @@ _POSITIVE_INTEGER_SETTINGS = (
     "oauth_code_ttl_s",
     "chat_dispatch_max_windows",
     "chat_dispatch_idle_close_s",
+    "chat_dispatch_watchdog_interval_s",
 )
 
 _NONNEGATIVE_INTEGER_SETTINGS = (
@@ -388,6 +389,8 @@ if _PYDANTIC_AVAILABLE:
         chat_dispatch_lws_repo: str | None = None
         chat_dispatch_max_windows: int = 4
         chat_dispatch_idle_close_s: int = 90
+        chat_dispatch_watchdog_enabled: bool = True
+        chat_dispatch_watchdog_interval_s: int = 15
 
         # Human-facing OpenTUI/WebUI. The browser interface is mounted on the same
         # ASGI service and launches the exact same TUI executable as the local CLI.
@@ -627,6 +630,8 @@ else:
         chat_dispatch_lws_repo: str | None = None
         chat_dispatch_max_windows: int = 4
         chat_dispatch_idle_close_s: int = 90
+        chat_dispatch_watchdog_enabled: bool = True
+        chat_dispatch_watchdog_interval_s: int = 15
 
         ui_enabled: bool = True
         live_workspace_enabled: bool = True

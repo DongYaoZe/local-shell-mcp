@@ -262,6 +262,8 @@ Important options:
 | `LOCAL_SHELL_MCP_CHAT_DISPATCH_LWS_REPO` | Optional local LWS checkout used by the open-world `chat_dispatch` tool. Enqueues require an idempotency key; new conversations also require a stable conversation key. |
 | `LOCAL_SHELL_MCP_CHAT_DISPATCH_MAX_WINDOWS` | Maximum dispatcher-owned ChatGPT windows, from 1 to 16; default `4`. |
 | `LOCAL_SHELL_MCP_CHAT_DISPATCH_IDLE_CLOSE_S` | Idle grace before an exact dispatcher-owned page is closed; default `90` seconds. |
+| `LOCAL_SHELL_MCP_CHAT_DISPATCH_WATCHDOG_ENABLED` | Start a hidden detached recovery watchdog after an enqueue; default `true`. |
+| `LOCAL_SHELL_MCP_CHAT_DISPATCH_WATCHDOG_INTERVAL_S` | Resident watchdog reconciliation interval; default `15` seconds. |
 | `LOCAL_SHELL_MCP_SHELL_ENV_BLOCKLIST` | Environment variables removed from spawned shell processes. |
 | `LOCAL_SHELL_MCP_FILE_DOWNLOAD_ENABLED` | Enable tokenized file download links. |
 
