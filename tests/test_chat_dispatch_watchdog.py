@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from local_shell_mcp import chat_dispatch_bridge
 from local_shell_mcp import chat_dispatch_watchdog as watchdog
@@ -57,6 +57,54 @@ class ChatDispatchWatchdogTests(unittest.TestCase):
         self.assertEqual(status["status"], "stale_live")
         self.assertTrue(status["alive"])
         self.assertEqual(status["heartbeat_age_s"], 31)
+
+    @patch.object(watchdog, "pid_exists", return_value=False)
+    def test_inspect_preserves_recent_starting_reservation(self, _pid_exists):
+        self.write_state(status="starting", started_at=100.0)
+
+        status = watchdog.inspect_chat_dispatch_watchdog(self.settings, now=104.0)
+
+        self.assertEqual(status["status"], "starting")
+
+    def test_pid_exists_handles_posix_process_states(self):
+        with (
+            patch.object(watchdog.os, "name", "posix"),
+            patch.object(watchdog.os, "kill") as kill,
+        ):
+            self.assertFalse(watchdog.pid_exists(0))
+            self.assertTrue(watchdog.pid_exists(123))
+            kill.assert_called_once_with(123, 0)
+
+        with (
+            patch.object(watchdog.os, "name", "posix"),
+            patch.object(watchdog.os, "kill", side_effect=ProcessLookupError),
+        ):
+            self.assertFalse(watchdog.pid_exists(123))
+
+        with (
+            patch.object(watchdog.os, "name", "posix"),
+            patch.object(watchdog.os, "kill", side_effect=PermissionError),
+        ):
+            self.assertTrue(watchdog.pid_exists(123))
+
+    def test_pid_exists_handles_windows_process_handles(self):
+        kernel32 = SimpleNamespace(
+            OpenProcess=Mock(side_effect=[0, 456]),
+            CloseHandle=Mock(),
+        )
+        with (
+            patch.object(watchdog.os, "name", "nt"),
+            patch.object(
+                watchdog.ctypes,
+                "windll",
+                SimpleNamespace(kernel32=kernel32),
+                create=True,
+            ),
+        ):
+            self.assertFalse(watchdog.pid_exists(123))
+            self.assertTrue(watchdog.pid_exists(123))
+
+        kernel32.CloseHandle.assert_called_once_with(456)
 
     def test_inspect_and_stop_are_idempotent_without_state(self):
         inspected = watchdog.inspect_chat_dispatch_watchdog(self.settings)
@@ -114,6 +162,7 @@ class ChatDispatchWatchdogTests(unittest.TestCase):
     @patch.object(watchdog, "pid_exists", return_value=False)
     @patch.object(watchdog.subprocess, "Popen")
     def test_ensure_launches_detached_process_and_writes_reservation(self, popen, _pid_exists):
+        self.settings.chat_dispatch_lws_repo = "configured-lws"
         popen.return_value = SimpleNamespace(pid=222)
 
         with patch.object(
@@ -132,12 +181,37 @@ class ChatDispatchWatchdogTests(unittest.TestCase):
         self.assertEqual(command[-1], "20")
         child_env = popen.call_args.kwargs["env"]
         self.assertEqual(
+            child_env["LOCAL_SHELL_MCP_CHAT_DISPATCH_LWS_REPO"],
+            "configured-lws",
+        )
+        self.assertEqual(
             child_env["LOCAL_SHELL_MCP_STATE_DIR"],
             str(Path(self.tmp.name).resolve()),
         )
         self.assertEqual(child_env["LOCAL_SHELL_MCP_CHAT_DISPATCH_WATCHDOG_INTERVAL_S"], "20")
         if os.name == "nt":
             self.assertTrue(popen.call_args.kwargs["creationflags"] & 0x08000000)
+
+    @patch.object(watchdog, "pid_exists", return_value=False)
+    @patch.object(watchdog.subprocess, "Popen")
+    def test_ensure_waits_for_worker_handoff(self, popen, _pid_exists):
+        popen.return_value = SimpleNamespace(pid=222)
+        starting = {"status": "starting", "alive": True}
+        running = {"status": "running", "alive": True}
+
+        with (
+            patch.object(
+                watchdog,
+                "inspect_chat_dispatch_watchdog",
+                side_effect=[starting, running],
+            ),
+            patch.object(watchdog.time, "sleep") as sleep,
+        ):
+            status = watchdog.ensure_chat_dispatch_watchdog(self.settings)
+
+        self.assertTrue(status["started"])
+        self.assertEqual(status["status"], "running")
+        sleep.assert_called_once_with(0.05)
 
     def test_claim_replaces_transient_launcher_pid_with_worker_pid(self):
         self.write_state(owner_id="owner-handoff", pid=111, status="starting")
@@ -149,6 +223,18 @@ class ChatDispatchWatchdogTests(unittest.TestCase):
         self.assertEqual(saved["pid"], os.getpid())
         self.assertEqual(saved["status"], "running")
 
+    def test_claim_times_out_when_reservation_owner_does_not_match(self):
+        self.write_state(owner_id="other-owner", status="starting")
+
+        with (
+            patch.object(watchdog.time, "time", side_effect=[0.0, 0.0, 6.0]),
+            patch.object(watchdog.time, "sleep") as sleep,
+        ):
+            claimed = watchdog._claim_watchdog(self.settings, "expected-owner")
+
+        self.assertFalse(claimed)
+        sleep.assert_called_once_with(0.05)
+
     @patch.object(watchdog, "pid_exists", return_value=True)
     def test_stop_requests_cooperative_exit_without_killing_process(self, _pid_exists):
         self.write_state()
@@ -158,6 +244,26 @@ class ChatDispatchWatchdogTests(unittest.TestCase):
         self.assertTrue(status["requested"])
         self.assertEqual(status["status"], "stopping")
         self.assertTrue(watchdog._read_state_unlocked(self.settings)["stop_requested"])
+
+    @patch.object(watchdog, "pid_exists", return_value=True)
+    def test_stop_waits_until_worker_exits(self, _pid_exists):
+        self.write_state()
+        stopping = {"status": "stopping", "alive": True}
+        stopped = {"status": "stopped", "alive": False}
+
+        with (
+            patch.object(
+                watchdog,
+                "inspect_chat_dispatch_watchdog",
+                side_effect=[stopping, stopped],
+            ),
+            patch.object(watchdog.time, "sleep") as sleep,
+        ):
+            status = watchdog.stop_chat_dispatch_watchdog(self.settings, wait_s=1)
+
+        self.assertTrue(status["requested"])
+        self.assertEqual(status["status"], "stopped")
+        sleep.assert_called_once_with(0.05)
 
     def test_non_file_state_backend_is_rejected(self):
         self.settings.state_backend = "redis"
@@ -266,6 +372,48 @@ class ChatDispatchWatchdogTests(unittest.TestCase):
 
         self.assertEqual(code, 4)
         self.assertEqual(watchdog._read_state_unlocked(self.settings)["owner_id"], "new-owner")
+
+    def test_worker_honors_stop_requested_before_dispatch(self):
+        owner_id = "owner-stopped"
+        self.write_state(
+            owner_id=owner_id,
+            pid=os.getpid(),
+            status="starting",
+            stop_requested=True,
+        )
+
+        code = watchdog.run_chat_dispatch_watchdog(
+            self.settings,
+            owner_id=owner_id,
+            interval_s=2,
+        )
+
+        self.assertEqual(code, 0)
+        self.assertEqual(watchdog._read_state_unlocked(self.settings)["status"], "stopped")
+
+    def test_worker_exits_if_owner_changes_during_dispatch(self):
+        owner_id = "owner-dispatch"
+        self.write_state(owner_id=owner_id, pid=os.getpid(), status="starting")
+
+        def change_owner(_settings, *, action, **_kwargs):
+            self.assertEqual(action, "status")
+            state = watchdog._read_state_unlocked(self.settings)
+            state["owner_id"] = "replacement-owner"
+            watchdog._write_state_unlocked(self.settings, state)
+            return {"pending": 0}
+
+        with patch.object(chat_dispatch_bridge, "manage_chat_dispatch", side_effect=change_owner):
+            code = watchdog.run_chat_dispatch_watchdog(
+                self.settings,
+                owner_id=owner_id,
+                interval_s=2,
+            )
+
+        self.assertEqual(code, 4)
+        self.assertEqual(
+            watchdog._read_state_unlocked(self.settings)["owner_id"],
+            "replacement-owner",
+        )
 
     def test_main_forwards_owner_and_interval(self):
         with (
