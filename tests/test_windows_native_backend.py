@@ -1,4 +1,5 @@
 import asyncio
+import subprocess
 
 import pytest
 
@@ -142,3 +143,4 @@ async def test_run_shell_spawn_uses_managed_process_kwargs(tmp_path, monkeypatch
     await ops._spawn_process("echo hidden", str(tmp_path))  # noqa: SLF001
 
     assert captured["creationflags"] == 0x08000000
+    assert captured["stdin"] is subprocess.DEVNULL
